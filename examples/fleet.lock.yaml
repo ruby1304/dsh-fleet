@@ -1,0 +1,34 @@
+schemaVersion: 1
+team:
+  id: ruby-team
+  name: Ruby DSH Fleet
+
+devices:
+  ruby-m5:
+    assignedTo: ruby
+    class: portable-control
+    channel: dev
+    labels: [macos, arm64]
+  m3-worker:
+    assignedTo: ruby
+    class: always-on-worker
+    channel: stable
+    labels: [macos, arm64]
+
+plugins:
+  - id: dsh-password-shield
+    spec: github:ruby1304/dsh-password-shield
+    profiles: [web]
+    target:
+      channels: [dev, stable]
+
+  - id: dsh-quota-status
+    spec: github:ruby1304/dsh-quota-status
+    profiles: [web]
+    target:
+      devices: [ruby-m5]
+
+  - id: dsh-turn-fork
+    spec: ^0.1.0
+    profiles: [web]
+    runtimeModules: [dsh-turn-fork]

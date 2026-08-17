@@ -1,0 +1,9 @@
+node_modules/
+.npm-cache/
+.pnpm-store/
+dist-host/
+dist-testing/
+dist-client/
+*.tsbuildinfo
+.DS_Store
+coverage/
