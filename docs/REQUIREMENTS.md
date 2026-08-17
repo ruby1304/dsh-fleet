@@ -2,7 +2,7 @@
 
 - **文档状态**：后续开发基线
 - **更新时间**：2026-08-17
-- **当前代码版本**：本地提交 `b208460`
+- **当前代码版本**：本地 `main`；实现基线 `b208460`，客户端槽位修复 `3b41bb0`（进入新 session 后以 `git log -1` 为准）
 - **当前阶段**：V0 已实现核心代码，等待 M5 GUI 可视验证和 M3 跨设备验证
 - **目标读者**：下一开发 session、未来贡献者、DSH 上游维护者
 
@@ -382,6 +382,8 @@ plugins:
 本地提交：
 
 ```text
+3b41bb0 fix: wait for fleet overlay slot before registration
+ac35071 docs: define fleet roadmap and next-session handoff
 b208460 feat: add read-only dsh fleet inventory v0
 ```
 
@@ -393,12 +395,13 @@ b208460 feat: add read-only dsh fleet inventory v0
 - `src/client/index.tsx`：Fleet 悬浮状态面板；
 - `examples/fleet.lock.yaml`：M5/M3 示例清单；
 - `tests/core.test.ts`：清单和收敛单测；
-- `tests/host.test.ts`：profile/Loader 采集集成测试。
+- `tests/host.test.ts`：profile/Loader 采集集成测试；
+- `tests/client.test.tsx`：等待 `shell.overlay` 声明后再注册 UI 的生命周期测试。
 
 已验证：
 
 - TypeScript 类型检查通过；
-- 8 个测试通过；
+- 9 个测试通过；
 - Host、testing、client bundle 构建通过；
 - `pnpm pack --dry-run` 通过；
 - M5 实际 profile 投影成功；
@@ -935,7 +938,7 @@ Agent 是 principal 的一种：
 3. 在不启动第二个服务器的前提下重启现有 DSH Web；
 4. 验证 `http://127.0.0.1:3080` 的 Fleet 面板；
 5. 修复客户端加载、slot、RPC 或样式问题；
-6. 增加客户端至少一个自动化冒烟测试；
+6. 保持现有客户端槽位生命周期测试通过，并按可视验证结果补充 UI/RPC 冒烟测试；
 7. 修复 tsdown 弃用警告；
 8. 完善真实 M5 清单；
 9. 请求 Ruby 明确决定 GitHub public/private 和是否 push；
@@ -960,7 +963,7 @@ Agent 是 principal 的一种：
 
 将下面内容作为新 session 的首条请求即可：
 
-> 继续实现 `/Users/qudian/Local/dsh/dsh-fleet`。先完整阅读 `docs/REQUIREMENTS.md` 和 Git 状态。当前 V0 本地提交为 `b208460`，测试和构建已通过，插件已经 link 安装到 M5 Web profile，但当前 GUI 尚未重启做可视验证，M3 尚未安装，GitHub 尚未创建或推送。严格按文档第 18 节顺序完成 V0，不要提前做 V1，不要擅自 push 或启动替代 Web 服务器。
+> 继续实现 `/Users/qudian/Local/dsh/dsh-fleet`。先完整阅读 `docs/REQUIREMENTS.md`、`git status` 和最近提交。V0 实现基线为 `b208460`，后续已有需求文档和客户端 `shell.overlay` 槽位生命周期修复；9 个测试与构建已通过。插件已经 link 安装到 M5 Web profile，但当前 GUI 尚未重启做可视验证，M3 尚未安装，GitHub 尚未创建或推送。严格按文档第 18 节顺序完成 V0，不要提前做 V1，不要擅自 push 或启动替代 Web 服务器。
 
 ---
 
