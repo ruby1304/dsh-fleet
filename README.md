@@ -4,6 +4,8 @@ Declarative capability inventory and drift detection for [DeepSeek Harness](http
 
 > V0 is intentionally read-only. It compares a device's DSH Web profile and live Cordis plugin state with a shared fleet manifest. It does not install, update, restart, remotely control, or upload sessions.
 
+The complete product requirements, current handoff state, phased roadmap, security boundaries, and next-session instructions live in [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md).
+
 ## Why
 
 DSH already has a plugin market, profile package management, skills, presets, permissions, telemetry, and runtime plugin inventory. What it does not yet provide is a team/device layer answering:
