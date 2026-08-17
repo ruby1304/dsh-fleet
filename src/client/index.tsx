@@ -13,6 +13,7 @@ interface RpcResult {
 interface ClientContextLike {
   connection: { rpc: { call(channel: string, endpoint: string, payload: unknown): Promise<RpcResult> } }
   slots: {
+    inject(name: string, setup: () => unknown): unknown
     register(descriptor: Record<string, unknown>, component: React.ComponentType): unknown
   }
 }
@@ -107,5 +108,8 @@ function FleetCard({ ctx }: { ctx: ClientContextLike }): React.ReactElement {
 }
 
 export function apply(ctx: ClientContextLike): void {
-  ctx.slots.register({ name: 'shell.overlay', id: 'dsh-fleet', order: 110, label: () => 'DSH Fleet' }, () => <FleetCard ctx={ctx} />)
+  ctx.slots.inject('shell.overlay', () => ctx.slots.register(
+    { name: 'shell.overlay', id: 'dsh-fleet', order: 110, label: () => 'DSH Fleet' },
+    () => <FleetCard ctx={ctx} />,
+  ))
 }

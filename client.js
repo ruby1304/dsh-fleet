@@ -282,12 +282,12 @@ window.__ModuleLoader__.load({
 			});
 		}
 		function apply(ctx) {
-			ctx.slots.register({
+			ctx.slots.inject("shell.overlay", () => ctx.slots.register({
 				name: "shell.overlay",
 				id: "dsh-fleet",
 				order: 110,
 				label: () => "DSH Fleet"
-			}, () => /* @__PURE__ */ (0, react_jsx_runtime.jsx)(FleetCard, { ctx }));
+			}, () => /* @__PURE__ */ (0, react_jsx_runtime.jsx)(FleetCard, { ctx })));
 		}
 		//#endregion
 		exports.apply = apply;
