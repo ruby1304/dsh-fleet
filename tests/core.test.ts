@@ -18,7 +18,7 @@ plugins:
     spec: 1.0.0
     profiles: [web]
   - id: plugin-b
-    spec: github:team/plugin-b#abc123
+    spec: github:team/plugin-b#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
     target:
       channels: [stable]
   - id: plugin-c
@@ -36,11 +36,49 @@ describe('parseFleetManifest', () => {
     expect(manifest.plugins[2]?.runtimeModules).toEqual(['plugin-c-host'])
   })
 
-  it('rejects duplicate plugin ids', () => {
-    expect(() => parseFleetManifest(source + `
-  - id: plugin-a
-    spec: 9.0.0
+  it('derives dependency specs from source and revision', () => {
+    const manifest = parseFleetManifest(`schemaVersion: 1
+team: { id: test }
+devices: { m5: { class: portable-control, channel: dev } }
+plugins:
+  - { id: npm-plugin, source: npm, revision: ^0.1.0 }
+  - { id: github-plugin, source: github:team/plugin, revision: abc }
+  - { id: link-plugin, source: link:/tmp/plugin }
+`)
+    expect(manifest.plugins.map(plugin => plugin.spec)).toEqual(['^0.1.0', 'github:team/plugin#abc', 'link:/tmp/plugin'])
+  })
+
+  it('allows non-overlapping duplicate variants but rejects overlap', () => {
+    const manifest = parseFleetManifest(`schemaVersion: 1
+team: { id: test }
+devices:
+  dev: { class: portable-control, channel: dev }
+  stable: { class: always-on-worker, channel: stable }
+plugins:
+  - { id: variant, spec: 1.0.0, target: { devices: [dev] } }
+  - { id: variant, spec: 2.0.0, target: { devices: [stable] } }
+`)
+    expect(manifest.plugins).toHaveLength(2)
+    expect(() => parseFleetManifest(`schemaVersion: 1
+team: { id: test }
+devices: { dev: { class: portable-control, channel: dev } }
+plugins:
+  - { id: variant, spec: 1.0.0 }
+  - { id: variant, spec: 2.0.0, target: { devices: [dev] } }
 `)).toThrow(/duplicate plugin id/)
+  })
+
+  it('rejects mutable stable variants and link revisions', () => {
+    expect(() => parseFleetManifest(source.replace('spec: github:team/plugin-b#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'source: github:team/plugin-b\n    revision: abc'))).toThrow(/stable plugin/)
+    expect(() => parseFleetManifest(source.replace(
+      'spec: 1.0.0\n    profiles: [web]',
+      'spec: ^1.0.0\n    profiles: [web]\n    target:\n      classes: [always-on-worker]',
+    ))).toThrow(/stable plugin/)
+    expect(() => parseFleetManifest(`schemaVersion: 1
+team: { id: test }
+devices: { m3: { class: worker, channel: stable } }
+plugins: [{ id: x, source: link:/tmp/x, revision: abc }]
+`)).toThrow(/link sources/)
   })
 
   it('rejects unknown schema versions', () => {
@@ -69,6 +107,7 @@ describe('reconcileFleet', () => {
       ['plugin-a', 'aligned'],
       ['plugin-c', 'spec-drift'],
     ])
+    expect(result.plugins.find(item => item.id === 'plugin-a')).toMatchObject({ desiredSpec: '1.0.0' })
     expect(result.unmanaged).toEqual([{ id: 'extra', actualSpec: '3.0.0' }])
     expect(result.summary).toEqual({ desired: 2, aligned: 1, missing: 0, drifted: 1, failed: 0, unmanaged: 1 })
   })

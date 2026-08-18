@@ -290,6 +290,7 @@ window.__ModuleLoader__.load({
 			}, () => /* @__PURE__ */ (0, react_jsx_runtime.jsx)(FleetCard, { ctx })));
 		}
 		//#endregion
+		exports.FleetCard = FleetCard;
 		exports.apply = apply;
 		exports.inject = inject;
 		return module.exports;

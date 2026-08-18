@@ -28,6 +28,18 @@ function parseDevice(value, field) {
 		...labels === void 0 ? {} : { labels }
 	};
 }
+function dependencySpec(source, revision, field) {
+	if (source.includes("#")) throw new TypeError(field + " must not contain # when revision is separate");
+	if (source === "link:" || source.startsWith("link:")) {
+		if (revision !== void 0) throw new TypeError(field + ".revision is not allowed for link sources");
+		return source;
+	}
+	if (source === "npm") {
+		if (revision === void 0) throw new TypeError(field + ".revision is required for npm source");
+		return revision;
+	}
+	return revision === void 0 ? source : source + "#" + revision;
+}
 function parsePlugin(value, index) {
 	const field = "plugins[" + index + "]";
 	if (!isRecord(value)) throw new TypeError(field + " must be an object");
@@ -45,9 +57,20 @@ function parsePlugin(value, index) {
 			...channels === void 0 ? {} : { channels }
 		};
 	}
+	const id = nonEmpty(value.id, field + ".id");
+	const hasSpec = value.spec !== void 0;
+	const hasSource = value.source !== void 0 || value.revision !== void 0;
+	if (hasSpec === hasSource) throw new TypeError(field + " must specify exactly one of spec or source");
+	const spec = hasSpec ? nonEmpty(value.spec, field + ".spec") : void 0;
+	const source = hasSource ? nonEmpty(value.source, field + ".source") : void 0;
+	const revision = value.revision === void 0 ? void 0 : nonEmpty(value.revision, field + ".revision");
 	return {
-		id: nonEmpty(value.id, field + ".id"),
-		spec: nonEmpty(value.spec, field + ".spec"),
+		id,
+		spec: spec ?? dependencySpec(source, revision, field),
+		...source === void 0 ? {} : {
+			source,
+			...revision === void 0 ? {} : { revision }
+		},
 		...profiles === void 0 ? {} : { profiles },
 		...runtimeModules === void 0 ? {} : { runtimeModules },
 		...target === void 0 ? {} : { target }
@@ -65,10 +88,17 @@ function parseFleetManifest(source) {
 	for (const [id, value] of Object.entries(raw.devices)) devices[nonEmpty(id, "device id")] = parseDevice(value, "devices." + id);
 	if (!Array.isArray(raw.plugins)) throw new TypeError("plugins must be an array");
 	const plugins = raw.plugins.map(parsePlugin);
-	const seen = /* @__PURE__ */ new Set();
-	for (const plugin of plugins) {
-		if (seen.has(plugin.id)) throw new TypeError("duplicate plugin id " + JSON.stringify(plugin.id));
-		seen.add(plugin.id);
+	for (const plugin of plugins) if (Object.entries(devices).some(([id, device]) => device.channel === "stable" && targetsDevice(plugin, id, device))) {
+		if (plugin.source?.startsWith("link:") || plugin.spec.startsWith("link:")) throw new TypeError("stable plugin " + JSON.stringify(plugin.id) + " must not use a link source");
+		const exactSemver = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.test(plugin.spec);
+		const exactSha = plugin.source !== "npm" && !plugin.source?.startsWith("link:") && (/^[0-9a-fA-F]{40}$/.test(plugin.revision ?? "") || /#[0-9a-fA-F]{40}$/.test(plugin.spec));
+		if (!exactSemver && !exactSha) throw new TypeError("stable plugin " + JSON.stringify(plugin.id) + " must use immutable exact semver or commit SHA");
+	}
+	for (let i = 0; i < plugins.length; i++) for (let j = i + 1; j < plugins.length; j++) {
+		if (plugins[i]?.id !== plugins[j]?.id) continue;
+		const a = plugins[i];
+		const b = plugins[j];
+		if (Object.keys(devices).some((id) => targetsDevice(a, id, devices[id]) && targetsDevice(b, id, devices[id])) && (a.profiles === void 0 || b.profiles === void 0 || a.profiles.some((profile) => b.profiles?.includes(profile)))) throw new TypeError("duplicate plugin id " + JSON.stringify(a.id));
 	}
 	return {
 		schemaVersion: 1,
@@ -113,6 +143,10 @@ function reconcileFleet(input) {
 		return {
 			id: plugin.id,
 			desiredSpec: plugin.spec,
+			...plugin.source === void 0 ? {} : {
+				desiredSource: plugin.source,
+				...plugin.revision === void 0 ? {} : { desiredRevision: plugin.revision }
+			},
 			...actualSpec === void 0 ? {} : { actualSpec },
 			runtimeModules,
 			runtimePhase,

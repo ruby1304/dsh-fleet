@@ -34,7 +34,7 @@ function stateLabel(state: PluginDriftState): string {
   return '未激活'
 }
 
-function FleetCard({ ctx }: { ctx: ClientContextLike }): React.ReactElement {
+export function FleetCard({ ctx }: { ctx: ClientContextLike }): React.ReactElement {
   const [open, setOpen] = useState(false)
   const [status, setStatus] = useState<FleetStatus | null>(null)
   const [error, setError] = useState<string | null>(null)

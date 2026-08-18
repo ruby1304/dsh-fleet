@@ -16,6 +16,8 @@ export interface FleetPluginTarget {
 export interface FleetPluginSpec {
   id: string
   spec: string
+  source?: string
+  revision?: string
   profiles?: string[]
   runtimeModules?: string[]
   target?: FleetPluginTarget
@@ -42,6 +44,8 @@ export type PluginDriftState = 'aligned' | 'missing' | 'spec-drift' | 'runtime-f
 export interface PluginStatus {
   id: string
   desiredSpec: string
+  desiredSource?: string
+  desiredRevision?: string
   actualSpec?: string
   runtimeModules: string[]
   runtimePhase: RuntimePhase

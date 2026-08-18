@@ -5,7 +5,7 @@
   "type": "module",
   "main": "./index.mjs",
   "exports": { ".": "./index.mjs", "./testing": "./testing.mjs", "./client": "./client.js", "./cordis.patch.yml": "./cordis.patch.yml", "./package.json": "./package.json" },
-  "files": ["index.mjs", "testing.mjs", "client.js", "client.js.map", "cordis.patch.yml", "README.md", "LICENSE"],
+  "files": ["index.mjs", "testing.mjs", "client.js", "client.js.map", "cordis.patch.yml", "README.md", "LICENSE", "examples/fleet.lock.yaml"],
   "dsh": {
     "bundle": { "patch": "./cordis.patch.yml" },
     "client": { "platform": "web", "inject": ["@deepseek-ai/dsh-client-runtime", "@deepseek-ai/dsh-client-connection", "@deepseek-ai/dsh-client-ui-layout"], "immediately": true }
@@ -15,5 +15,5 @@
   "license": "MIT",
   "engines": { "node": ">=22" },
   "dependencies": { "yaml": "^2.8.1" },
-  "devDependencies": { "@deepseek-ai/cordis": "4.0.1", "@types/node": "^24.10.0", "@types/react": "^18.3.0", "react": "^18.3.1", "tsdown": "^0.22.2", "typescript": "^5.9.3", "vitest": "^4.0.0" }
+  "devDependencies": { "@deepseek-ai/cordis": "4.0.1", "@types/node": "^24.10.0", "@types/react": "^18.3.0", "@types/react-test-renderer": "18.3.1", "react": "^18.3.1", "react-test-renderer": "18.3.1", "tsdown": "^0.22.2", "typescript": "^5.9.3", "vitest": "^4.0.0" }
 }

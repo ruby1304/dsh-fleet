@@ -13,8 +13,7 @@ export default defineConfig([
   {
     name: 'dsh-fleet/client', entry: { client: 'src/client/index.tsx' }, outDir: 'dist-client',
     format: 'cjs', platform: 'browser', target: 'es2022', fixedExtension: false, dts: false, sourcemap: true, clean: false,
-    external: clientExternals,
-    noExternal: (id: string) => clientExternals.includes(id) ? undefined : true,
+    deps: { neverBundle: clientExternals, alwaysBundle: (id: string) => !clientExternals.includes(id) },
     outputOptions: {
       entryFileNames: 'client.js',
       banner: 'window.__ModuleLoader__.load({ id: \"dsh-fleet\", factory: (require) => {',

@@ -1,7 +1,10 @@
+# DEVELOPMENT VALIDATION manifest only; this is not a formal team-hub configuration.
+# Fleet itself, machine-local dsh-cliproxyapi, and private dsh-818-relay remain unmanaged.
+# Tavily lacks a stable distributable revision and is therefore dev-only.
 schemaVersion: 1
 team:
   id: ruby-team
-  name: Ruby DSH Fleet
+  name: Ruby DSH Fleet development validation
 
 devices:
   ruby-m5:
@@ -16,19 +19,48 @@ devices:
     labels: [macos, arm64]
 
 plugins:
+  # Development variants: these exercise mutable/local development sources on M5.
   - id: dsh-password-shield
-    spec: github:ruby1304/dsh-password-shield
+    source: github:ruby1304/dsh-password-shield
     profiles: [web]
-    target:
-      channels: [dev, stable]
-
+    target: { devices: [ruby-m5] }
   - id: dsh-quota-status
-    spec: github:ruby1304/dsh-quota-status
+    source: link:/Users/qudian/Local/dsh/dsh-quota-status
     profiles: [web]
-    target:
-      devices: [ruby-m5]
-
+    target: { devices: [ruby-m5] }
   - id: dsh-turn-fork
-    spec: ^0.1.0
+    source: npm
+    revision: ^0.1.0
     profiles: [web]
-    runtimeModules: [dsh-turn-fork]
+    target: { devices: [ruby-m5] }
+  - id: dsh-vision-subagent
+    source: link:/Users/qudian/Local/dsh/dsh-vision-subagent
+    profiles: [web]
+    target: { devices: [ruby-m5] }
+  - id: dsh-web-search-tavily
+    source: link:/Users/qudian/Local/dsh/dsh-web-search-tavily
+    runtimeModules: [dsh-tavily-workspace]
+    profiles: [web]
+    target: { devices: [ruby-m5] }
+
+  # Stable M3 variants: immutable GitHub commit SHAs or exact npm semver only.
+  - id: dsh-password-shield
+    source: github:ruby1304/dsh-password-shield
+    revision: 4520cf4342dbac46f82df68118838f9c5a027750
+    profiles: [web]
+    target: { devices: [m3-worker] }
+  - id: dsh-quota-status
+    source: github:ruby1304/dsh-quota-status
+    revision: 46b571a105dd21322734607368a1a5f056dcadf5
+    profiles: [web]
+    target: { devices: [m3-worker] }
+  - id: dsh-turn-fork
+    source: npm
+    revision: 0.1.0
+    profiles: [web]
+    target: { devices: [m3-worker] }
+  - id: dsh-vision-subagent
+    source: github:ruby1304/dsh-vision-subagent
+    revision: 0e55e84bde9d3cb9b64c2e8bc7b5bfaa3123c437
+    profiles: [web]
+    target: { devices: [m3-worker] }
