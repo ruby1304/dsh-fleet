@@ -438,7 +438,7 @@ M5 profile 已包含：
 
 - M5 现有 DSH Web 已重启并完成 Fleet badge、展开面板、刷新和浏览器错误可视验证；
 - Fleet client 和两次正确 RPC POST 均为 HTTP 200；
-- M5 为 `ruby-m5 / portable-control / dev`，5 项期望全部 aligned，0 missing、0 drifted、0 failed，3 项明确未管理；
+- M5 为 `ruby-m5 / portable-control / dev`，5 项期望全部 aligned，0 missing、0 drifted、0 failed，4 项明确未管理；
 - `source`/`revision` 已与派生的 dependency spec 分离，stable 变体强制精确 npm 版本或 40 位 commit SHA；
 - `external/noExternal` 已迁移为 `deps.neverBundle/alwaysBundle`，tsdown 构建无弃用警告；
 - Public 仓库 `https://github.com/ruby1304/dsh-fleet` 已创建，`main` 已首次 push；
@@ -542,8 +542,8 @@ M5 profile 已包含：
 | 类型 / 通道 | `portable-control / dev` | `always-on-worker / stable` |
 | manifest | M5 checkout 的 `examples/fleet.lock.yaml` | M3 checkout 的同一逻辑文件 |
 | 目标集合 | password-shield、quota-status、turn-fork、vision-subagent、web-search-tavily | password-shield、quota-status、turn-fork、vision-subagent |
-| 汇总 | desired 5、aligned 5、missing 0、drifted 0、failed 0、unmanaged 3 | desired 4、aligned 0、missing 4、drifted 0、failed 0、unmanaged 2 |
-| 未管理 | `dsh-818-relay`、`dsh-cliproxyapi`、`dsh-fleet` | `dsh-aibaji-skills`、`dsh-fleet` |
+| 汇总 | desired 5、aligned 5、missing 0、drifted 0、failed 0、unmanaged 4 | desired 4、aligned 0、missing 4、drifted 0、failed 0、unmanaged 2 |
+| 未管理 | `dsh-818-relay`、`dsh-bash-escalation-gate`、`dsh-cliproxyapi`、`dsh-fleet` | `dsh-aibaji-skills`、`dsh-fleet` |
 | 结论 | dev 本地来源全部运行对齐 | stable 精确版本目标被正确选出；V0 只读，未自动安装，因此准确报告 missing |
 
 两台设备的 Fleet client 均为 HTTP 200，正确 RPC POST 各重复两次均为 HTTP 200 且结果稳定。M5 可视验证无 console error、page error 或 request failure；M3 profile 通过 `--dump-config` 并由原 screen-managed Web 提供服务。

@@ -1,5 +1,5 @@
 # DEVELOPMENT VALIDATION manifest only; this is not a formal team-hub configuration.
-# Fleet itself, machine-local dsh-cliproxyapi, and private dsh-818-relay remain unmanaged.
+# Fleet itself, machine-local dsh-bash-escalation-gate/dsh-cliproxyapi, and private dsh-818-relay remain unmanaged.
 # Tavily lacks a stable distributable revision and is therefore dev-only.
 schemaVersion: 1
 team:
