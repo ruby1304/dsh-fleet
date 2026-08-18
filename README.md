@@ -40,15 +40,17 @@ Human identity and device identity remain separate from the first schema version
 
 See [examples/fleet.lock.yaml](examples/fleet.lock.yaml).
 
-`spec` is compared with the exact dependency spec stored in the DSH profile's `package.json`. V0 does not resolve semver equivalence or query remote registries.
+Raw manifest entries use exactly one of `spec` or `source`/`revision`. The parser keeps `source` and `revision` as provenance fields and derives the exact profile dependency spec for comparison. Development variants may use local links or ranges; stable variants must use an exact npm version or a 40-hex commit SHA. The example is a development-validation manifest, not a formal team-hub source.
+
+Observed V0 validation: M5 (`ruby-m5`, `portable-control`, `dev`) has 5 desired and 5 aligned capabilities; M3 (`m3-worker`, `always-on-worker`, `stable`) selects the 4 stable variants and reports them missing because V0 does not install them. The manifest intentionally leaves Fleet itself and machine-local/private integrations unmanaged.
 
 ## Local development
 
-Requirements: Node.js 22+, npm, DSH 0.1.0-rc.5 or a compatible build.
+Requirements: Node.js 22+, pnpm, DSH 0.1.0-rc.5 or a compatible build.
 
 ```bash
-npm install
-npm run check
+pnpm install
+pnpm run check
 ```
 
 Configure the plugin row after installing the bundle:
@@ -68,7 +70,7 @@ Configure the plugin row after installing the bundle:
 Install a local checkout into the Web profile:
 
 ```bash
-npm run build
+pnpm run build
 dsh plugin --profile web add "link:$PWD"
 ```
 

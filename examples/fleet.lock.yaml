@@ -39,7 +39,7 @@ plugins:
     target: { devices: [ruby-m5] }
   - id: dsh-web-search-tavily
     source: link:/Users/qudian/Local/dsh/dsh-web-search-tavily
-    runtimeModules: [dsh-tavily-workspace]
+    runtimeModules: [dsh-tavily-workspace, dsh-web-search-tavily]
     profiles: [web]
     target: { devices: [ruby-m5] }
 

@@ -2,8 +2,8 @@
 
 - **文档状态**：后续开发基线
 - **更新时间**：2026-08-18
-- **当前代码版本**：进入新 session 后以 `git log -1` 为准；只读更新监控增量从 `1dbba70` 开始
-- **当前阶段**：V0 inventory/drift 与不执行安装的更新可用性监控均已实现
+- **当前代码版本**：`779d66c`（只读更新监控；V0 acceptance coverage 基线为 `1dbba70`；最终以 `git log -1` 为准）
+- **当前阶段**：V0 inventory/drift 与只读更新可用性监控均已实现并完成 M5/M3 验收；V1 Fleet Agent 尚未开始
 - **目标读者**：下一开发 session、未来贡献者、DSH 上游维护者
 
 ---
@@ -382,9 +382,10 @@ plugins:
 本地提交：
 
 ```text
+779d66c feat: add read-only fleet update monitoring
+1dbba70 feat: complete fleet v0 acceptance coverage
+93d7db5 docs: refresh v0 handoff state
 3b41bb0 fix: wait for fleet overlay slot before registration
-ac35071 docs: define fleet roadmap and next-session handoff
-b208460 feat: add read-only dsh fleet inventory v0
 ```
 
 主要文件：
@@ -431,29 +432,36 @@ M5 profile 已包含：
     profile: web
 ```
 
-### 7.3 尚未完成
+### 7.3 V0 验收状态与剩余边界
+
+已完成：
+
+- M5 现有 DSH Web 已重启并完成 Fleet badge、展开面板、刷新和浏览器错误可视验证；
+- Fleet client 和两次正确 RPC POST 均为 HTTP 200；
+- M5 为 `ruby-m5 / portable-control / dev`，5 项期望全部 aligned，0 missing、0 drifted、0 failed，3 项明确未管理；
+- `source`/`revision` 已与派生的 dependency spec 分离，stable 变体强制精确 npm 版本或 40 位 commit SHA；
+- `external/noExternal` 已迁移为 `deps.neverBundle/alwaysBundle`，tsdown 构建无弃用警告；
+- Public 仓库 `https://github.com/ruby1304/dsh-fleet` 已创建，`main` 已首次 push；
+- M3 已从远端 clone 到 `/Users/qudian/dev/dsh-fleet`，安装、check、link、profile 配置和原 Web 重启均已完成；
+- M3 为 `m3-worker / always-on-worker / stable`，同一逻辑清单选出 4 项 stable 目标并准确报告 4 项 missing；
+- 示例清单只用于开发验收，不是正式 team-hub 真相源。
+
+仍不属于 V0：
 
 - 当前 DSH Web 进程没有 `pnpm run dev:web` watcher；
-- 尚未重启当前 DSH Web，因此 Fleet 客户端面板尚未肉眼验证；
-- 尚未检查浏览器控制台错误和 RPC 实际返回；
-- M3 尚未安装；
-- 项目尚无 GitHub remote；
-- 未经 Ruby 明确批准，不得创建远端或 push；
-- 尚无 dsh-testkit 生命周期测试；
 - 尚无 GitHub CI；
-- tsdown 对旧 `external/noExternal` 配置发出弃用警告；
-- 示例清单用于开发验证，不是最终 team-hub 真相源；
-- 当前 spec 允许分支/范围，稳定版最终应锁定精确版本或 commit SHA。
+- 不自动安装 M3 缺失能力，不执行收敛、回滚、Hub、远程 shell 或 secrets 分发；
+- V1 Fleet Agent 尚未开始。
 
 ### 7.4 环境事实
 
 - M5 DSH：`0.1.0-rc.5`；
 - M3 DSH：`0.1.0-rc.5`；
 - M3 DSH 二进制：`/Users/qudian/.local/bin/dsh`；
-- M3 非交互 SSH PATH 不含 `~/.local/bin`；
-- M3 当前相关仓：`~/dev/dsh-public-plugins`、`~/dev/dsh-aibaji-plugins`；
-- M3 尚无 dsh-fleet checkout；
-- npm 全局缓存存在 root-owned 文件问题，当前项目使用 pnpm 和项目内 store；
+- M3 非交互 SSH PATH 不含 `~/.local/bin`，验收命令使用绝对路径；
+- M3 Fleet checkout：`/Users/qudian/dev/dsh-fleet`，跟踪 `origin/main`；
+- M3 现有 Web 继续使用 loopback `127.0.0.1:3211` 和 screen session `dsh-web-m3`；
+- npm 全局缓存存在 root-owned 文件问题，当前项目使用 pnpm；
 - 不要用 sudo 修改系统 npm 缓存作为本项目依赖。
 
 ---
@@ -525,6 +533,20 @@ M5 profile 已包含：
 - 无凭据或会话内容进入 Fleet 返回值；
 - 测试、打包和 DSH 加载均通过；
 - README 足以让第三方用户复现。
+
+验收差异报告（2026-08-18）：
+
+| 项目 | M5 | M3 |
+| --- | --- | --- |
+| 设备 | `ruby-m5` | `m3-worker` |
+| 类型 / 通道 | `portable-control / dev` | `always-on-worker / stable` |
+| manifest | M5 checkout 的 `examples/fleet.lock.yaml` | M3 checkout 的同一逻辑文件 |
+| 目标集合 | password-shield、quota-status、turn-fork、vision-subagent、web-search-tavily | password-shield、quota-status、turn-fork、vision-subagent |
+| 汇总 | desired 5、aligned 5、missing 0、drifted 0、failed 0、unmanaged 3 | desired 4、aligned 0、missing 4、drifted 0、failed 0、unmanaged 2 |
+| 未管理 | `dsh-818-relay`、`dsh-cliproxyapi`、`dsh-fleet` | `dsh-aibaji-skills`、`dsh-fleet` |
+| 结论 | dev 本地来源全部运行对齐 | stable 精确版本目标被正确选出；V0 只读，未自动安装，因此准确报告 missing |
+
+两台设备的 Fleet client 均为 HTTP 200，正确 RPC POST 各重复两次均为 HTTP 200 且结果稳定。M5 可视验证无 console error、page error 或 request failure；M3 profile 通过 `--dump-config` 并由原 screen-managed Web 提供服务。
 
 ### 8.6 只读更新监控增量
 
@@ -950,23 +972,22 @@ Agent 是 principal 的一种：
 
 ---
 
-## 18. 下一 session 的执行顺序
+## 18. V0 验收记录与后续顺序
 
-下一 session 不要立即做 V1。先完成 V0 验收：
+以下 V0 顺序已于 2026-08-18 完成：
 
-1. 阅读本文档和当前 Git 状态；
-2. 运行 `pnpm run check`；
-3. 在不启动第二个服务器的前提下重启现有 DSH Web；
-4. 验证 `http://127.0.0.1:3080` 的 Fleet 面板；
-5. 修复客户端加载、slot、RPC 或样式问题；
-6. 保持现有客户端槽位生命周期测试通过，并按可视验证结果补充 UI/RPC 冒烟测试；
-7. 修复 tsdown 弃用警告；
-8. 完善真实 M5 清单；
-9. 请求 Ruby 明确决定 GitHub public/private 和是否 push；
-10. 获批后创建远端；
-11. M3 clone、安装和验证；
-12. 输出两台设备的差异报告；
-13. V0 验收通过后再设计 V1 Fleet Agent。
+1. 阅读需求、Git 状态与最近提交；
+2. 完整 check 和 pack dry-run；
+3. 在不启动替代服务器的前提下验证 M5 现有 Web；
+4. 补充客户端 UI/RPC 与 Host loopback RPC 冒烟测试；
+5. 修复 tsdown 弃用配置；
+6. 完善真实 M5 开发清单和 M3 stable 变体；
+7. 经 Ruby 明确批准后创建 Public GitHub 仓、添加 remote 并首次 push；
+8. M3 从远端 clone、安装、check、link、配置并重启原 Web；
+9. 导出 M5/M3 状态并确认同一清单产生不同目标集合；
+10. 完成 README、需求文档和最终 check/pack。
+
+后续若开始 V1，必须先单独设计 Fleet Agent 的计划、审批、快照、健康检查与回滚协议；不得把 V0 Host 插件扩成自更新或任意远程 shell。
 
 ### 18.1 禁止事项
 
@@ -984,16 +1005,17 @@ Agent 是 principal 的一种：
 
 将下面内容作为新 session 的首条请求即可：
 
-> 继续实现 `/Users/qudian/Local/dsh/dsh-fleet`。先完整阅读 `docs/REQUIREMENTS.md`、`git status` 和最近提交。V0 实现基线为 `b208460`，后续已有需求文档和客户端 `shell.overlay` 槽位生命周期修复；9 个测试与构建已通过。插件已经 link 安装到 M5 Web profile，但当前 GUI 尚未重启做可视验证，M3 尚未安装，GitHub 尚未创建或推送。严格按文档第 18 节顺序完成 V0，不要提前做 V1，不要擅自 push 或启动替代 Web 服务器。
+> 继续实现 `/Users/qudian/Local/dsh/dsh-fleet`。先完整阅读 `docs/REQUIREMENTS.md`、`git status` 和最近提交。V0 已完成 M5/M3 双设备验收：Public 仓库为 `ruby1304/dsh-fleet`，M3 checkout 为 `/Users/qudian/dev/dsh-fleet`，M5 dev 目标 5 项全部 aligned，M3 stable 目标 4 项准确报告 missing。开始新工作前先运行完整 check/pack，并保持 V0 只读边界；Fleet Agent、team-hub、自动安装、远程 shell 和 secrets 分发均属于尚未批准的后续阶段。
 
 ---
 
 ## 20. 当前阶段完成定义
 
-当前 session 的交付不是“Fleet 已完成”，而是：
+当前阶段的交付是“Fleet V0 验收完成”，不是整个 Fleet 产品完成：
 
-- V0 核心实现已落地；
-- DSH profile 已装配；
-- 需求、边界和路线已完整固化；
-- 新 session 可以脱离历史对话继续；
-- 后续开发有明确的安全边界和验收顺序。
+- V0 本地只读 inventory、drift、UI/RPC 和更新可用性监控已落地；
+- M5 与 M3 使用同一逻辑清单并按设备职责选出不同目标集合；
+- M5、M3 profile 与现有 Web 已装配并通过真实 RPC 验证；
+- 代码已通过批准的 Public GitHub 远端分发；
+- 示例清单、来源边界、稳定版本规则和双设备差异已固化；
+- V1 Fleet Agent、自动收敛、回滚、Hub、成员系统和远程审批尚未开始。
