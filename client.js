@@ -32,6 +32,7 @@ window.__ModuleLoader__.load({
 		//#region src/client/index.tsx
 		const inject = ["slots", "connection"];
 		const CHANNEL = "/dsh-fleet";
+		const AGENT_CHANNEL = "/dsh-fleet-agent";
 		const SM = {
 			bg: "#eef0f2",
 			bg2: "#e6e9ed",
@@ -55,6 +56,50 @@ window.__ModuleLoader__.load({
 			fontSans: "\"Noto Sans SC\",\"PingFang SC\",\"Source Han Sans SC\",-apple-system,sans-serif",
 			fontMono: "\"JetBrains Mono\",\"SF Mono\",\"Cascadia Code\",Menlo,monospace"
 		};
+		function isRecord(value) {
+			return typeof value === "object" && value !== null && !Array.isArray(value);
+		}
+		function rpcValue(result, guard, fallback) {
+			if (!result.ok) throw new Error(result.error.message);
+			if (!guard(result.value)) throw new Error(fallback);
+			return result.value;
+		}
+		function isFleetStatus(value) {
+			return isRecord(value) && isRecord(value.device) && isRecord(value.summary) && Array.isArray(value.plugins);
+		}
+		function isFleetUpdates(value) {
+			return isRecord(value) && typeof value.enabled === "boolean" && typeof value.cached === "boolean" && typeof value.stale === "boolean";
+		}
+		function isAgentTargets(value) {
+			if (!isRecord(value) || typeof value.enabled !== "boolean" || !Array.isArray(value.targets)) return false;
+			return value.targets.every((target) => {
+				if (!isRecord(target) || typeof target.deviceId !== "string" || target.transport !== "local" && target.transport !== "ssh" || typeof target.online !== "boolean") return false;
+				if (target.errorCode !== void 0 && typeof target.errorCode !== "string") return false;
+				if (target.inspection === void 0) return target.online === false;
+				const inspection = target.inspection;
+				return isRecord(inspection) && inspection.protocolVersion === 1 && typeof inspection.deviceId === "string" && typeof inspection.profile === "string" && typeof inspection.dshVersion === "string" && typeof inspection.manifestDigest === "string" && typeof inspection.profileHash === "string" && Array.isArray(inspection.candidates) && inspection.candidates.every((candidate) => isRecord(candidate) && typeof candidate.pluginId === "string" && (candidate.action === "install" || candidate.action === "update") && (candidate.fromSpec === null || typeof candidate.fromSpec === "string") && typeof candidate.exactToSpec === "string" && (candidate.sourceKind === "npm" || candidate.sourceKind === "github"));
+			});
+		}
+		function isFleetPlan(value) {
+			return isRecord(value) && typeof value.planId === "string" && typeof value.digest === "string" && typeof value.deviceId === "string" && typeof value.profile === "string" && typeof value.pluginId === "string" && (value.action === "install" || value.action === "update") && typeof value.exactToSpec === "string" && typeof value.expiresAt === "string";
+		}
+		function isAgentAction(value) {
+			const states = /* @__PURE__ */ new Set([
+				"approved",
+				"staging",
+				"staged",
+				"applying",
+				"restarting",
+				"verifying",
+				"succeeded",
+				"rollback",
+				"rollback-restarting",
+				"rollback-verifying",
+				"rolled-back",
+				"manual-intervention"
+			]);
+			return isRecord(value) && typeof value.planId === "string" && typeof value.state === "string" && states.has(value.state) && typeof value.pluginId === "string" && typeof value.updatedAt === "string";
+		}
 		const driftColors = {
 			aligned: SM.good,
 			missing: SM.bad,
@@ -557,6 +602,318 @@ window.__ModuleLoader__.load({
 				]
 			});
 		}
+		function actionLabel(state) {
+			if (state === "succeeded") return "已完成";
+			if (state === "rolled-back") return "已自动回滚";
+			if (state === "manual-intervention") return "需要人工处理";
+			if (state.startsWith("rollback")) return "正在回滚";
+			if (state === "verifying") return "正在健康检查";
+			if (state === "restarting") return "正在重启";
+			if (state === "applying") return "正在安装";
+			return "正在准备";
+		}
+		function actionColor(state) {
+			if (state === "succeeded") return SM.good;
+			if (state === "rolled-back" || state === "manual-intervention" || state.startsWith("rollback")) return SM.bad;
+			return SM.warn;
+		}
+		function OperationsView({ targets, plan, action, loading, error, armed, onArm, onReload, onPlan, onApprove }) {
+			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+				style: { padding: "0 12px 12px" },
+				children: [
+					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+						style: {
+							marginBottom: 10,
+							padding: "9px 10px",
+							borderRadius: 10,
+							background: SM.panelSoft,
+							color: SM.fg2,
+							lineHeight: 1.55
+						},
+						children: "仅允许清单内的精确版本。每次只处理一个插件，并在目标机快照、重启、健康检查；失败自动回滚。"
+					}),
+					error !== null && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+						style: {
+							marginBottom: 10,
+							padding: "9px 10px",
+							borderRadius: 10,
+							background: SM.badSoft,
+							color: SM.bad,
+							fontFamily: SM.fontMono
+						},
+						children: error
+					}),
+					targets?.enabled === false && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+						style: {
+							padding: 12,
+							borderRadius: 10,
+							background: SM.panel,
+							color: SM.fg3
+						},
+						children: "远程收敛未启用"
+					}),
+					targets === null && error === null && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+						style: {
+							padding: 12,
+							color: SM.fg3
+						},
+						children: "载入中…"
+					}),
+					targets?.targets.map((target) => /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+						style: {
+							marginBottom: 10,
+							borderRadius: 12,
+							background: SM.panel,
+							overflow: "hidden"
+						},
+						children: [
+							/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+								style: {
+									display: "flex",
+									alignItems: "center",
+									gap: 8,
+									padding: "10px 11px",
+									borderBottom: `1px solid ${SM.border}`
+								},
+								children: [
+									/* @__PURE__ */ (0, react_jsx_runtime.jsx)(Dot, { color: target.online ? SM.good : SM.bad }),
+									/* @__PURE__ */ (0, react_jsx_runtime.jsx)("strong", {
+										style: {
+											flex: 1,
+											fontFamily: SM.fontMono
+										},
+										children: target.deviceId
+									}),
+									/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+										style: {
+											color: SM.fg3,
+											fontFamily: SM.fontMono
+										},
+										children: target.inspection?.dshVersion ?? target.errorCode ?? "离线"
+									})
+								]
+							}),
+							target.online && target.inspection?.candidates.map((candidate) => /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+								style: {
+									display: "grid",
+									gridTemplateColumns: "minmax(0,1fr) auto",
+									gap: 8,
+									alignItems: "center",
+									minHeight: 48,
+									padding: "7px 10px",
+									borderBottom: `1px solid ${SM.border}`
+								},
+								children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+									style: { minWidth: 0 },
+									children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+										title: candidate.pluginId,
+										style: {
+											overflow: "hidden",
+											textOverflow: "ellipsis",
+											whiteSpace: "nowrap",
+											fontFamily: SM.fontMono
+										},
+										children: candidate.pluginId
+									}), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+										title: candidate.exactToSpec,
+										style: {
+											overflow: "hidden",
+											textOverflow: "ellipsis",
+											whiteSpace: "nowrap",
+											color: SM.fg3,
+											fontFamily: SM.fontMono,
+											fontSize: 10.5
+										},
+										children: [
+											candidate.action === "install" ? "安装" : "更新",
+											" → ",
+											candidate.exactToSpec
+										]
+									})]
+								}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+									type: "button",
+									disabled: loading,
+									onClick: () => onPlan(target.deviceId, candidate.pluginId),
+									style: {
+										minHeight: 28,
+										padding: "4px 9px",
+										border: 0,
+										borderRadius: 9,
+										background: SM.infoSoft,
+										color: SM.info,
+										cursor: loading ? "default" : "pointer",
+										fontFamily: SM.fontSans
+									},
+									children: "生成计划"
+								})]
+							}, candidate.pluginId)),
+							target.online && target.inspection?.candidates.length === 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+								style: {
+									padding: 10,
+									color: SM.good
+								},
+								children: "该设备已经一致"
+							})
+						]
+					}, target.deviceId)),
+					plan !== null && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+						style: {
+							marginBottom: 10,
+							padding: 11,
+							borderRadius: 12,
+							background: SM.panel,
+							boxShadow: SM.shadowCard
+						},
+						children: [
+							/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+								style: {
+									display: "flex",
+									alignItems: "center",
+									gap: 7,
+									marginBottom: 8
+								},
+								children: [
+									/* @__PURE__ */ (0, react_jsx_runtime.jsx)(Dot, { color: SM.warn }),
+									/* @__PURE__ */ (0, react_jsx_runtime.jsx)("strong", { children: "待批准计划" }),
+									/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+										style: {
+											marginLeft: "auto",
+											color: SM.fg3,
+											fontFamily: SM.fontMono
+										},
+										children: plan.action === "install" ? "INSTALL" : "UPDATE"
+									})
+								]
+							}),
+							/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+								style: {
+									display: "grid",
+									gridTemplateColumns: "72px minmax(0,1fr)",
+									gap: "5px 8px",
+									color: SM.fg2
+								},
+								children: [
+									/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: "设备" }),
+									/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+										style: { fontFamily: SM.fontMono },
+										children: plan.deviceId
+									}),
+									/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: "插件" }),
+									/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+										style: { fontFamily: SM.fontMono },
+										children: plan.pluginId
+									}),
+									/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: "目标" }),
+									/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+										title: plan.exactToSpec,
+										style: {
+											overflowWrap: "anywhere",
+											fontFamily: SM.fontMono
+										},
+										children: plan.exactToSpec
+									}),
+									/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: "计划" }),
+									/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+										title: plan.planId,
+										style: { fontFamily: SM.fontMono },
+										children: plan.digest.slice(0, 12)
+									}),
+									/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: "过期" }),
+									/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+										style: {
+											fontFamily: SM.fontMono,
+											fontVariantNumeric: "tabular-nums"
+										},
+										children: formatCheckedAt(plan.expiresAt)
+									})
+								]
+							}),
+							/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("label", {
+								style: {
+									display: "flex",
+									alignItems: "flex-start",
+									gap: 8,
+									marginTop: 10,
+									color: SM.fg2,
+									cursor: "pointer"
+								},
+								children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("input", {
+									type: "checkbox",
+									checked: armed,
+									onChange: (event) => onArm(event.currentTarget.checked)
+								}), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", { children: [
+									"我确认由 ",
+									plan.deviceId,
+									" 执行这一精确计划；失败时自动回滚。"
+								] })]
+							}),
+							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+								type: "button",
+								disabled: !armed || loading,
+								onClick: onApprove,
+								style: {
+									width: "100%",
+									minHeight: 32,
+									marginTop: 10,
+									border: 0,
+									borderRadius: 10,
+									background: armed && !loading ? SM.bad : SM.fg4,
+									color: SM.panel,
+									cursor: armed && !loading ? "pointer" : "default",
+									fontFamily: SM.fontSans,
+									fontWeight: 600
+								},
+								children: loading ? "执行中…" : "批准并执行一次"
+							})
+						]
+					}),
+					action !== null && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+						style: {
+							marginBottom: 10,
+							padding: 10,
+							borderRadius: 10,
+							background: action.state === "succeeded" ? SM.goodSoft : SM.badSoft,
+							color: actionColor(action.state)
+						},
+						children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+							style: {
+								display: "flex",
+								alignItems: "center",
+								gap: 7
+							},
+							children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)(Dot, { color: actionColor(action.state) }), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("strong", { children: actionLabel(action.state) })]
+						}), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+							style: {
+								marginTop: 4,
+								fontFamily: SM.fontMono,
+								fontVariantNumeric: "tabular-nums"
+							},
+							children: [
+								action.pluginId,
+								" · ",
+								action.updatedAt.slice(0, 19).replace("T", " ")
+							]
+						})]
+					}),
+					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+						type: "button",
+						onClick: onReload,
+						disabled: loading,
+						style: {
+							width: "100%",
+							minHeight: 30,
+							border: `1px solid ${SM.borderStrong}`,
+							borderRadius: 10,
+							background: SM.panel,
+							color: SM.fg2,
+							cursor: loading ? "default" : "pointer",
+							fontFamily: SM.fontSans
+						},
+						children: "刷新目标状态"
+					})
+				]
+			});
+		}
 		function FleetCard({ ctx }) {
 			const [open, setOpen] = (0, react.useState)(false);
 			const [tab, setTab] = (0, react.useState)("status");
@@ -566,16 +923,23 @@ window.__ModuleLoader__.load({
 			const [updates, setUpdates] = (0, react.useState)(null);
 			const [updateError, setUpdateError] = (0, react.useState)(null);
 			const [updateLoading, setUpdateLoading] = (0, react.useState)(false);
+			const [agentTargets, setAgentTargets] = (0, react.useState)(null);
+			const [agentPlan, setAgentPlan] = (0, react.useState)(null);
+			const [agentAction, setAgentAction] = (0, react.useState)(null);
+			const [agentError, setAgentError] = (0, react.useState)(null);
+			const [agentLoading, setAgentLoading] = (0, react.useState)(false);
+			const [approvalArmed, setApprovalArmed] = (0, react.useState)(false);
 			const statusInFlight = (0, react.useRef)(null);
 			const updatesInFlight = (0, react.useRef)(null);
+			const agentsInFlight = (0, react.useRef)(null);
+			const agentMutationInFlight = (0, react.useRef)(false);
 			const loadStatus = (0, react.useCallback)(async () => {
 				if (statusInFlight.current !== null) return statusInFlight.current;
 				const request = (async () => {
 					setStatusLoading(true);
 					try {
 						const result = await ctx.connection.rpc.call(CHANNEL, "status", null);
-						if (!result.ok || result.value === void 0) throw new Error(result.error?.message ?? "fleet status unavailable");
-						setStatus(result.value);
+						setStatus(rpcValue(result, isFleetStatus, "fleet status unavailable"));
 						setStatusError(null);
 					} catch (cause) {
 						setStatusError(cause instanceof Error ? cause.message : String(cause));
@@ -596,8 +960,7 @@ window.__ModuleLoader__.load({
 					setUpdateLoading(true);
 					try {
 						const result = await ctx.connection.rpc.call(CHANNEL, "updates", { mode });
-						if (!result.ok || result.value === void 0) throw new Error(result.error?.message ?? "update check unavailable");
-						setUpdates(result.value);
+						setUpdates(rpcValue(result, isFleetUpdates, "update check unavailable"));
 						setUpdateError(null);
 					} catch (cause) {
 						setUpdateError(cause instanceof Error ? cause.message : String(cause));
@@ -612,6 +975,91 @@ window.__ModuleLoader__.load({
 					updatesInFlight.current = null;
 				}
 			}, [ctx]);
+			const loadAgentTargets = (0, react.useCallback)(async () => {
+				if (agentsInFlight.current !== null) return agentsInFlight.current;
+				const request = (async () => {
+					setAgentLoading(true);
+					try {
+						const result = await ctx.connection.rpc.call(AGENT_CHANNEL, "targets", null);
+						setAgentTargets(rpcValue(result, isAgentTargets, "fleet targets unavailable"));
+						setAgentError(null);
+					} catch (cause) {
+						setAgentError(cause instanceof Error ? cause.message : String(cause));
+					} finally {
+						setAgentLoading(false);
+					}
+				})();
+				agentsInFlight.current = request;
+				try {
+					await request;
+				} finally {
+					agentsInFlight.current = null;
+				}
+			}, [ctx]);
+			const requestPlan = (0, react.useCallback)(async (deviceId, pluginId) => {
+				if (agentMutationInFlight.current) return;
+				agentMutationInFlight.current = true;
+				setAgentLoading(true);
+				setAgentPlan(null);
+				setAgentAction(null);
+				setApprovalArmed(false);
+				try {
+					const result = await ctx.connection.rpc.call(AGENT_CHANNEL, "plan", {
+						deviceId,
+						pluginId
+					});
+					setAgentPlan(rpcValue(result, isFleetPlan, "fleet plan unavailable"));
+					setAgentError(null);
+				} catch (cause) {
+					setAgentError(cause instanceof Error ? cause.message : String(cause));
+				} finally {
+					agentMutationInFlight.current = false;
+					setAgentLoading(false);
+				}
+			}, [ctx]);
+			const approvePlan = (0, react.useCallback)(async () => {
+				if (agentPlan === null || !approvalArmed || agentMutationInFlight.current) return;
+				agentMutationInFlight.current = true;
+				const approvedPlan = agentPlan;
+				setAgentLoading(true);
+				setApprovalArmed(false);
+				try {
+					const result = await ctx.connection.rpc.call(AGENT_CHANNEL, "approve", {
+						approvalId: crypto.randomUUID(),
+						deviceId: approvedPlan.deviceId,
+						planDigest: approvedPlan.digest,
+						planExpiresAt: approvedPlan.expiresAt,
+						planId: approvedPlan.planId,
+						profile: approvedPlan.profile
+					});
+					setAgentAction(rpcValue(result, isAgentAction, "fleet action result unavailable"));
+					setAgentPlan(null);
+					setAgentError(null);
+					loadAgentTargets();
+				} catch (cause) {
+					const applyError = cause instanceof Error ? cause.message : String(cause);
+					try {
+						const status = await ctx.connection.rpc.call(AGENT_CHANNEL, "action-status", {
+							deviceId: approvedPlan.deviceId,
+							planId: approvedPlan.planId
+						});
+						setAgentAction(rpcValue(status, isAgentAction, "fleet action status unavailable"));
+						setAgentPlan(null);
+						setAgentError(null);
+						loadAgentTargets();
+					} catch {
+						setAgentError(applyError);
+					}
+				} finally {
+					agentMutationInFlight.current = false;
+					setAgentLoading(false);
+				}
+			}, [
+				agentPlan,
+				approvalArmed,
+				ctx,
+				loadAgentTargets
+			]);
 			(0, react.useEffect)(() => {
 				loadStatus();
 				const timer = window.setInterval(() => {
@@ -630,10 +1078,21 @@ window.__ModuleLoader__.load({
 				updateLoading,
 				updates
 			]);
+			(0, react.useEffect)(() => {
+				if (!open || tab !== "operations" || agentTargets !== null || agentError !== null || agentLoading) return;
+				loadAgentTargets();
+			}, [
+				agentError,
+				agentLoading,
+				agentTargets,
+				loadAgentTargets,
+				open,
+				tab
+			]);
 			const driftIssues = (0, react.useMemo)(() => status === null ? 0 : status.summary.missing + status.summary.drifted + status.summary.failed + status.summary.unmanaged, [status]);
 			const availableUpdates = updates?.snapshot?.summary.available ?? 0;
 			const updateFailures = updates?.snapshot?.summary.errors ?? 0;
-			const tone = statusError !== null || status?.manifest.loaded === false || (status?.summary.failed ?? 0) > 0 || updateError !== null || updateFailures > 0 ? SM.bad : driftIssues > 0 || availableUpdates > 0 || updates?.stale === true ? SM.warn : status === null ? SM.fg3 : SM.good;
+			const tone = statusError !== null || status?.manifest.loaded === false || (status?.summary.failed ?? 0) > 0 || updateError !== null || updateFailures > 0 || agentError !== null || agentAction?.state === "manual-intervention" ? SM.bad : driftIssues > 0 || availableUpdates > 0 || updates?.stale === true ? SM.warn : status === null ? SM.fg3 : SM.good;
 			const closedText = status === null ? statusError === null ? "载入中…" : "状态获取失败" : [driftIssues === 0 ? "一致" : `${driftIssues} 项差异`, updateError !== null || updateFailures > 0 ? "更新检查失败" : availableUpdates > 0 ? `${availableUpdates} 个更新` : void 0].filter((value) => value !== void 0).join(" · ");
 			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 				style: {
@@ -716,7 +1175,11 @@ window.__ModuleLoader__.load({
 								borderRadius: 999,
 								background: SM.bg2
 							},
-							children: ["status", "updates"].map((key) => /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+							children: [
+								"status",
+								"updates",
+								"operations"
+							].map((key) => /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
 								type: "button",
 								role: "tab",
 								"aria-selected": tab === key,
@@ -732,7 +1195,7 @@ window.__ModuleLoader__.load({
 									fontFamily: SM.fontSans,
 									fontSize: 11.5
 								},
-								children: key === "status" ? "状态" : `更新${availableUpdates > 0 ? ` ${availableUpdates}` : ""}`
+								children: key === "status" ? "状态" : key === "updates" ? `更新${availableUpdates > 0 ? ` ${availableUpdates}` : ""}` : "操作"
 							}, key))
 						})]
 					}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
@@ -740,11 +1203,26 @@ window.__ModuleLoader__.load({
 						children: tab === "status" ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)(StatusView, {
 							status,
 							error: statusError
-						}) : /* @__PURE__ */ (0, react_jsx_runtime.jsx)(UpdatesView, {
+						}) : tab === "updates" ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)(UpdatesView, {
 							updates,
 							loading: updateLoading,
 							error: updateError,
 							onRefresh: () => void loadUpdates("force")
+						}) : /* @__PURE__ */ (0, react_jsx_runtime.jsx)(OperationsView, {
+							targets: agentTargets,
+							plan: agentPlan,
+							action: agentAction,
+							loading: agentLoading,
+							error: agentError,
+							armed: approvalArmed,
+							onArm: setApprovalArmed,
+							onReload: () => {
+								setAgentTargets(null);
+								setAgentError(null);
+								loadAgentTargets();
+							},
+							onPlan: (deviceId, pluginId) => void requestPlan(deviceId, pluginId),
+							onApprove: () => void approvePlan()
 						})
 					})]
 				}), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("button", {

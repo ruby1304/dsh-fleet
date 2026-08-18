@@ -11,6 +11,11 @@ export default defineConfig([
   { name: 'dsh-fleet/host', entry: { index: 'src/index.ts' }, outDir: 'dist-host', format: 'esm', platform: 'node', target: 'es2023', fixedExtension: false, dts: false, clean: false },
   { name: 'dsh-fleet/testing', entry: { testing: 'src/testing.ts' }, outDir: 'dist-testing', format: 'esm', platform: 'node', target: 'es2023', fixedExtension: false, dts: false, clean: false },
   {
+    name: 'dsh-fleet/agent', entry: { agent: 'src/agent/cli.ts' }, outDir: 'dist-agent',
+    format: 'esm', platform: 'node', target: 'es2023', fixedExtension: false, dts: false, clean: false,
+    deps: { alwaysBundle: ['semver', 'yaml'], onlyBundle: ['semver', 'yaml'] },
+  },
+  {
     name: 'dsh-fleet/client', entry: { client: 'src/client/index.tsx' }, outDir: 'dist-client',
     format: 'cjs', platform: 'browser', target: 'es2022', fixedExtension: false, dts: false, sourcemap: true, clean: false,
     deps: { neverBundle: clientExternals, alwaysBundle: (id: string) => !clientExternals.includes(id) },

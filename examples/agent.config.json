@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "deviceId": "m3-worker",
+  "manifestPath": "/Users/you/dev/dsh-fleet/examples/fleet.lock.yaml",
+  "dshHome": "/Users/you/.dsh",
+  "dshBinary": "/Users/you/.npm-global/bin/dsh",
+  "pnpmBinary": "/Users/you/.local/bin/pnpm",
+  "profile": "web",
+  "stateDir": "/Users/you/.dsh/fleet-agent",
+  "planTtlMs": 300000,
+  "restart": {
+    "kind": "screen",
+    "screenBinary": "/usr/bin/screen",
+    "sessionName": "dsh-web-m3",
+    "host": "127.0.0.1",
+    "port": 3211
+  },
+  "health": {
+    "url": "http://127.0.0.1:3211",
+    "timeoutMs": 45000,
+    "requireFleetRpc": true
+  }
+}

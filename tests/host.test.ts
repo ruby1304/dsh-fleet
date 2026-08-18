@@ -92,16 +92,16 @@ plugins: []
       dsh: { profile: { bundles: [] } },
     }))
 
-    let registration: {
+    const registrations = new Map<string, {
       channel: string
       handler: (endpoint: string, payload: unknown, signal: AbortSignal) => Promise<unknown>
       options?: { authority?: string }
-    } | undefined
+    }>()
     const ctx = {
       connection: {
         rpc: {
           handle: (channel: string, handler: (endpoint: string, payload: unknown, signal: AbortSignal) => Promise<unknown>, options?: { authority?: string }) => {
-            registration = { channel, handler, ...(options === undefined ? {} : { options }) }
+            registrations.set(channel, { channel, handler, ...(options === undefined ? {} : { options }) })
           },
         },
       },
@@ -117,6 +117,7 @@ plugins: []
       updateCheck: false,
     })
 
+    const registration = registrations.get('/dsh-fleet')
     expect(registration).toMatchObject({ channel: '/dsh-fleet', options: { authority: 'loopback' } })
     expect(registration).toBeDefined()
     const response = await registration!.handler('status', undefined, new AbortController().signal)
@@ -132,5 +133,14 @@ plugins: []
     expect(updates).toEqual({ ok: true, value: { enabled: false, cached: false, stale: false } })
     const invalid = await registration!.handler('updates', { mode: 'install' }, new AbortController().signal)
     expect(invalid).toMatchObject({ ok: false, error: { message: 'invalid updates mode' } })
+
+    const agent = registrations.get('/dsh-fleet-agent')
+    expect(agent).toMatchObject({ channel: '/dsh-fleet-agent', options: { authority: 'loopback' } })
+    const targets = await agent!.handler('targets', null, new AbortController().signal)
+    expect(targets).toEqual({ ok: true, value: { enabled: false, targets: [] } })
+    const arbitrary = await agent!.handler('plan', {
+      deviceId: 'worker', pluginId: 'plugin-a', command: 'anything', argv: ['anything'], spec: 'latest',
+    }, new AbortController().signal)
+    expect(arbitrary).toMatchObject({ ok: false, error: { message: 'plan payload has unsupported or missing fields' } })
   })
 })

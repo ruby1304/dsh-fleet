@@ -2,8 +2,8 @@
 
 - **文档状态**：后续开发基线
 - **更新时间**：2026-08-18
-- **当前代码版本**：`779d66c`（只读更新监控；V0 acceptance coverage 基线为 `1dbba70`；最终以 `git log -1` 为准）
-- **当前阶段**：V0 inventory/drift 与只读更新可用性监控均已实现并完成 M5/M3 验收；V1 Fleet Agent 尚未开始
+- **当前代码版本**：`0.2.0` 候选（分支 `agent/rc7-remote-convergence`；最终以 `git log -1` 为准）
+- **当前阶段**：V0 inventory/drift 与只读更新监控已验收；DSH rc.7 的单 Owner V1 受控收敛预览已实现，本轮正在完成真实 M5→M3 验收
 - **目标读者**：下一开发 session、未来贡献者、DSH 上游维护者
 
 ---
@@ -394,16 +394,20 @@ plugins:
 - `src/host/core.ts`：YAML 解析、校验、设备选择和差异计算；
 - `src/index.ts`：本机 profile/Loader 采集及 loopback RPC；
 - `src/client/index.tsx`：Fleet 悬浮状态面板；
+- `src/agent/`：不可变计划、审批、快照、安装、健康检查、回滚、锁和一次性 CLI；
+- `src/host/agent-client.ts`：固定 local/SSH target 的结构化 Agent transport；
 - `examples/fleet.lock.yaml`：M5/M3 示例清单；
 - `tests/core.test.ts`：清单和收敛单测；
 - `tests/host.test.ts`：profile/Loader 采集集成测试；
-- `tests/client.test.tsx`：等待 `shell.overlay` 声明后再注册 UI 的生命周期测试。
+- `tests/client.test.tsx`：等待 `shell.overlay` 声明后再注册 UI 的生命周期测试；
+- `tests/agent-*.test.ts`：计划、transport、真实依赖树回滚、并发和中断恢复测试；
+- `tests/rc7-contract.test.ts`：官方 rc.7 类型、CLI 和隔离 profile reconciliation 契约。
 
 已验证：
 
 - TypeScript 类型检查通过；
-- 22 个测试通过；
-- Host、testing、client bundle 构建通过；
+- 全量测试通过（最终数量以 CI 为准）；
+- Host、testing、agent、client 四个 bundle 构建通过；
 - `pnpm pack --dry-run` 通过；
 - M5 实际 profile 投影成功；
 - DSH `--dump-config` 正确装配 Fleet row。
@@ -446,18 +450,18 @@ M5 profile 已包含：
 - M3 为 `m3-worker / always-on-worker / stable`，同一逻辑清单选出 4 项 stable 目标并准确报告 4 项 missing；
 - 示例清单只用于开发验收，不是正式 team-hub 真相源。
 
-仍不属于 V0：
+V0 本身仍保持下列边界：
 
 - 当前 DSH Web 进程没有 `pnpm run dev:web` watcher；
-- 尚无 GitHub CI；
-- 不自动安装 M3 缺失能力，不执行收敛、回滚、Hub、远程 shell 或 secrets 分发；
-- V1 Fleet Agent 尚未开始。
+- 不自动安装能力，不执行收敛、回滚、Hub、远程 shell 或 secrets 分发；
+- 新增写操作只存在于独立的 V1 Agent 路径，V0 `status/updates` RPC 不因此变成可写；
+- 候选分支已新增 GitHub CI，合并前必须通过 check 和 pack dry-run。
 
 ### 7.4 环境事实
 
-- M5 DSH：`0.1.0-rc.5`；
-- M3 DSH：`0.1.0-rc.5`；
-- M3 DSH 二进制：`/Users/qudian/.local/bin/dsh`；
+- M5 PATH 的 `/opt/homebrew/bin/dsh` 仍是历史 rc.5 source wrapper，不得用于 Fleet；官方 rc.7 为 `/Users/qudian/.npm-global/bin/dsh`，当前 3080 Web 也由该绝对路径启动；
+- M3 当前 3211 Web 在本轮切换前仍是 rc.5；旧 wrapper `/Users/qudian/.local/bin/dsh` 保留作回退；
+- M3 已隔离安装 rc.7 到 `/Users/qudian/.dsh/fleet-runtime/rc7/bin/dsh`，Agent 必须 pin 该绝对路径；
 - M3 非交互 SSH PATH 不含 `~/.local/bin`，验收命令使用绝对路径；
 - M3 Fleet checkout：`/Users/qudian/dev/dsh-fleet`，跟踪 `origin/main`；
 - M3 现有 Web 继续使用 loopback `127.0.0.1:3211` 和 screen session `dsh-web-m3`；
@@ -567,11 +571,13 @@ M5 profile 已包含：
 
 实现禁止经过 `dsh plugin ... outdated`：DSH CLI 的 plugin wrapper 会在成功的 pnpm 命令之后 reconciliation profile bundles，必要时重写 profile，因此不属于严格只读边界。
 
-本增量仍不属于 V1 收敛。版本兼容、release channel、批准、快照、安装、健康检查、重启与回滚全部留在 V1 Fleet Agent。
+该只读 detector 本身仍不执行收敛。`0.2.0` 另以独立 Agent 实现批准、快照、安装、健康检查、重启与回滚；两条 RPC/执行边界保持分离。
 
 ---
 
 ## 9. V1：本机受控收敛
+
+`0.2.0` 已实现本章的单 Owner、单插件预览切片。当前 transport 是固定配置的一次性 local/SSH 调用，不是最终的多成员 Hub/outbound mTLS 架构。
 
 ### 9.1 目标
 
@@ -583,8 +589,9 @@ M5 profile 已包含：
 
 ```text
 DSH Fleet UI
-→ loopback authenticated IPC
-→ fleet-agent
+→ loopback-only Host RPC
+→ 固定 local/SSH target
+→ one-shot fleet-agent
 → dsh plugin / profile snapshot / restart / health / rollback
 ```
 
@@ -621,7 +628,7 @@ V1 支持：
 
 - 官方市场/npm 精确版本；
 - Git 精确 commit；
-- 本地开发 link，仅限 dev 通道。
+- 当前预览不支持本地 link、tag、range、URL 或 install script。
 
 不支持从 manifest 传入任意安装 shell。
 
@@ -645,6 +652,14 @@ V1 支持：
 - 模拟坏插件后能自动回滚；
 - DSH Fleet 自身升级失败不破坏旧版更新代理；
 - 无任意远程 shell。
+
+预览额外要求：
+
+- DSH 必须满足 `>=0.1.0-rc.7 <0.2.0`，开发依赖精确 pin rc.7；
+- Web 只能选择 device/plugin，版本和来源由目标机本地 manifest 重新计算；
+- 同一 profile 跨进程互斥；超时先终止完整子进程组，再允许回滚；
+- 回滚恢复文件后按旧 lockfile 禁脚本重建依赖树，并复核 profile hash；
+- 现阶段 SSH 信任同一 Owner 的既有 Unix/SSH 身份，不宣称签名审批或多成员隔离。
 
 ---
 
@@ -972,7 +987,7 @@ Agent 是 principal 的一种：
 
 ---
 
-## 18. V0 验收记录与后续顺序
+## 18. V0 验收记录与 V1 顺序
 
 以下 V0 顺序已于 2026-08-18 完成：
 
@@ -987,11 +1002,11 @@ Agent 是 principal 的一种：
 9. 导出 M5/M3 状态并确认同一清单产生不同目标集合；
 10. 完成 README、需求文档和最终 check/pack。
 
-后续若开始 V1，必须先单独设计 Fleet Agent 的计划、审批、快照、健康检查与回滚协议；不得把 V0 Host 插件扩成自更新或任意远程 shell。
+V1 已按独立 Fleet Agent 路径开始：计划、审批、快照、健康检查与回滚协议不在运行中的插件进程内执行；Host 只提供 loopback UI 门面和固定 target transport，不接受任意远程 shell。
 
 ### 18.1 禁止事项
 
-- 不擅自 push GitHub；
+- 未经任务授权不直接合并 GitHub main；候选分支和 Draft PR 必须保留审查/CI gate；
 - 不擅自停止当前用户会话；
 - 不启动另一个不能更新现有 GUI 的替代服务器；
 - 不用 rsync 覆盖 M3 正式仓；
@@ -1005,17 +1020,18 @@ Agent 是 principal 的一种：
 
 将下面内容作为新 session 的首条请求即可：
 
-> 继续实现 `/Users/qudian/Local/dsh/dsh-fleet`。先完整阅读 `docs/REQUIREMENTS.md`、`git status` 和最近提交。V0 已完成 M5/M3 双设备验收：Public 仓库为 `ruby1304/dsh-fleet`，M3 checkout 为 `/Users/qudian/dev/dsh-fleet`，M5 dev 目标 5 项全部 aligned，M3 stable 目标 4 项准确报告 missing。开始新工作前先运行完整 check/pack，并保持 V0 只读边界；Fleet Agent、team-hub、自动安装、远程 shell 和 secrets 分发均属于尚未批准的后续阶段。
+> 继续实现 `/Users/qudian/Local/dsh/dsh-fleet`。先完整阅读 `docs/REQUIREMENTS.md`、`git status` 和最近提交。V0 已完成 M5/M3 双设备验收；`0.2.0` 候选新增 rc.7 的单 Owner one-shot Fleet Agent。先运行完整 check/pack，复核 M5/M3 真实状态；保持 V0 只读 RPC、固定 target、不可变计划、显式批准、冻结 lockfile 回滚和无任意 shell 边界。Hub、成员系统、签名审批和 secrets 分发仍未实现。
 
 ---
 
 ## 20. 当前阶段完成定义
 
-当前阶段的交付是“Fleet V0 验收完成”，不是整个 Fleet 产品完成：
+当前阶段的交付是“Fleet V0 已验收 + V1 单 Owner 收敛预览”，不是整个 Fleet 产品完成：
 
 - V0 本地只读 inventory、drift、UI/RPC 和更新可用性监控已落地；
 - M5 与 M3 使用同一逻辑清单并按设备职责选出不同目标集合；
 - M5、M3 profile 与现有 Web 已装配并通过真实 RPC 验证；
 - 代码已通过批准的 Public GitHub 远端分发；
 - 示例清单、来源边界、稳定版本规则和双设备差异已固化；
-- V1 Fleet Agent、自动收敛、回滚、Hub、成员系统和远程审批尚未开始。
+- V1 Agent 的 exact install/update、审批、回滚和 M5→M3 固定 SSH 路径已经实现；
+- 仍无 remove/batch/core update、Hub、成员系统、设备 enrollment、签名审批、secrets 分发和通用远程任务。

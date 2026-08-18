@@ -1,10 +1,193 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
 import { arch, homedir, hostname, platform } from "node:os";
-import { join, resolve } from "node:path";
-import { parse } from "yaml";
+import { basename, isAbsolute, join, normalize, resolve } from "node:path";
 import { gt, valid, validRange } from "semver";
+import { parse } from "yaml";
+//#endregion
+//#region src/host/agent-client.ts
+function isRecord$1(value) {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+var AgentClientError = class extends Error {
+	code;
+	constructor(code, message) {
+		super(message);
+		this.name = "AgentClientError";
+		this.code = code;
+	}
+};
+function safePath(value, field) {
+	if (!isAbsolute(value) || normalize(value) !== value || !/^\/[A-Za-z0-9._/-]+$/.test(value)) throw new TypeError(field + " must be a normalized absolute path without shell metacharacters");
+	return value;
+}
+function nonEmpty$1(value, field) {
+	if (value.trim().length === 0) throw new TypeError(field + " must not be empty");
+	return value.trim();
+}
+function validateAgentTarget(target) {
+	const deviceId = nonEmpty$1(target.deviceId, "target.deviceId");
+	if (!/^[A-Za-z0-9._-]+$/.test(deviceId)) throw new TypeError("target.deviceId contains unsupported characters");
+	if (target.transport !== "local" && target.transport !== "ssh") throw new TypeError("target.transport must be local or ssh");
+	const sshHost = target.sshHost?.trim();
+	if (target.transport === "ssh" && (sshHost === void 0 || sshHost.startsWith("-") || !/^[A-Za-z0-9._-]+$/.test(sshHost))) throw new TypeError("target.sshHost must be a configured host alias");
+	if (target.transport === "local" && sshHost !== void 0) throw new TypeError("local target must not define sshHost");
+	return {
+		deviceId,
+		transport: target.transport,
+		...sshHost === void 0 ? {} : { sshHost },
+		nodeBinary: safePath(target.nodeBinary, "target.nodeBinary"),
+		agentPath: safePath(target.agentPath, "target.agentPath"),
+		configPath: safePath(target.configPath, "target.configPath")
+	};
+}
+function childInvocation(target, command) {
+	const agentArgs = [
+		target.nodeBinary,
+		target.agentPath,
+		"--config",
+		target.configPath,
+		command
+	];
+	if (target.transport === "local") return {
+		file: target.nodeBinary,
+		args: agentArgs.slice(1)
+	};
+	return {
+		file: "/usr/bin/ssh",
+		args: [
+			"-o",
+			"BatchMode=yes",
+			"-o",
+			"ConnectTimeout=8",
+			"-o",
+			"ServerAliveInterval=5",
+			"-o",
+			"ServerAliveCountMax=2",
+			"--",
+			target.sshHost,
+			...agentArgs
+		]
+	};
+}
+function safeAgentError(value) {
+	const messages = {
+		"unsupported-dsh-version": "target DSH must be upgraded to rc.7 before convergence",
+		"already-aligned": "plugin is already aligned",
+		"plugin-not-targeted": "plugin is not targeted to this device",
+		"plan-not-found": "approved plan was not found",
+		"approval-mismatch": "approval no longer matches current target state",
+		"plan-expired": "plan has expired",
+		"approval-expired": "approval has expired"
+	};
+	const candidate = isRecord$1(value) ? value.code : void 0;
+	const code = typeof candidate === "string" && Object.hasOwn(messages, candidate) ? candidate : "agent-rejected";
+	return new AgentClientError(code, messages[code] ?? "fleet agent rejected the request");
+}
+function callAgent(targetInput, command, payload, timeoutMs, signal) {
+	const invocation = childInvocation(validateAgentTarget(targetInput), command);
+	return new Promise((resolve, reject) => {
+		if (signal?.aborted === true) {
+			reject(new AgentClientError("cancelled", "fleet agent request was cancelled"));
+			return;
+		}
+		const child = spawn(invocation.file, invocation.args, {
+			stdio: [
+				"pipe",
+				"pipe",
+				"pipe"
+			],
+			shell: false,
+			env: {
+				...process.env,
+				GIT_TERMINAL_PROMPT: "0"
+			}
+		});
+		let stdout = "";
+		let stderrBytes = 0;
+		let settled = false;
+		const finish = (action) => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timer);
+			signal?.removeEventListener("abort", abort);
+			action();
+		};
+		const abort = () => {
+			child.kill("SIGTERM");
+			finish(() => reject(new AgentClientError("cancelled", "fleet agent request was cancelled")));
+		};
+		const timer = setTimeout(() => {
+			child.kill("SIGTERM");
+			finish(() => reject(new AgentClientError("agent-timeout", "fleet agent did not answer before the timeout")));
+		}, timeoutMs);
+		timer.unref();
+		signal?.addEventListener("abort", abort, { once: true });
+		child.once("error", () => finish(() => reject(new AgentClientError("agent-unavailable", "fleet agent transport is unavailable"))));
+		child.stdout.setEncoding("utf8");
+		child.stdout.on("data", (chunk) => {
+			if (stdout.length <= 1048576) stdout += chunk;
+			if (stdout.length > 1048576) child.kill("SIGTERM");
+		});
+		child.stderr.on("data", (chunk) => {
+			stderrBytes += chunk.length;
+			if (stderrBytes > 1048576) child.kill("SIGTERM");
+		});
+		child.once("close", (code) => {
+			finish(() => {
+				if (code !== 0) {
+					reject(new AgentClientError("agent-failed", "fleet agent command failed"));
+					return;
+				}
+				let response;
+				try {
+					response = JSON.parse(stdout);
+				} catch {
+					reject(new AgentClientError("agent-protocol", "fleet agent returned an invalid response"));
+					return;
+				}
+				if (!isRecord$1(response) || typeof response.ok !== "boolean") {
+					reject(new AgentClientError("agent-protocol", "fleet agent returned an invalid response"));
+					return;
+				}
+				if (response.ok !== true) {
+					reject(safeAgentError(response.error));
+					return;
+				}
+				if (!Object.hasOwn(response, "value")) {
+					reject(new AgentClientError("agent-protocol", "fleet agent returned an invalid response"));
+					return;
+				}
+				resolve(response.value);
+			});
+		});
+		child.stdin.end(JSON.stringify(payload) + "\n");
+	});
+}
+function createAgentClient(config) {
+	const targets = config.targets.map(validateAgentTarget);
+	const ids = /* @__PURE__ */ new Set();
+	for (const target of targets) {
+		if (ids.has(target.deviceId)) throw new TypeError("fleet target deviceId values must be unique");
+		ids.add(target.deviceId);
+	}
+	const byId = new Map(targets.map((target) => [target.deviceId, target]));
+	return {
+		enabled: config.enabled,
+		targets: targets.map((target) => ({
+			deviceId: target.deviceId,
+			transport: target.transport
+		})),
+		async call(deviceId, command, payload, signal) {
+			if (!config.enabled) throw new AgentClientError("agent-disabled", "fleet convergence is disabled");
+			const target = byId.get(deviceId);
+			if (target === void 0) throw new AgentClientError("target-not-found", "fleet target is not configured");
+			return callAgent(target, command, payload, config.timeoutMs, signal);
+		}
+	};
+}
+//#endregion
 //#region src/host/core.ts
 function isRecord(value) {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -518,6 +701,7 @@ function createUpdateMonitor(config, dependencies = {}) {
 const name = "fleet";
 const inject = ["connection", "loader"];
 const RPC_CHANNEL = "/dsh-fleet";
+const AGENT_RPC_CHANNEL = "/dsh-fleet-agent";
 const PHASES = {
 	0: "pending",
 	1: "loading",
@@ -532,19 +716,32 @@ function expandHome(value) {
 	if (!value.includes("/")) return value;
 	return resolve(value);
 }
+function defaultDshBinary() {
+	const current = process.argv[1];
+	return [
+		join(homedir(), ".npm-global/bin/dsh"),
+		join(homedir(), ".local/bin/dsh"),
+		...current !== void 0 && (basename(current) === "dsh" || current.includes("/@deepseek-ai/dsh/")) ? [current] : []
+	].find((candidate) => existsSync(candidate)) ?? "dsh";
+}
 function resolveConfig(config) {
 	const dshHome = expandHome(config?.dshHome ?? process.env.DSH_HOME ?? "~/.dsh");
-	const defaultBinary = join(homedir(), ".local/bin/dsh");
 	const boundedNumber = (value, fallback, minimum, maximum) => value === void 0 || !Number.isFinite(value) ? fallback : Math.min(maximum, Math.max(minimum, Math.round(value)));
 	return {
 		deviceId: (config?.deviceId ?? process.env.DSH_FLEET_DEVICE_ID ?? hostname()).trim(),
 		manifestPath: expandHome(config?.manifestPath ?? process.env.DSH_FLEET_MANIFEST ?? "~/.dsh/fleet/fleet.lock.yaml"),
 		profile: (config?.profile ?? process.env.DSH_FLEET_PROFILE ?? "web").trim(),
 		dshHome,
-		dshBinary: expandHome(config?.dshBinary ?? process.env.DSH_FLEET_DSH_BINARY ?? (existsSync(defaultBinary) ? defaultBinary : "dsh")),
+		dshBinary: expandHome(config?.dshBinary ?? process.env.DSH_FLEET_DSH_BINARY ?? defaultDshBinary()),
 		updateCheck: config?.updateCheck !== false,
 		updateCacheMs: boundedNumber(config?.updateCacheMs, 216e5, 6e4, 864e5),
-		updateTimeoutMs: boundedNumber(config?.updateTimeoutMs, 5e3, 1e3, 15e3)
+		updateTimeoutMs: boundedNumber(config?.updateTimeoutMs, 5e3, 1e3, 15e3),
+		convergence: {
+			enabled: config?.convergence?.enabled === true,
+			principalId: (config?.convergence?.principalId ?? process.env.USER ?? "local-owner").trim(),
+			timeoutMs: boundedNumber(config?.convergence?.timeoutMs, 18e4, 5e3, 6e5),
+			targets: config?.convergence?.targets ?? []
+		}
 	};
 }
 function readDshVersion(binary) {
@@ -661,6 +858,18 @@ const fail = (message) => ({
 		details: {}
 	}
 });
+function closedPayload(payload, keys, label) {
+	if (typeof payload !== "object" || payload === null || Array.isArray(payload)) throw new TypeError(label + " must be an object");
+	const value = payload;
+	const actual = Object.keys(value).sort();
+	const expected = [...keys].sort();
+	if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) throw new TypeError(label + " has unsupported or missing fields");
+	return value;
+}
+function requiredString(value, field) {
+	if (typeof value !== "string" || value.trim().length === 0 || value !== value.trim()) throw new TypeError(field + " must be a trimmed non-empty string");
+	return value;
+}
 function apply(ctx, config) {
 	const host = ctx;
 	const resolved = resolveConfig(config);
@@ -674,6 +883,7 @@ function apply(ctx, config) {
 		profile: resolved.profile,
 		dshVersion: readDshVersion(resolved.dshBinary)
 	});
+	const agents = createAgentClient(resolved.convergence);
 	host.connection.rpc.handle(RPC_CHANNEL, async (endpoint, payload) => {
 		try {
 			if (endpoint === "status") return ok(await collectFleetStatus(host, config));
@@ -692,6 +902,80 @@ function apply(ctx, config) {
 			return fail(error instanceof Error ? error.message : String(error));
 		}
 	}, { authority: "loopback" });
+	host.connection.rpc.handle(AGENT_RPC_CHANNEL, async (endpoint, payload, signal) => {
+		try {
+			if (endpoint === "targets") {
+				if (payload !== null && (typeof payload !== "object" || Array.isArray(payload) || Object.keys(payload).length !== 0)) throw new TypeError("targets payload must be empty");
+				if (!agents.enabled) return ok({
+					enabled: false,
+					targets: []
+				});
+				const targets = await Promise.all(agents.targets.map(async (target) => {
+					try {
+						const inspection = await agents.call(target.deviceId, "inspect", null, signal);
+						return {
+							...target,
+							online: true,
+							inspection
+						};
+					} catch (error) {
+						const code = error instanceof AgentClientError ? error.code : "agent-unavailable";
+						return {
+							...target,
+							online: false,
+							errorCode: code
+						};
+					}
+				}));
+				return ok({
+					enabled: true,
+					targets
+				});
+			}
+			if (endpoint === "plan") {
+				const body = closedPayload(payload, ["deviceId", "pluginId"], "plan payload");
+				const deviceId = requiredString(body.deviceId, "deviceId");
+				const pluginId = requiredString(body.pluginId, "pluginId");
+				return ok(await agents.call(deviceId, "plan", { pluginId }, signal));
+			}
+			if (endpoint === "approve") {
+				const body = closedPayload(payload, [
+					"approvalId",
+					"deviceId",
+					"planDigest",
+					"planExpiresAt",
+					"planId",
+					"profile"
+				], "approve payload");
+				const deviceId = requiredString(body.deviceId, "deviceId");
+				const approvedAt = /* @__PURE__ */ new Date();
+				const planExpiresAt = new Date(requiredString(body.planExpiresAt, "planExpiresAt"));
+				if (!Number.isFinite(planExpiresAt.getTime()) || planExpiresAt <= approvedAt) throw new TypeError("planExpiresAt must be in the future");
+				const approval = {
+					protocolVersion: 1,
+					approvalId: requiredString(body.approvalId, "approvalId"),
+					principalId: resolved.convergence.principalId,
+					planId: requiredString(body.planId, "planId"),
+					planDigest: requiredString(body.planDigest, "planDigest"),
+					deviceId,
+					profile: requiredString(body.profile, "profile"),
+					approvedAt: approvedAt.toISOString(),
+					expiresAt: new Date(Math.min(planExpiresAt.getTime(), approvedAt.getTime() + 12e4)).toISOString()
+				};
+				return ok(await agents.call(deviceId, "apply", { approval }, signal));
+			}
+			if (endpoint === "action-status") {
+				const body = closedPayload(payload, ["deviceId", "planId"], "status payload");
+				const deviceId = requiredString(body.deviceId, "deviceId");
+				const planId = requiredString(body.planId, "planId");
+				return ok(await agents.call(deviceId, "status", { planId }, signal));
+			}
+			return fail("unknown agent endpoint: " + endpoint);
+		} catch (error) {
+			if (error instanceof AgentClientError) return fail(error.message);
+			return fail(error instanceof Error ? error.message : String(error));
+		}
+	}, { authority: "loopback" });
 }
 //#endregion
-export { RPC_CHANNEL, apply, collectFleetStatus, inject, name };
+export { AGENT_RPC_CHANNEL, RPC_CHANNEL, apply, collectFleetStatus, inject, name };
