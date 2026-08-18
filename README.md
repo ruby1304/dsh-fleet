@@ -103,6 +103,8 @@ Copy [`examples/agent.config.json`](examples/agent.config.json) to a private, ow
   "restart": {
     "kind": "screen",
     "screenBinary": "/usr/bin/screen",
+    "lsofBinary": "/usr/sbin/lsof",
+    "psBinary": "/bin/ps",
     "sessionName": "dsh-web-m3",
     "host": "127.0.0.1",
     "port": 3211

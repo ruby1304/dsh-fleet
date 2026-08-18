@@ -73,9 +73,9 @@ function expandHome(value: string): string {
 function defaultDshBinary(): string {
   const current = process.argv[1]
   const candidates = [
+    ...(current !== undefined && (basename(current) === 'dsh' || current.includes('/@deepseek-ai/dsh/')) ? [current] : []),
     join(homedir(), '.npm-global/bin/dsh'),
     join(homedir(), '.local/bin/dsh'),
-    ...(current !== undefined && (basename(current) === 'dsh' || current.includes('/@deepseek-ai/dsh/')) ? [current] : []),
   ]
   return candidates.find(candidate => existsSync(candidate)) ?? 'dsh'
 }

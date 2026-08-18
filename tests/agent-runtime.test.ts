@@ -1,6 +1,8 @@
 import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { createServer } from 'node:http'
+import type { AddressInfo } from 'node:net'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { FleetAgentConfig } from '../src/agent/config.ts'
 import { applyStoredPlan, createStoredPlan, inspectAgent } from '../src/agent/runtime.ts'
@@ -211,5 +213,48 @@ describe('fleet agent runtime', () => {
     }, null, 2))
     const recovered = await applyStoredPlan(config, originalApproval, new Date('2026-08-18T08:10:00.000Z'))
     expect(recovered).toMatchObject({ state: 'rolled-back', result: 'rolled-back', errorCode: 'interrupted-action' })
+  })
+
+  it('waits for the Fleet RPC target to become active after HTTP starts', async () => {
+    const { config } = await setup()
+    let checks = 0
+    const server = createServer((request, response) => {
+      if (request.method !== 'POST') {
+        response.writeHead(200).end('ready\n')
+        return
+      }
+      const chunks: Buffer[] = []
+      request.on('data', chunk => chunks.push(Buffer.from(chunk)))
+      request.on('end', () => {
+        const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as { rpcId: string }
+        checks += 1
+        response.setHeader('content-type', 'application/json')
+        response.end(JSON.stringify({
+          type: 'server-response',
+          rpcId: body.rpcId,
+          result: {
+            ok: true,
+            value: {
+              summary: { failed: 0 },
+              plugins: [{ id: 'plugin-a', state: checks >= 2 ? 'aligned' : 'runtime-inactive' }],
+            },
+          },
+        }))
+      })
+    })
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject)
+      server.listen(0, '127.0.0.1', resolve)
+    })
+    try {
+      const port = (server.address() as AddressInfo).port
+      config.health = { url: `http://127.0.0.1:${port}`, timeoutMs: 3000, requireFleetRpc: true }
+      const plan = await createStoredPlan(config, 'plugin-a', new Date('2026-08-18T08:00:00.000Z'))
+      const result = await applyStoredPlan(config, approval(plan), new Date('2026-08-18T08:01:30.000Z'))
+      expect(result).toMatchObject({ state: 'succeeded', result: 'success' })
+      expect(checks).toBeGreaterThanOrEqual(2)
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close(error => error === undefined ? resolve() : reject(error)))
+    }
   })
 })

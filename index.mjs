@@ -719,9 +719,9 @@ function expandHome(value) {
 function defaultDshBinary() {
 	const current = process.argv[1];
 	return [
+		...current !== void 0 && (basename(current) === "dsh" || current.includes("/@deepseek-ai/dsh/")) ? [current] : [],
 		join(homedir(), ".npm-global/bin/dsh"),
-		join(homedir(), ".local/bin/dsh"),
-		...current !== void 0 && (basename(current) === "dsh" || current.includes("/@deepseek-ai/dsh/")) ? [current] : []
+		join(homedir(), ".local/bin/dsh")
 	].find((candidate) => existsSync(candidate)) ?? "dsh";
 }
 function resolveConfig(config) {

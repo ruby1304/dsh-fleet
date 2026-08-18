@@ -8,6 +8,8 @@ export interface AgentRestartNone {
 export interface AgentRestartScreen {
   kind: 'screen'
   screenBinary: string
+  lsofBinary: string
+  psBinary: string
   sessionName: string
   host: string
   port: number
@@ -71,7 +73,7 @@ function parseRestart(value: unknown): AgentRestartConfig {
     return { kind: 'none' }
   }
   if (kind !== 'screen') throw new TypeError('restart.kind must be none or screen')
-  exactKeys(value, ['kind', 'screenBinary', 'sessionName', 'host', 'port'], 'restart')
+  exactKeys(value, ['kind', 'screenBinary', 'lsofBinary', 'psBinary', 'sessionName', 'host', 'port'], 'restart')
   const sessionName = nonEmpty(value.sessionName, 'restart.sessionName')
   if (!/^[A-Za-z0-9._-]+$/.test(sessionName)) throw new TypeError('restart.sessionName contains unsupported characters')
   const host = nonEmpty(value.host, 'restart.host')
@@ -79,6 +81,8 @@ function parseRestart(value: unknown): AgentRestartConfig {
   return {
     kind: 'screen',
     screenBinary: absolutePath(value.screenBinary, 'restart.screenBinary'),
+    lsofBinary: absolutePath(value.lsofBinary, 'restart.lsofBinary'),
+    psBinary: absolutePath(value.psBinary, 'restart.psBinary'),
     sessionName,
     host,
     port: boundedInt(value.port, 'restart.port', 0, 1024, 65535),

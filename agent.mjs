@@ -41,6 +41,8 @@ function parseRestart(value) {
 	exactKeys(value, [
 		"kind",
 		"screenBinary",
+		"lsofBinary",
+		"psBinary",
 		"sessionName",
 		"host",
 		"port"
@@ -52,6 +54,8 @@ function parseRestart(value) {
 	return {
 		kind: "screen",
 		screenBinary: absolutePath(value.screenBinary, "restart.screenBinary"),
+		lsofBinary: absolutePath(value.lsofBinary, "restart.lsofBinary"),
+		psBinary: absolutePath(value.psBinary, "restart.psBinary"),
 		sessionName,
 		host,
 		port: boundedInt(value.port, "restart.port", 0, 1024, 65535)
@@ -8994,6 +8998,45 @@ async function restartDsh(config) {
 		timeoutMs: 1e4,
 		allowFailure: true
 	});
+	const listeners = await runFile(config.restart.lsofBinary, [
+		"-nP",
+		"-t",
+		"-iTCP:" + String(config.restart.port),
+		"-sTCP:LISTEN"
+	], {
+		env,
+		timeoutMs: 1e4,
+		allowFailure: true
+	});
+	const pids = listeners.stdout.trim() === "" ? [] : listeners.stdout.trim().split(/\s+/).map((value) => Number(value));
+	if (pids.some((pid) => !Number.isSafeInteger(pid) || pid <= 0) || pids.length > 1) throw new AgentRuntimeError("restart-owner-ambiguous", "DSH restart found an ambiguous listener owner");
+	const listenerPid = pids[0];
+	if (listenerPid !== void 0) {
+		const command = (await runFile(config.restart.psBinary, [
+			"-p",
+			String(listenerPid),
+			"-o",
+			"command="
+		], {
+			env,
+			timeoutMs: 1e4
+		})).stdout.trim();
+		const hasWebToken = /(?:^|\s)web(?:\s|$)/.test(command);
+		const hasPort = command.includes("--port " + String(config.restart.port));
+		if (!command.toLowerCase().includes("dsh") || !hasWebToken || !hasPort) throw new AgentRuntimeError("restart-owner-mismatch", "configured port is not owned by a recognizable DSH Web process");
+		try {
+			process.kill(listenerPid, "SIGTERM");
+		} catch (error) {
+			if (error.code !== "ESRCH") throw error;
+		}
+		const deadline = Date.now() + 5e3;
+		while (Date.now() < deadline && await processIsAlive(listenerPid)) await new Promise((resolve) => setTimeout(resolve, 100));
+		if (await processIsAlive(listenerPid)) try {
+			process.kill(listenerPid, "SIGKILL");
+		} catch (error) {
+			if (error.code !== "ESRCH") throw error;
+		}
+	}
 	if ((await runFile(config.restart.screenBinary, [
 		"-DmS",
 		config.restart.sessionName,
@@ -9042,24 +9085,34 @@ async function verifyHealth(config, plan) {
 	await waitForHttp(config.health.url, config.health.timeoutMs);
 	if (!config.health.requireFleetRpc) return;
 	const endpoint = new URL("/dsh-fleet/status", config.health.url);
-	const rpcId = "fleet-agent-health-" + randomUUID();
-	const response = await fetch(endpoint, {
-		method: "POST",
-		headers: { "content-type": "application/json" },
-		body: JSON.stringify({
-			type: "client-request",
-			rpcId,
-			method: "status",
-			payload: null
-		}),
-		signal: AbortSignal.timeout(config.health.timeoutMs)
-	});
-	if (!response.ok) throw new AgentRuntimeError("fleet-rpc-unavailable", "Fleet RPC health check failed");
-	const body = await response.json();
-	if (body.rpcId !== rpcId || body.result?.ok !== true || body.result.value?.summary?.failed !== 0) throw new AgentRuntimeError("fleet-rpc-unhealthy", "Fleet RPC reported an unhealthy runtime");
-	if (plan !== void 0) {
-		if ((body.result.value.plugins?.find((item) => item.id === plan.pluginId))?.state !== "aligned") throw new AgentRuntimeError("plugin-not-active", "approved plugin did not become active");
+	const deadline = Date.now() + config.health.timeoutMs;
+	let targetPending = plan !== void 0;
+	while (Date.now() < deadline) {
+		const rpcId = "fleet-agent-health-" + randomUUID();
+		try {
+			const response = await fetch(endpoint, {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({
+					type: "client-request",
+					rpcId,
+					method: "status",
+					payload: null
+				}),
+				signal: AbortSignal.timeout(Math.min(3e3, Math.max(1, deadline - Date.now())))
+			});
+			if (response.ok) {
+				const body = await response.json();
+				const fleetHealthy = body.rpcId === rpcId && body.result?.ok === true && body.result.value?.summary?.failed === 0;
+				const target = plan === void 0 ? void 0 : body.result?.value?.plugins?.find((item) => item.id === plan.pluginId);
+				targetPending = plan !== void 0 && target?.state !== "aligned";
+				if (fleetHealthy && !targetPending) return;
+			}
+		} catch {}
+		await new Promise((resolve) => setTimeout(resolve, 350));
 	}
+	if (targetPending) throw new AgentRuntimeError("plugin-not-active", "approved plugin did not become active");
+	throw new AgentRuntimeError("fleet-rpc-unhealthy", "Fleet RPC reported an unhealthy runtime");
 }
 function installArgument(plan) {
 	return plan.pluginId + "@" + plan.exactToSpec;

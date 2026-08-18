@@ -413,6 +413,42 @@ async function restartDsh(config: FleetAgentConfig): Promise<void> {
     timeoutMs: 10_000,
     allowFailure: true,
   })
+  const listeners = await runFile(config.restart.lsofBinary, [
+    '-nP', '-t', '-iTCP:' + String(config.restart.port), '-sTCP:LISTEN',
+  ], { env, timeoutMs: 10_000, allowFailure: true })
+  const pids = listeners.stdout.trim() === '' ? [] : listeners.stdout.trim().split(/\s+/).map(value => Number(value))
+  if (pids.some(pid => !Number.isSafeInteger(pid) || pid <= 0) || pids.length > 1) {
+    throw new AgentRuntimeError('restart-owner-ambiguous', 'DSH restart found an ambiguous listener owner')
+  }
+  const listenerPid = pids[0]
+  if (listenerPid !== undefined) {
+    const owner = await runFile(config.restart.psBinary, ['-p', String(listenerPid), '-o', 'command='], {
+      env,
+      timeoutMs: 10_000,
+    })
+    const command = owner.stdout.trim()
+    const hasWebToken = /(?:^|\s)web(?:\s|$)/.test(command)
+    const hasPort = command.includes('--port ' + String(config.restart.port))
+    if (!command.toLowerCase().includes('dsh') || !hasWebToken || !hasPort) {
+      throw new AgentRuntimeError('restart-owner-mismatch', 'configured port is not owned by a recognizable DSH Web process')
+    }
+    try {
+      process.kill(listenerPid, 'SIGTERM')
+    } catch (error: unknown) {
+      if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error
+    }
+    const deadline = Date.now() + 5000
+    while (Date.now() < deadline && await processIsAlive(listenerPid)) {
+      await new Promise(resolve => setTimeout(resolve, 100))
+    }
+    if (await processIsAlive(listenerPid)) {
+      try {
+        process.kill(listenerPid, 'SIGKILL')
+      } catch (error: unknown) {
+        if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error
+      }
+    }
+  }
   const start = await runFile(config.restart.screenBinary, [
     '-DmS', config.restart.sessionName,
     '/usr/bin/env', 'DSH_HOME=' + config.dshHome, 'PATH=' + env.PATH,
@@ -455,25 +491,34 @@ async function verifyHealth(config: FleetAgentConfig, plan?: FleetPlan): Promise
   await waitForHttp(config.health.url, config.health.timeoutMs)
   if (!config.health.requireFleetRpc) return
   const endpoint = new URL('/dsh-fleet/status', config.health.url)
-  const rpcId = 'fleet-agent-health-' + randomUUID()
-  const response = await fetch(endpoint, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ type: 'client-request', rpcId, method: 'status', payload: null }),
-    signal: AbortSignal.timeout(config.health.timeoutMs),
-  })
-  if (!response.ok) throw new AgentRuntimeError('fleet-rpc-unavailable', 'Fleet RPC health check failed')
-  const body = await response.json() as {
-    rpcId?: unknown
-    result?: { ok?: unknown; value?: { summary?: { failed?: unknown }; plugins?: Array<{ id?: unknown; state?: unknown }> } }
+  const deadline = Date.now() + config.health.timeoutMs
+  let targetPending = plan !== undefined
+  while (Date.now() < deadline) {
+    const rpcId = 'fleet-agent-health-' + randomUUID()
+    try {
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ type: 'client-request', rpcId, method: 'status', payload: null }),
+        signal: AbortSignal.timeout(Math.min(3000, Math.max(1, deadline - Date.now()))),
+      })
+      if (response.ok) {
+        const body = await response.json() as {
+          rpcId?: unknown
+          result?: { ok?: unknown; value?: { summary?: { failed?: unknown }; plugins?: Array<{ id?: unknown; state?: unknown }> } }
+        }
+        const fleetHealthy = body.rpcId === rpcId && body.result?.ok === true && body.result.value?.summary?.failed === 0
+        const target = plan === undefined ? undefined : body.result?.value?.plugins?.find(item => item.id === plan.pluginId)
+        targetPending = plan !== undefined && target?.state !== 'aligned'
+        if (fleetHealthy && !targetPending) return
+      }
+    } catch {
+      // Startup is eventually consistent; retry until the bounded deadline.
+    }
+    await new Promise(resolve => setTimeout(resolve, 350))
   }
-  if (body.rpcId !== rpcId || body.result?.ok !== true || body.result.value?.summary?.failed !== 0) {
-    throw new AgentRuntimeError('fleet-rpc-unhealthy', 'Fleet RPC reported an unhealthy runtime')
-  }
-  if (plan !== undefined) {
-    const target = body.result.value.plugins?.find(item => item.id === plan.pluginId)
-    if (target?.state !== 'aligned') throw new AgentRuntimeError('plugin-not-active', 'approved plugin did not become active')
-  }
+  if (targetPending) throw new AgentRuntimeError('plugin-not-active', 'approved plugin did not become active')
+  throw new AgentRuntimeError('fleet-rpc-unhealthy', 'Fleet RPC reported an unhealthy runtime')
 }
 
 function installArgument(plan: FleetPlan): string {
