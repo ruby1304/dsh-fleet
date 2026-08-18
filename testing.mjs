@@ -1383,7 +1383,7 @@ async function restartDsh(config) {
 		}
 	}
 	if ((await runFile(config.restart.screenBinary, [
-		"-DmS",
+		"-dmS",
 		config.restart.sessionName,
 		"/usr/bin/env",
 		"DSH_HOME=" + config.dshHome,

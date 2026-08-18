@@ -452,7 +452,7 @@ async function restartDsh(config: FleetAgentConfig): Promise<void> {
     }
   }
   const start = await runFile(config.restart.screenBinary, [
-    '-DmS', config.restart.sessionName,
+    '-dmS', config.restart.sessionName,
     '/usr/bin/env', 'DSH_HOME=' + config.dshHome, 'PATH=' + env.PATH,
     config.dshBinary, 'web', '--host', config.restart.host, '--port', String(config.restart.port),
   ], { env, timeoutMs: 10_000, allowFailure: true, ignoreOutput: true })

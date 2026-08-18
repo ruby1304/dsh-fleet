@@ -265,10 +265,10 @@ describe('fleet agent runtime', () => {
     const psBinary = join(root, 'bin', 'ps')
     await writeFile(screenBinary, `#!/usr/bin/env node
 const { spawn } = require('node:child_process')
-if (process.argv.includes('-DmS')) {
-  const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 2000)'], { detached: true, stdio: 'inherit' })
-  child.unref()
-}
+if (process.argv.includes('-X')) process.exit(0)
+if (!process.argv.includes('-dmS')) process.exit(9)
+const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 2000)'], { detached: true, stdio: 'inherit' })
+child.unref()
 `)
     await writeFile(lsofBinary, '#!/bin/sh\nexit 1\n')
     await writeFile(psBinary, '#!/bin/sh\nexit 1\n')
