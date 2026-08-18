@@ -429,7 +429,8 @@ async function restartDsh(config: FleetAgentConfig): Promise<void> {
     const command = owner.stdout.trim()
     const hasWebToken = /(?:^|\s)web(?:\s|$)/.test(command)
     const hasPort = command.includes('--port ' + String(config.restart.port))
-    if (!command.toLowerCase().includes('dsh') || !hasWebToken || !hasPort) {
+    const hasOwnerMarker = config.restart.ownerMarkers.some(marker => command.includes(marker))
+    if (!hasOwnerMarker || !hasWebToken || !hasPort) {
       throw new AgentRuntimeError('restart-owner-mismatch', 'configured port is not owned by a recognizable DSH Web process')
     }
     try {

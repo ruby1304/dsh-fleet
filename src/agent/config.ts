@@ -10,6 +10,7 @@ export interface AgentRestartScreen {
   screenBinary: string
   lsofBinary: string
   psBinary: string
+  ownerMarkers: string[]
   sessionName: string
   host: string
   port: number
@@ -73,16 +74,21 @@ function parseRestart(value: unknown): AgentRestartConfig {
     return { kind: 'none' }
   }
   if (kind !== 'screen') throw new TypeError('restart.kind must be none or screen')
-  exactKeys(value, ['kind', 'screenBinary', 'lsofBinary', 'psBinary', 'sessionName', 'host', 'port'], 'restart')
+  exactKeys(value, ['kind', 'screenBinary', 'lsofBinary', 'psBinary', 'ownerMarkers', 'sessionName', 'host', 'port'], 'restart')
   const sessionName = nonEmpty(value.sessionName, 'restart.sessionName')
   if (!/^[A-Za-z0-9._-]+$/.test(sessionName)) throw new TypeError('restart.sessionName contains unsupported characters')
   const host = nonEmpty(value.host, 'restart.host')
   if (host !== '127.0.0.1' && host !== 'localhost' && host !== '::1') throw new TypeError('restart.host must be loopback')
+  if (!Array.isArray(value.ownerMarkers) || value.ownerMarkers.length === 0 || value.ownerMarkers.length > 8 ||
+      value.ownerMarkers.some(marker => typeof marker !== 'string' || marker.trim() !== marker || marker.length === 0 || marker.length > 240 || /[\r\n\0]/.test(marker))) {
+    throw new TypeError('restart.ownerMarkers must contain 1 to 8 fixed command fragments')
+  }
   return {
     kind: 'screen',
     screenBinary: absolutePath(value.screenBinary, 'restart.screenBinary'),
     lsofBinary: absolutePath(value.lsofBinary, 'restart.lsofBinary'),
     psBinary: absolutePath(value.psBinary, 'restart.psBinary'),
+    ownerMarkers: value.ownerMarkers as string[],
     sessionName,
     host,
     port: boundedInt(value.port, 'restart.port', 0, 1024, 65535),

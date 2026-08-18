@@ -548,6 +548,7 @@ function parseRestart(value) {
 		"screenBinary",
 		"lsofBinary",
 		"psBinary",
+		"ownerMarkers",
 		"sessionName",
 		"host",
 		"port"
@@ -556,11 +557,13 @@ function parseRestart(value) {
 	if (!/^[A-Za-z0-9._-]+$/.test(sessionName)) throw new TypeError("restart.sessionName contains unsupported characters");
 	const host = nonEmpty$1(value.host, "restart.host");
 	if (host !== "127.0.0.1" && host !== "localhost" && host !== "::1") throw new TypeError("restart.host must be loopback");
+	if (!Array.isArray(value.ownerMarkers) || value.ownerMarkers.length === 0 || value.ownerMarkers.length > 8 || value.ownerMarkers.some((marker) => typeof marker !== "string" || marker.trim() !== marker || marker.length === 0 || marker.length > 240 || /[\r\n\0]/.test(marker))) throw new TypeError("restart.ownerMarkers must contain 1 to 8 fixed command fragments");
 	return {
 		kind: "screen",
 		screenBinary: absolutePath(value.screenBinary, "restart.screenBinary"),
 		lsofBinary: absolutePath(value.lsofBinary, "restart.lsofBinary"),
 		psBinary: absolutePath(value.psBinary, "restart.psBinary"),
+		ownerMarkers: value.ownerMarkers,
 		sessionName,
 		host,
 		port: boundedInt(value.port, "restart.port", 0, 1024, 65535)
@@ -1365,7 +1368,7 @@ async function restartDsh(config) {
 		})).stdout.trim();
 		const hasWebToken = /(?:^|\s)web(?:\s|$)/.test(command);
 		const hasPort = command.includes("--port " + String(config.restart.port));
-		if (!command.toLowerCase().includes("dsh") || !hasWebToken || !hasPort) throw new AgentRuntimeError("restart-owner-mismatch", "configured port is not owned by a recognizable DSH Web process");
+		if (!config.restart.ownerMarkers.some((marker) => command.includes(marker)) || !hasWebToken || !hasPort) throw new AgentRuntimeError("restart-owner-mismatch", "configured port is not owned by a recognizable DSH Web process");
 		try {
 			process.kill(listenerPid, "SIGTERM");
 		} catch (error) {
