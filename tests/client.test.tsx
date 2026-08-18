@@ -27,6 +27,7 @@ const status: FleetStatus = {
   },
   dsh: { version: '1.2.3', profile: 'control' },
   manifest: { path: '/fleet.yml', loaded: true, teamId: 'team-a' },
+  runtime: { failedModules: ['unmanaged-broken'] },
   summary: { desired: 3, aligned: 1, missing: 1, drifted: 1, failed: 0, unmanaged: 1 },
   plugins: [{ id: 'plugin-a', desiredSpec: '1.0.0', runtimeModules: [], runtimePhase: 'active', state: 'aligned' }],
   unmanaged: [{ id: 'plugin-extra', actualSpec: '2.0.0' }],
@@ -55,6 +56,46 @@ const updateReport: FleetUpdates = {
       { id: 'current-plugin', kind: 'plugin', managed: true, source: 'npm', state: 'current', currentVersion: '2.0.0', latestVersion: '2.0.0' },
     ],
   },
+}
+
+const exactGitHubSpec = 'github:team/plugin-a#bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+const fleetPlan = {
+  protocolVersion: 1,
+  planId: 'plan:' + 'a'.repeat(64),
+  digest: 'a'.repeat(64),
+  deviceId: 'worker',
+  profile: 'web',
+  manifestDigest: 'b'.repeat(64),
+  profileHash: 'c'.repeat(64),
+  observedDshVersion: '0.1.0-rc.7',
+  pluginId: 'plugin-a',
+  action: 'install',
+  fromSpec: null,
+  exactToSpec: exactGitHubSpec,
+  sourceKind: 'github',
+  restartRequired: true,
+  createdAt: '2026-01-01T00:00:00.000Z',
+  expiresAt: '2026-01-01T00:05:00.000Z',
+}
+
+function targetReport(candidates: Array<Record<string, unknown>>) {
+  return {
+    enabled: true,
+    targets: [{
+      deviceId: 'worker',
+      transport: 'ssh',
+      online: true,
+      inspection: {
+        protocolVersion: 1,
+        deviceId: 'worker',
+        profile: 'web',
+        dshVersion: '0.1.0-rc.7',
+        manifestDigest: 'b'.repeat(64),
+        profileHash: 'c'.repeat(64),
+        candidates,
+      },
+    }],
+  }
 }
 
 describe('dsh-fleet client slots', () => {
@@ -115,6 +156,7 @@ describe('dsh-fleet client slots', () => {
       expect(text).toContain('stable')
       expect(text).toContain('期望 3 · 一致 1 · 缺失 1')
       expect(text).toContain('漂移 1 · 失败 0 · 未管理 1')
+      expect(text).toContain('Loader 失败 1 · unmanaged-broken')
 
       const refresh = component!.root.findAllByType('button').find(button => button.props['aria-label'] === '刷新状态')
       expect(refresh).toBeDefined()
@@ -226,6 +268,118 @@ describe('dsh-fleet client slots', () => {
       expect(renderedText(component!.toJSON())).toContain('unknown endpoint: updates')
       const retry = component!.root.findAllByType('button').find(button => button.props.children === '重新检查')
       expect(retry?.props.disabled).toBe(false)
+    } finally {
+      await act(async () => { component?.unmount() })
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('plans an exact operation, confirms once, recovers a failed approval through action-status, and refreshes targets', async () => {
+    vi.stubGlobal('window', { setInterval: vi.fn(() => 1), clearInterval: vi.fn() })
+    vi.stubGlobal('document', { hidden: false })
+    vi.stubGlobal('crypto', { randomUUID: vi.fn(() => 'approval-01') })
+
+    let targetLoads = 0
+    const call = vi.fn(async (channel: string, endpoint: string) => {
+      if (channel === '/dsh-fleet' && endpoint === 'status') return { ok: true, value: status }
+      if (channel === '/dsh-fleet-agent' && endpoint === 'targets') {
+        targetLoads += 1
+        return {
+          ok: true,
+          value: targetLoads === 1
+            ? targetReport([{
+                pluginId: 'plugin-a',
+                action: 'install',
+                fromSpec: null,
+                exactToSpec: exactGitHubSpec,
+                sourceKind: 'github',
+              }])
+            : targetReport([]),
+        }
+      }
+      if (channel === '/dsh-fleet-agent' && endpoint === 'plan') return { ok: true, value: fleetPlan }
+      if (channel === '/dsh-fleet-agent' && endpoint === 'approve') {
+        return { ok: false, error: { message: 'connection lost after approval' } }
+      }
+      if (channel === '/dsh-fleet-agent' && endpoint === 'action-status') {
+        return {
+          ok: true,
+          value: {
+            planId: fleetPlan.planId,
+            pluginId: fleetPlan.pluginId,
+            state: 'rolled-back',
+            updatedAt: '2026-01-01T00:02:00.000Z',
+          },
+        }
+      }
+      return { ok: false, error: { message: `unexpected RPC ${channel} ${endpoint}` } }
+    })
+    const ctx = { connection: { rpc: { call } }, slots: {} } as never
+    let component: TestRenderer.ReactTestRenderer | undefined
+
+    try {
+      await act(async () => {
+        component = TestRenderer.create(<FleetCard ctx={ctx} />)
+        await Promise.resolve()
+      })
+      const toggle = component!.root.findAllByType('button').find(button => button.props['aria-expanded'] === false)
+      await act(async () => { toggle!.props.onClick() })
+
+      const operationsTab = component!.root.findAllByType('button').find(button =>
+        button.props.role === 'tab' && renderedText(button.props.children) === '操作',
+      )
+      await act(async () => {
+        operationsTab!.props.onClick()
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+      expect(call).toHaveBeenCalledWith('/dsh-fleet-agent', 'targets', null)
+      expect(renderedText(component!.toJSON())).toContain(`安装 → ${exactGitHubSpec}`)
+
+      const planButton = component!.root.findAllByType('button').find(button => button.props.children === '生成计划')
+      await act(async () => {
+        planButton!.props.onClick()
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+      expect(call).toHaveBeenCalledWith('/dsh-fleet-agent', 'plan', { deviceId: 'worker', pluginId: 'plugin-a' })
+      const plannedText = renderedText(component!.toJSON())
+      expect(plannedText).toContain('待批准计划')
+      expect(plannedText).toContain('INSTALL')
+      expect(plannedText).toContain('worker')
+      expect(plannedText).toContain('plugin-a')
+      expect(plannedText).toContain(exactGitHubSpec)
+      expect(plannedText).toContain(fleetPlan.digest.slice(0, 12))
+
+      const confirmation = component!.root.findByType('input')
+      let approveButton = component!.root.findAllByType('button').find(button => button.props.children === '批准并执行一次')
+      expect(approveButton?.props.disabled).toBe(true)
+      await act(async () => { confirmation.props.onChange({ currentTarget: { checked: true } }) })
+      approveButton = component!.root.findAllByType('button').find(button => button.props.children === '批准并执行一次')
+      expect(approveButton?.props.disabled).toBe(false)
+
+      await act(async () => {
+        approveButton!.props.onClick()
+        for (let index = 0; index < 8; index += 1) await Promise.resolve()
+      })
+      expect(call).toHaveBeenCalledWith('/dsh-fleet-agent', 'approve', {
+        approvalId: 'approval-01',
+        deviceId: fleetPlan.deviceId,
+        planDigest: fleetPlan.digest,
+        planExpiresAt: fleetPlan.expiresAt,
+        planId: fleetPlan.planId,
+        profile: fleetPlan.profile,
+      })
+      expect(call).toHaveBeenCalledWith('/dsh-fleet-agent', 'action-status', {
+        deviceId: fleetPlan.deviceId,
+        planId: fleetPlan.planId,
+      })
+      expect(call.mock.calls.filter(([channel, endpoint]) => channel === '/dsh-fleet-agent' && endpoint === 'targets')).toHaveLength(2)
+      const recoveredText = renderedText(component!.toJSON())
+      expect(recoveredText).toContain('已自动回滚')
+      expect(recoveredText).toContain('该设备已经一致')
+      expect(recoveredText).not.toContain('待批准计划')
+      expect(recoveredText).not.toContain('connection lost after approval')
     } finally {
       await act(async () => { component?.unmount() })
       vi.unstubAllGlobals()

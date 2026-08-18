@@ -7,7 +7,7 @@ import {
   type FleetPlanApproval,
 } from '../src/agent/protocol.ts'
 import { createAgentPlan } from '../src/agent/planner.ts'
-import { parseAgentConfig } from '../src/agent/config.ts'
+import { assertMutationReadyConfig, parseAgentConfig } from '../src/agent/config.ts'
 
 const MANIFEST_DIGEST = 'a'.repeat(64)
 const PROFILE_HASH = 'b'.repeat(64)
@@ -17,11 +17,11 @@ const NOW = '2026-08-18T08:00:00.000Z'
 function manifest(plugin: FleetPluginSpec): FleetManifest {
   return {
     schemaVersion: 1,
-    team: { id: 'ruby-team' },
+    team: { id: 'example-team' },
     devices: {
-      'm3-worker': { class: 'always-on-worker', channel: 'stable' },
+      worker: { class: 'always-on-worker', channel: 'stable' },
     },
-    plugins: [{ ...plugin, profiles: ['web'], target: { devices: ['m3-worker'] } }],
+    plugins: [{ ...plugin, profiles: ['web'], target: { devices: ['worker'] } }],
   }
 }
 
@@ -38,7 +38,7 @@ function input(plugin: FleetPluginSpec = npmPlugin(), dependencies: Record<strin
     observedDshVersion: '0.1.0-rc.7',
     now: NOW,
     pluginId: plugin.id,
-    deviceId: 'm3-worker',
+    deviceId: 'worker',
     profile: 'web',
   }
 }
@@ -70,7 +70,7 @@ describe('fleet agent protocol and planner', () => {
     const plan = createAgentPlan(input())
     expect(plan).toMatchObject({
       protocolVersion: 1,
-      deviceId: 'm3-worker',
+      deviceId: 'worker',
       profile: 'web',
       pluginId: 'plugin-a',
       action: 'install',
@@ -134,7 +134,7 @@ describe('fleet agent protocol and planner', () => {
   it('requires a loopback health URL when Fleet RPC health is enabled', () => {
     expect(() => parseAgentConfig({
       schemaVersion: 1,
-      deviceId: 'm3-worker',
+      deviceId: 'worker',
       manifestPath: '/tmp/fleet.lock.yaml',
       dshHome: '/tmp/dsh-home',
       dshBinary: '/tmp/dsh',
@@ -147,6 +147,54 @@ describe('fleet agent protocol and planner', () => {
     })).toThrow(/needs health.url/)
   })
 
+  it('keeps read-only config valid but rejects it for mutation', () => {
+    const config = parseAgentConfig({
+      schemaVersion: 1,
+      deviceId: 'worker',
+      manifestPath: '/tmp/fleet.lock.yaml',
+      dshHome: '/tmp/dsh-home',
+      dshBinary: '/tmp/dsh',
+      pnpmBinary: '/tmp/pnpm',
+      profile: 'web',
+      stateDir: '/tmp/fleet-state',
+      planTtlMs: 300_000,
+      restart: { kind: 'none' },
+      health: { timeoutMs: 45_000, requireFleetRpc: false },
+    })
+    expect(config.restart).toEqual({ kind: 'none' })
+    expect(() => assertMutationReadyConfig(config))
+      .toThrowError(expect.objectContaining({ code: 'unsafe-mutation-config' }))
+  })
+
+  it('requires mutation health to verify the configured loopback restart port', () => {
+    const base = {
+      schemaVersion: 1,
+      deviceId: 'worker',
+      manifestPath: '/tmp/fleet.lock.yaml',
+      dshHome: '/tmp/dsh-home',
+      dshBinary: '/tmp/dsh',
+      pnpmBinary: '/tmp/pnpm',
+      profile: 'web',
+      stateDir: '/tmp/fleet-state',
+      planTtlMs: 300_000,
+      restart: {
+        kind: 'screen',
+        screenBinary: '/usr/bin/screen',
+        lsofBinary: '/usr/sbin/lsof',
+        psBinary: '/bin/ps',
+        ownerMarkers: ['fake-dsh'],
+        sessionName: 'fake-dsh',
+        host: '127.0.0.1',
+        port: 3211,
+      },
+      health: { url: 'http://127.0.0.1:3211', timeoutMs: 45_000, requireFleetRpc: true },
+    }
+    const config = parseAgentConfig(base)
+    expect(() => assertMutationReadyConfig(config)).not.toThrow()
+    const mismatch = parseAgentConfig({ ...base, health: { ...base.health, url: 'http://127.0.0.1:3212' } })
+    expect(() => assertMutationReadyConfig(mismatch)).toThrow(/restart port/)
+  })
+
   it('rejects an already aligned plugin instead of creating a no-op plan', () => {
     expect(() => createAgentPlan(input(npmPlugin(), { 'plugin-a': '1.2.3' })))
       .toThrowError(expect.objectContaining({ code: 'already-aligned' }))
@@ -157,7 +205,7 @@ describe('fleet agent protocol and planner', () => {
     const approval: FleetPlanApproval = {
       protocolVersion: 1,
       approvalId: 'approval-01',
-      principalId: 'ruby',
+      principalId: 'owner',
       planId: plan.planId,
       planDigest: plan.digest,
       deviceId: plan.deviceId,

@@ -7,3 +7,10 @@ dist-client/
 *.tsbuildinfo
 .DS_Store
 coverage/
+*.tgz
+.env
+.env.*
+!.env.example
+*.pem
+*.p12
+*.pfx

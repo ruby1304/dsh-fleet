@@ -21,7 +21,7 @@ team:
   id: test-team
 devices:
   worker:
-    assignedTo: ruby
+    assignedTo: owner
     class: always-on-worker
     channel: stable
 plugins:
@@ -38,6 +38,7 @@ plugins:
         entries: () => [
           { id: 'a', options: { name: 'plugin-a' }, fiber: { state: 2 } },
           { id: 'x', options: { name: 'extra' }, fiber: { state: 2 } },
+          { id: 'broken', options: { name: 'unmanaged-broken' }, fiber: { state: 3 } },
         ],
       },
     }, {
@@ -47,11 +48,12 @@ plugins:
       dshHome: root,
       dshBinary: '/usr/bin/false',
     })
-    expect(status.device).toMatchObject({ id: 'worker', registered: true, assignedTo: 'ruby', class: 'always-on-worker', channel: 'stable' })
+    expect(status.device).toMatchObject({ id: 'worker', registered: true, assignedTo: 'owner', class: 'always-on-worker', channel: 'stable' })
     expect(status.manifest).toMatchObject({ loaded: true, teamId: 'test-team' })
     expect(status.plugins).toHaveLength(1)
     expect(status.plugins[0]?.state).toBe('aligned')
     expect(status.unmanaged).toEqual([{ id: 'extra', actualSpec: '2.0.0' }])
+    expect(status.runtime.failedModules).toEqual(['unmanaged-broken'])
     expect(status.dsh.version).toBeNull()
   })
 

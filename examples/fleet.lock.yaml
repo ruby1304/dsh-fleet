@@ -1,66 +1,41 @@
-# DEVELOPMENT VALIDATION manifest only; this is not a formal team-hub configuration.
-# Fleet itself, machine-local dsh-bash-escalation-gate/dsh-cliproxyapi, and private dsh-818-relay remain unmanaged.
-# Tavily lacks a stable distributable revision and is therefore dev-only.
+# Public example only. Copy this file to a private, owner-controlled location.
+# Replace every example source and path; never commit a production manifest.
 schemaVersion: 1
 team:
-  id: ruby-team
-  name: Ruby DSH Fleet development validation
+  id: example-team
+  name: Example DSH fleet
 
 devices:
-  ruby-m5:
-    assignedTo: ruby
+  controller:
+    assignedTo: owner
     class: portable-control
     channel: dev
     labels: [macos, arm64]
-  m3-worker:
-    assignedTo: ruby
+  worker:
+    assignedTo: owner
     class: always-on-worker
     channel: stable
     labels: [macos, arm64]
 
 plugins:
-  # Development variants: these exercise mutable/local development sources on M5.
-  - id: dsh-password-shield
-    source: github:ruby1304/dsh-password-shield
+  # Development inventory may describe a mutable local checkout. It cannot be
+  # planned or applied to a stable device by the V1 Agent.
+  - id: dsh-local-development-plugin
+    spec: link:/opt/example/dsh-local-development-plugin
     profiles: [web]
-    target: { devices: [ruby-m5] }
-  - id: dsh-quota-status
-    source: link:/Users/qudian/Local/dsh/dsh-quota-status
-    profiles: [web]
-    target: { devices: [ruby-m5] }
-  - id: dsh-turn-fork
-    source: npm
-    revision: ^0.1.0
-    profiles: [web]
-    target: { devices: [ruby-m5] }
-  - id: dsh-vision-subagent
-    source: link:/Users/qudian/Local/dsh/dsh-vision-subagent
-    profiles: [web]
-    target: { devices: [ruby-m5] }
-  - id: dsh-web-search-tavily
-    source: link:/Users/qudian/Local/dsh/dsh-web-search-tavily
-    runtimeModules: [dsh-tavily-workspace, dsh-web-search-tavily]
-    profiles: [web]
-    target: { devices: [ruby-m5] }
+    target: { devices: [controller] }
 
-  # Stable M3 variants: immutable GitHub commit SHAs or exact npm semver only.
-  - id: dsh-password-shield
-    source: github:ruby1304/dsh-password-shield
-    revision: 4520cf4342dbac46f82df68118838f9c5a027750
-    profiles: [web]
-    target: { devices: [m3-worker] }
-  - id: dsh-quota-status
-    source: github:ruby1304/dsh-quota-status
-    revision: 46b571a105dd21322734607368a1a5f056dcadf5
-    profiles: [web]
-    target: { devices: [m3-worker] }
+  # Stable npm convergence requires an exact semantic version.
   - id: dsh-turn-fork
     source: npm
     revision: 0.1.0
     profiles: [web]
-    target: { devices: [m3-worker] }
-  - id: dsh-vision-subagent
-    source: github:ruby1304/dsh-vision-subagent
-    revision: 0e55e84bde9d3cb9b64c2e8bc7b5bfaa3123c437
+    target: { devices: [worker] }
+
+  # Stable GitHub convergence requires a full 40-character commit SHA. This is
+  # a syntactically valid placeholder; replace it with a reviewed real commit.
+  - id: dsh-example
+    source: github:owner/dsh-example
+    revision: 0123456789abcdef0123456789abcdef01234567
     profiles: [web]
-    target: { devices: [m3-worker] }
+    target: { devices: [worker] }

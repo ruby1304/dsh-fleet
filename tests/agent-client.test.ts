@@ -1,10 +1,12 @@
-import { mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
+import { access, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
+  agentTerminationGraceMs,
   callAgent,
   createAgentClient,
+  interruptedAgentError,
   validateAgentTarget,
   type AgentTargetConfig,
 } from '../src/host/agent-client.ts'
@@ -33,22 +35,44 @@ async function fakeAgent(source: string): Promise<AgentTargetConfig> {
   }
 }
 
+async function waitForFile(path: string, timeoutMs = 2_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    try {
+      await access(path)
+      return
+    } catch {
+      await new Promise(resolve => setTimeout(resolve, 10))
+    }
+  }
+  throw new Error('timed out waiting for fixture file: ' + path)
+}
+
+function processAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error: unknown) {
+    return (error as NodeJS.ErrnoException).code !== 'ESRCH'
+  }
+}
+
 function validTarget(): AgentTargetConfig {
   return {
-    deviceId: 'm3-worker',
+    deviceId: 'worker',
     transport: 'local',
     nodeBinary: '/opt/homebrew/bin/node',
-    agentPath: '/Users/qudian/dev/dsh-fleet/agent.mjs',
-    configPath: '/Users/qudian/.dsh-fleet-agent/config.json',
+    agentPath: '/Users/example/src/dsh-fleet/agent.mjs',
+    configPath: '/Users/example/.config/dsh-fleet/agent.json',
   }
 }
 
 describe('agent target validation', () => {
   it.each([
     ['nodeBinary', '/opt/homebrew/bin/node;touch-pwned'],
-    ['agentPath', '/Users/qudian/dev/agent$(id).mjs'],
-    ['configPath', '/Users/qudian/config.json\n--evil'],
-    ['agentPath', '/Users/qudian/dev/../secret/agent.mjs'],
+    ['agentPath', '/Users/example/src/agent$(id).mjs'],
+    ['configPath', '/Users/example/config.json\n--evil'],
+    ['agentPath', '/Users/example/src/../secret/agent.mjs'],
   ] satisfies Array<[keyof AgentTargetConfig, string]>)('rejects injection or non-normalized %s paths', (field, value) => {
     expect(() => validateAgentTarget({ ...validTarget(), [field]: value })).toThrowError(
       expect.objectContaining({ message: expect.stringContaining('normalized absolute path') }),
@@ -56,10 +80,10 @@ describe('agent target validation', () => {
   })
 
   it.each([
-    'm3-mac;touch-pwned',
-    'm3-mac -oProxyCommand=evil',
-    'user@m3-mac',
-    'm3-mac\nother-host',
+    'worker-mac;touch-pwned',
+    'worker-mac -oProxyCommand=evil',
+    'user@worker-mac',
+    'worker-mac\nother-host',
     '-V',
     '-F',
   ])('rejects unsafe SSH host aliases without starting SSH: %j', sshHost => {
@@ -68,6 +92,46 @@ describe('agent target validation', () => {
       transport: 'ssh',
       sshHost,
     })).toThrowError(expect.objectContaining({ message: 'target.sshHost must be a configured host alias' }))
+  })
+})
+
+describe('interrupted agent errors', () => {
+  it.each([
+    ['apply', 'cancelled'],
+    ['apply', 'timeout'],
+    ['apply', 'output-limit'],
+    ['status', 'cancelled'],
+    ['status', 'timeout'],
+    ['status', 'output-limit'],
+  ] as const)(
+    'keeps an interrupted %s mutation unknown after %s',
+    (command, reason) => {
+      expect(interruptedAgentError(command, reason, false)).toMatchObject({
+        code: 'agent-mutation-unknown',
+        message: 'fleet mutation state is unknown; recover it with action-status before continuing',
+      })
+    },
+  )
+
+  it.each(['apply', 'status'] as const)('keeps a %s cancellation definitive before the process starts', command => {
+    expect(interruptedAgentError(command, 'cancelled', false, false)).toMatchObject({
+      code: 'cancelled',
+      message: 'fleet agent request was cancelled',
+    })
+  })
+
+  it('uses a fixed termination error when a non-mutating local process group cannot be drained', () => {
+    expect(interruptedAgentError('inspect', 'cancelled', true)).toMatchObject({
+      code: 'agent-termination-unknown',
+      message: 'fleet agent process-group termination could not be confirmed',
+    })
+  })
+
+  it('allows the Agent full mutation convergence time before forced termination', () => {
+    expect(agentTerminationGraceMs('apply')).toBe(10 * 60_000)
+    expect(agentTerminationGraceMs('status')).toBe(10 * 60_000)
+    expect(agentTerminationGraceMs('inspect')).toBe(30_000)
+    expect(agentTerminationGraceMs('plan')).toBe(30_000)
   })
 })
 
@@ -164,12 +228,211 @@ describe('local agent transport', () => {
   })
 
   it('terminates and rejects an agent that exceeds the configured timeout', async () => {
-    const target = await fakeAgent(`setInterval(() => {}, 1_000)`)
+    const target = await fakeAgent(`
+      import { spawn } from 'node:child_process'
+      import { writeFile } from 'node:fs/promises'
+      const worker = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+        detached: true,
+        stdio: 'ignore',
+      })
+      process.on('SIGTERM', () => {
+        process.kill(-worker.pid, 'SIGTERM')
+        worker.once('close', async () => {
+          await writeFile(process.env.DSH_FLEET_TEST_CLOSED_FILE, 'closed')
+          process.exit(0)
+        })
+      })
+      await writeFile(process.env.DSH_FLEET_TEST_PID_FILE, String(worker.pid))
+      setInterval(() => {}, 1_000)
+    `)
+    const root = target.configPath.slice(0, target.configPath.lastIndexOf('/'))
+    const pidFile = join(root, 'worker.pid')
+    const closedFile = join(root, 'worker.closed')
+    const originalPidFile = process.env.DSH_FLEET_TEST_PID_FILE
+    const originalClosedFile = process.env.DSH_FLEET_TEST_CLOSED_FILE
+    process.env.DSH_FLEET_TEST_PID_FILE = pidFile
+    process.env.DSH_FLEET_TEST_CLOSED_FILE = closedFile
+    const request = callAgent(target, 'status', {}, 250)
+    try {
+      await expect(request).rejects.toMatchObject({
+        name: 'AgentClientError',
+        code: 'agent-mutation-unknown',
+        message: 'fleet mutation state is unknown; recover it with action-status before continuing',
+      })
+      await expect(readFile(closedFile, 'utf8')).resolves.toBe('closed')
+      const pid = Number(await readFile(pidFile, 'utf8'))
+      expect(processAlive(pid)).toBe(false)
+    } finally {
+      if (originalPidFile === undefined) delete process.env.DSH_FLEET_TEST_PID_FILE
+      else process.env.DSH_FLEET_TEST_PID_FILE = originalPidFile
+      if (originalClosedFile === undefined) delete process.env.DSH_FLEET_TEST_CLOSED_FILE
+      else process.env.DSH_FLEET_TEST_CLOSED_FILE = originalClosedFile
+    }
+  })
 
-    await expect(callAgent(target, 'status', {}, 50)).rejects.toMatchObject({
+  it('waits for a detached descendant to stop before rejecting an abort', async () => {
+    const target = await fakeAgent(`
+      import { spawn } from 'node:child_process'
+      import { writeFile } from 'node:fs/promises'
+      const worker = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+        detached: true,
+        stdio: 'ignore',
+      })
+      process.on('SIGTERM', () => {
+        process.kill(-worker.pid, 'SIGTERM')
+        worker.once('close', async () => {
+          await writeFile(process.env.DSH_FLEET_TEST_CLOSED_FILE, 'closed')
+          process.exit(0)
+        })
+      })
+      await writeFile(process.env.DSH_FLEET_TEST_PID_FILE, String(worker.pid))
+      setInterval(() => {}, 1_000)
+    `)
+    const root = target.configPath.slice(0, target.configPath.lastIndexOf('/'))
+    const pidFile = join(root, 'worker.pid')
+    const closedFile = join(root, 'worker.closed')
+    const originalPidFile = process.env.DSH_FLEET_TEST_PID_FILE
+    const originalClosedFile = process.env.DSH_FLEET_TEST_CLOSED_FILE
+    process.env.DSH_FLEET_TEST_PID_FILE = pidFile
+    process.env.DSH_FLEET_TEST_CLOSED_FILE = closedFile
+    const controller = new AbortController()
+    const request = callAgent(target, 'apply', {}, 2_000, controller.signal)
+    try {
+      await waitForFile(pidFile)
+      controller.abort()
+      await expect(request).rejects.toMatchObject({
+        name: 'AgentClientError',
+        code: 'agent-mutation-unknown',
+        message: 'fleet mutation state is unknown; recover it with action-status before continuing',
+      })
+      await expect(readFile(closedFile, 'utf8')).resolves.toBe('closed')
+      const pid = Number(await readFile(pidFile, 'utf8'))
+      expect(processAlive(pid)).toBe(false)
+    } finally {
+      if (originalPidFile === undefined) delete process.env.DSH_FLEET_TEST_PID_FILE
+      else process.env.DSH_FLEET_TEST_PID_FILE = originalPidFile
+      if (originalClosedFile === undefined) delete process.env.DSH_FLEET_TEST_CLOSED_FILE
+      else process.env.DSH_FLEET_TEST_CLOSED_FILE = originalClosedFile
+    }
+  })
+
+  it('escalates from TERM to KILL and waits for close', async () => {
+    const target = await fakeAgent(`
+      import { writeFile } from 'node:fs/promises'
+      process.on('SIGTERM', () => {})
+      await writeFile(process.env.DSH_FLEET_TEST_PID_FILE, String(process.pid))
+      setInterval(() => {}, 1_000)
+    `)
+    const root = target.configPath.slice(0, target.configPath.lastIndexOf('/'))
+    const pidFile = join(root, 'agent.pid')
+    const originalPidFile = process.env.DSH_FLEET_TEST_PID_FILE
+    process.env.DSH_FLEET_TEST_PID_FILE = pidFile
+    const controller = new AbortController()
+    const request = callAgent(target, 'status', {}, 2_000, controller.signal, { terminationGraceMs: 50 })
+    try {
+      await waitForFile(pidFile)
+      controller.abort()
+      await expect(request).rejects.toMatchObject({
+        code: 'agent-mutation-unknown',
+        message: 'fleet mutation state is unknown; recover it with action-status before continuing',
+      })
+      const pid = Number(await readFile(pidFile, 'utf8'))
+      expect(processAlive(pid)).toBe(false)
+    } finally {
+      if (originalPidFile === undefined) delete process.env.DSH_FLEET_TEST_PID_FILE
+      else process.env.DSH_FLEET_TEST_PID_FILE = originalPidFile
+    }
+  })
+
+  it('reports an unknown mutation after a local apply requires KILL', async () => {
+    const target = await fakeAgent(`
+      import { writeFile } from 'node:fs/promises'
+      process.on('SIGTERM', () => {})
+      await writeFile(process.env.DSH_FLEET_TEST_PID_FILE, String(process.pid))
+      setInterval(() => {}, 1_000)
+    `)
+    const root = target.configPath.slice(0, target.configPath.lastIndexOf('/'))
+    const pidFile = join(root, 'agent.pid')
+    const originalPidFile = process.env.DSH_FLEET_TEST_PID_FILE
+    process.env.DSH_FLEET_TEST_PID_FILE = pidFile
+    const controller = new AbortController()
+    const request = callAgent(target, 'apply', {}, 2_000, controller.signal, { terminationGraceMs: 50 })
+    try {
+      await waitForFile(pidFile)
+      controller.abort()
+      await expect(request).rejects.toMatchObject({
+        name: 'AgentClientError',
+        code: 'agent-mutation-unknown',
+        message: 'fleet mutation state is unknown; recover it with action-status before continuing',
+      })
+      const pid = Number(await readFile(pidFile, 'utf8'))
+      expect(processAlive(pid)).toBe(false)
+    } finally {
+      if (originalPidFile === undefined) delete process.env.DSH_FLEET_TEST_PID_FILE
+      else process.env.DSH_FLEET_TEST_PID_FILE = originalPidFile
+    }
+  })
+
+  it('kills same-group survivors and reports the recovery mutation as unknown', async () => {
+    const target = await fakeAgent(`
+      import { spawn } from 'node:child_process'
+      import { writeFile } from 'node:fs/promises'
+      const worker = spawn(process.execPath, ['-e', \`
+        process.on('SIGTERM', () => {})
+        process.send('ready')
+        setInterval(() => {}, 1000)
+      \`], { stdio: ['ignore', 'ignore', 'ignore', 'ipc'] })
+      process.on('SIGTERM', () => process.exit(0))
+      worker.once('message', async () => {
+        await writeFile(process.env.DSH_FLEET_TEST_PID_FILE, String(worker.pid))
+      })
+      setInterval(() => {}, 1_000)
+    `)
+    const root = target.configPath.slice(0, target.configPath.lastIndexOf('/'))
+    const pidFile = join(root, 'worker.pid')
+    const originalPidFile = process.env.DSH_FLEET_TEST_PID_FILE
+    process.env.DSH_FLEET_TEST_PID_FILE = pidFile
+    const controller = new AbortController()
+    const request = callAgent(target, 'status', {}, 2_000, controller.signal, { terminationGraceMs: 500 })
+    try {
+      await waitForFile(pidFile)
+      controller.abort()
+      await expect(request).rejects.toMatchObject({
+        code: 'agent-mutation-unknown',
+        message: 'fleet mutation state is unknown; recover it with action-status before continuing',
+      })
+      const pid = Number(await readFile(pidFile, 'utf8'))
+      expect(processAlive(pid)).toBe(false)
+    } finally {
+      if (originalPidFile === undefined) delete process.env.DSH_FLEET_TEST_PID_FILE
+      else process.env.DSH_FLEET_TEST_PID_FILE = originalPidFile
+    }
+  })
+
+  it.each(['apply', 'status'] as const)('does not start an SSH %s when its signal is already aborted', async command => {
+    const controller = new AbortController()
+    controller.abort()
+    await expect(callAgent({
+      ...validTarget(),
+      transport: 'ssh',
+      sshHost: 'must-not-be-contacted',
+    }, command, {}, 2_000, controller.signal)).rejects.toMatchObject({
+      code: 'cancelled',
+      message: 'fleet agent request was cancelled',
+    })
+  })
+
+  it.each(['stdout', 'stderr'] as const)('terminates and rejects a non-mutating agent that exceeds the %s limit', async stream => {
+    const target = await fakeAgent(`
+      process.on('SIGTERM', () => process.exit(0))
+      process.${stream}.write('x'.repeat(1024 * 1024 + 1))
+      setInterval(() => {}, 1_000)
+    `)
+
+    await expect(callAgent(target, 'inspect', {}, 2_000, undefined, { terminationGraceMs: 50 })).rejects.toMatchObject({
       name: 'AgentClientError',
-      code: 'agent-timeout',
-      message: 'fleet agent did not answer before the timeout',
+      code: 'agent-output-limit',
+      message: 'fleet agent exceeded the output limit',
     })
   })
 })
@@ -195,7 +458,7 @@ describe('configured agent client', () => {
     expect(() => createAgentClient({
       enabled: true,
       timeoutMs: 100,
-      targets: [validTarget(), { ...validTarget(), transport: 'ssh', sshHost: 'm3-mac' }],
+      targets: [validTarget(), { ...validTarget(), transport: 'ssh', sshHost: 'worker-mac' }],
     })).toThrowError('fleet target deviceId values must be unique')
   })
 })

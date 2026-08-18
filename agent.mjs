@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 import { createRequire } from "node:module";
 import { dirname, isAbsolute, join, normalize } from "node:path";
-import { appendFile, copyFile, lstat, mkdir, open, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { link, lstat, mkdir, open, readFile, rename, rm } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
+import { constants } from "node:fs";
 //#region \0rolldown/runtime.js
 var __commonJSMin = (cb, mod) => () => (mod || (cb((mod = { exports: {} }).exports, mod), cb = null), mod.exports);
 var __require = /* #__PURE__ */ (() => createRequire(import.meta.url))();
@@ -122,6 +123,21 @@ function parseAgentConfig(value) {
 		restart: parseRestart(value.restart),
 		health: parseHealth(value.health)
 	};
+}
+function mutationConfigError(message) {
+	return Object.assign(new TypeError(message), { code: "unsafe-mutation-config" });
+}
+function assertMutationReadyConfig(config) {
+	if (config.restart.kind === "none") throw mutationConfigError("mutation requires a configured DSH restart");
+	if (config.health.url === void 0 || config.health.requireFleetRpc !== true) throw mutationConfigError("mutation requires a loopback health URL with Fleet RPC verification");
+	let health;
+	try {
+		health = new URL(config.health.url);
+	} catch {
+		throw mutationConfigError("mutation health URL is invalid");
+	}
+	if (health.protocol !== "http:" || health.hostname !== "127.0.0.1" && health.hostname !== "localhost" && health.hostname !== "[::1]" || health.username !== "" || health.password !== "") throw mutationConfigError("mutation health URL must be credential-free loopback HTTP");
+	if ((health.port === "" ? 80 : Number(health.port)) !== config.restart.port) throw mutationConfigError("mutation health URL must verify the configured restart port");
 }
 async function readAgentConfig(path) {
 	return parseAgentConfig(JSON.parse(await readFile(path, "utf8")));
@@ -8654,6 +8670,8 @@ const SNAPSHOT_FILES = [
 	"cordis.patch.yml"
 ];
 const MAX_OUTPUT_BYTES = 1048576;
+const TERMINATION_GRACE_MS = 2e3;
+const TERMINATION_CONFIRM_MS = 5e3;
 var AgentRuntimeError = class extends Error {
 	code;
 	constructor(code, message) {
@@ -8694,7 +8712,30 @@ function controlledEnv(config) {
 		GIT_TERMINAL_PROMPT: "0"
 	};
 }
+function abortError() {
+	return new AgentRuntimeError("agent-shutdown", "fleet agent shutdown interrupted the controlled command");
+}
+function throwIfAborted(signal) {
+	if (signal?.aborted === true) throw abortError();
+}
+function processGroupIsAlive(pid) {
+	try {
+		process.kill(-pid, 0);
+		return true;
+	} catch (error) {
+		return error.code !== "ESRCH";
+	}
+}
+async function waitUntil(predicate, timeoutMs) {
+	const deadline = Date.now() + timeoutMs;
+	while (predicate()) {
+		if (Date.now() >= deadline) return false;
+		await new Promise((resolve) => setTimeout(resolve, 25));
+	}
+	return true;
+}
 function runFile(file, args, options = {}) {
+	throwIfAborted(options.signal);
 	return new Promise((resolve, reject) => {
 		const grouped = process.platform !== "win32";
 		const child = spawn(file, args, {
@@ -8710,9 +8751,16 @@ function runFile(file, args, options = {}) {
 		});
 		let stdout = "";
 		let stderr = "";
+		let stdoutBytes = 0;
+		let stderrBytes = 0;
 		let settled = false;
-		let timedOut = false;
-		let forceTimer;
+		let termination = null;
+		let closeCode = null;
+		let leaderClosed = false;
+		let resolveLeaderClosed;
+		const leaderClosedPromise = new Promise((resolve) => {
+			resolveLeaderClosed = resolve;
+		});
 		const killTree = (signal) => {
 			try {
 				if (grouped && child.pid !== void 0) process.kill(-child.pid, signal);
@@ -8725,87 +8773,148 @@ function runFile(file, args, options = {}) {
 			if (settled) return;
 			settled = true;
 			clearTimeout(timer);
-			if (forceTimer !== void 0) clearTimeout(forceTimer);
+			options.signal?.removeEventListener("abort", onAbort);
 			action();
 		};
-		const timer = setTimeout(() => {
-			timedOut = true;
-			killTree("SIGTERM");
-			forceTimer = setTimeout(() => killTree("SIGKILL"), 2e3);
-			forceTimer.unref();
-		}, options.timeoutMs ?? 12e4);
+		const terminate = (reason) => {
+			if (termination !== null || settled) return;
+			termination = reason;
+			clearTimeout(timer);
+			(async () => {
+				try {
+					killTree("SIGTERM");
+					const pid = child.pid;
+					if (!(grouped && pid !== void 0 ? await waitUntil(() => processGroupIsAlive(pid), TERMINATION_GRACE_MS) : await waitUntil(() => !leaderClosed, TERMINATION_GRACE_MS))) {
+						killTree("SIGKILL");
+						if (!(grouped && pid !== void 0 ? await waitUntil(() => processGroupIsAlive(pid), TERMINATION_CONFIRM_MS) : await waitUntil(() => !leaderClosed, TERMINATION_CONFIRM_MS))) {
+							finish(() => reject(new AgentRuntimeError("command-cleanup-failed", "controlled command process group could not be terminated")));
+							return;
+						}
+					}
+					if (!leaderClosed) await Promise.race([leaderClosedPromise, new Promise((resolve) => setTimeout(resolve, TERMINATION_CONFIRM_MS))]);
+					if (!leaderClosed) {
+						finish(() => reject(new AgentRuntimeError("command-cleanup-failed", "controlled command leader did not close after termination")));
+						return;
+					}
+					finish(() => reject(reason));
+				} catch {
+					finish(() => reject(new AgentRuntimeError("command-cleanup-failed", "controlled command process group cleanup failed")));
+				}
+			})();
+		};
+		const onAbort = () => terminate(abortError());
+		const timer = setTimeout(() => terminate(new AgentRuntimeError("command-timeout", "controlled command exceeded its timeout")), options.timeoutMs ?? 12e4);
 		timer.unref();
+		options.signal?.addEventListener("abort", onAbort, { once: true });
+		if (options.signal?.aborted === true) onAbort();
 		child.stdout?.setEncoding("utf8");
 		child.stderr?.setEncoding("utf8");
 		child.stdout?.on("data", (chunk) => {
-			stdout += chunk;
-			if (Buffer.byteLength(stdout) > MAX_OUTPUT_BYTES) child.kill("SIGTERM");
+			const bytes = Buffer.byteLength(chunk);
+			if (stdoutBytes < MAX_OUTPUT_BYTES) stdout += Buffer.from(chunk).subarray(0, Math.max(0, MAX_OUTPUT_BYTES - stdoutBytes)).toString("utf8");
+			stdoutBytes += bytes;
+			if (stdoutBytes > MAX_OUTPUT_BYTES) terminate(new AgentRuntimeError("command-output-limit", "controlled command exceeded its output limit"));
 		});
 		child.stderr?.on("data", (chunk) => {
-			stderr += chunk;
-			if (Buffer.byteLength(stderr) > MAX_OUTPUT_BYTES) child.kill("SIGTERM");
+			const bytes = Buffer.byteLength(chunk);
+			if (stderrBytes < MAX_OUTPUT_BYTES) stderr += Buffer.from(chunk).subarray(0, Math.max(0, MAX_OUTPUT_BYTES - stderrBytes)).toString("utf8");
+			stderrBytes += bytes;
+			if (stderrBytes > MAX_OUTPUT_BYTES) terminate(new AgentRuntimeError("command-output-limit", "controlled command exceeded its output limit"));
 		});
-		child.once("error", () => finish(() => {
-			reject(new AgentRuntimeError("command-unavailable", "required executable is unavailable"));
-		}));
-		child.once("close", (code) => finish(() => {
-			const exitCode = code ?? 1;
-			if (timedOut) reject(new AgentRuntimeError("command-timeout", "controlled command exceeded its timeout"));
-			else if (exitCode !== 0 && options.allowFailure !== true) reject(new AgentRuntimeError("command-failed", "controlled command failed"));
-			else resolve({
+		child.once("error", () => {
+			leaderClosed = true;
+			resolveLeaderClosed?.();
+			if (termination === null) finish(() => reject(new AgentRuntimeError("command-unavailable", "required executable is unavailable")));
+		});
+		child.once("close", (code) => {
+			leaderClosed = true;
+			closeCode = code;
+			resolveLeaderClosed?.();
+			if (termination !== null) return;
+			if (grouped && child.pid !== void 0 && processGroupIsAlive(child.pid)) {
+				terminate(new AgentRuntimeError("command-descendant-leak", "controlled command exited with a live process-group descendant"));
+				return;
+			}
+			const exitCode = closeCode ?? 1;
+			if (exitCode !== 0 && options.allowFailure !== true) finish(() => reject(new AgentRuntimeError("command-failed", "controlled command failed")));
+			else finish(() => resolve({
 				stdout,
 				stderr,
 				code: exitCode
-			});
-		}));
+			}));
+		});
 	});
 }
 function sha256(value) {
 	return createHash("sha256").update(value, "utf8").digest("hex");
 }
-async function readOptional(path) {
+async function readRegularFileSnapshot(path) {
+	let handle;
 	try {
-		return await readFile(path, "utf8");
+		handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+		const info = await handle.stat();
+		if (info.isSymbolicLink() || !info.isFile()) throw new AgentRuntimeError("unsafe-profile-file", "profile state accepts regular files only");
+		return {
+			source: await handle.readFile("utf8"),
+			dev: info.dev,
+			ino: info.ino,
+			mtimeMs: info.mtimeMs
+		};
 	} catch (error) {
 		if (error.code === "ENOENT") return null;
+		if (error.code === "ELOOP") throw new AgentRuntimeError("unsafe-profile-file", "profile state accepts regular files only");
 		throw error;
+	} finally {
+		await handle?.close();
 	}
 }
 async function readRegularOptional(path) {
-	try {
-		const info = await lstat(path);
-		if (info.isSymbolicLink() || !info.isFile()) throw new AgentRuntimeError("unsafe-profile-file", "profile state accepts regular files only");
-		return await readFile(path, "utf8");
-	} catch (error) {
-		if (error.code === "ENOENT") return null;
-		throw error;
-	}
+	return (await readRegularFileSnapshot(path))?.source ?? null;
 }
-async function computeProfileHash(config) {
+async function readProfileSnapshot(config) {
 	const dir = profileDir(config);
+	let directoryPresent = true;
+	try {
+		const info = await lstat(dir);
+		if (info.isSymbolicLink() || !info.isDirectory()) throw new AgentRuntimeError("unsafe-profile-directory", "profile state accepts a regular directory only");
+	} catch (error) {
+		if (error.code !== "ENOENT") throw error;
+		directoryPresent = false;
+	}
 	const files = {};
 	for (const name of SNAPSHOT_FILES) files[name] = await readRegularOptional(join(dir, name));
-	return sha256(JSON.stringify(files));
+	return {
+		directoryPresent,
+		files,
+		hash: sha256(JSON.stringify(files))
+	};
 }
-async function readDshVersion(config) {
+async function computeProfileHash(config) {
+	return (await readProfileSnapshot(config)).hash;
+}
+async function readDshVersion(config, signal) {
 	const version = (await runFile(config.dshBinary, ["--version"], {
 		env: controlledEnv(config),
-		timeoutMs: 1e4
+		timeoutMs: 1e4,
+		signal
 	})).stdout.trim();
 	if (version.length === 0) throw new AgentRuntimeError("dsh-version-unavailable", "DSH version is unavailable");
 	return version;
 }
-async function loadState(config) {
+async function loadState(config, signal) {
+	throwIfAborted(signal);
 	const manifestSource = await readFile(config.manifestPath, "utf8");
 	const manifest = parseFleetManifest(manifestSource);
-	const profileSource = await readRegularOptional(join(profileDir(config), "package.json"));
+	const profile = await readProfileSnapshot(config);
+	const profileSource = profile.files["package.json"];
 	const parsed = profileSource === null ? {} : JSON.parse(profileSource);
 	return {
 		manifest,
 		manifestDigest: sha256(manifestSource),
 		dependencies: parsed.dependencies ?? {},
-		profileHash: await computeProfileHash(config),
-		dshVersion: await readDshVersion(config)
+		profileHash: profile.hash,
+		profileSnapshot: profile,
+		dshVersion: await readDshVersion(config, signal)
 	};
 }
 function planPath(config, planId) {
@@ -8817,29 +8926,72 @@ function actionPath(config, planId) {
 	return join(config.stateDir, "actions", planId.slice(5) + ".json");
 }
 async function atomicJson(path, value) {
-	await mkdir(dirname(path), {
-		recursive: true,
-		mode: 448
-	});
+	const directory = dirname(path);
+	await ensureDurableDirectory(directory);
 	const temporary = path + "." + randomUUID() + ".tmp";
-	await writeFile(temporary, JSON.stringify(value, null, 2) + "\n", { mode: 384 });
-	await rename(temporary, path);
+	let handle;
+	try {
+		handle = await open(temporary, "wx", 384);
+		await handle.writeFile(JSON.stringify(value, null, 2) + "\n");
+		await handle.sync();
+		await handle.close();
+		handle = void 0;
+		await rename(temporary, path);
+		await syncDirectory(directory);
+	} catch (error) {
+		await handle?.close();
+		await rm(temporary, { force: true });
+		throw error;
+	}
 }
 async function readJson(path) {
-	const source = await readOptional(path);
+	const source = await readRegularOptional(path);
 	return source === null ? null : JSON.parse(source);
 }
-async function audit(config, event) {
-	await mkdir(config.stateDir, {
+async function syncDirectory(path) {
+	const handle = await open(path, "r");
+	try {
+		await handle.sync();
+	} finally {
+		await handle.close();
+	}
+}
+async function ensureDurableDirectory(path) {
+	await mkdir(path, {
 		recursive: true,
 		mode: 448
 	});
-	await appendFile(join(config.stateDir, "audit.jsonl"), JSON.stringify({
-		eventId: randomUUID(),
-		at: (/* @__PURE__ */ new Date()).toISOString(),
-		deviceId: config.deviceId,
-		...event
-	}) + "\n", { mode: 384 });
+	await syncDirectory(path);
+	const parent = dirname(path);
+	if (parent !== path) await syncDirectory(parent);
+}
+async function durableWriteFile(path, source) {
+	const directory = dirname(path);
+	await ensureDurableDirectory(directory);
+	const handle = await open(path, "wx", 384);
+	try {
+		await handle.writeFile(source);
+		await handle.sync();
+	} finally {
+		await handle.close();
+	}
+	await syncDirectory(directory);
+}
+async function audit(config, event) {
+	await ensureDurableDirectory(config.stateDir);
+	const handle = await open(join(config.stateDir, "audit.jsonl"), "a", 384);
+	try {
+		await handle.writeFile(JSON.stringify({
+			eventId: randomUUID(),
+			at: (/* @__PURE__ */ new Date()).toISOString(),
+			deviceId: config.deviceId,
+			...event
+		}) + "\n");
+		await handle.sync();
+	} finally {
+		await handle.close();
+	}
+	await syncDirectory(config.stateDir);
 }
 async function processIsAlive(pid) {
 	try {
@@ -8851,10 +9003,7 @@ async function processIsAlive(pid) {
 }
 async function withProfileLock(config, operation) {
 	const lockDir = join(config.stateDir, "locks");
-	await mkdir(lockDir, {
-		recursive: true,
-		mode: 448
-	});
+	await ensureDurableDirectory(lockDir);
 	const identity = sha256(config.dshHome + "\0" + config.profile);
 	const lockPath = join(lockDir, identity + ".lock");
 	const token = randomUUID();
@@ -8866,32 +9015,67 @@ async function withProfileLock(config, operation) {
 				pid: process.pid,
 				createdAt: (/* @__PURE__ */ new Date()).toISOString()
 			}) + "\n");
+			await handle.sync();
 		} finally {
 			await handle.close();
 		}
+		await syncDirectory(lockDir);
 		break;
 	} catch (error) {
 		if (error.code !== "EEXIST") throw error;
 		let owner = null;
 		let ageMs = 0;
+		let ownerSource = null;
+		let ownerIdentity = null;
 		try {
-			const info = await lstat(lockPath);
-			if (info.isSymbolicLink() || !info.isFile()) throw new AgentRuntimeError("unsafe-state-file", "fleet lock must be a regular file");
-			ageMs = Date.now() - info.mtimeMs;
-			owner = JSON.parse(await readFile(lockPath, "utf8"));
+			const snapshot = await readRegularFileSnapshot(lockPath);
+			if (snapshot === null) continue;
+			ageMs = Date.now() - snapshot.mtimeMs;
+			ownerSource = snapshot.source;
+			ownerIdentity = {
+				dev: snapshot.dev,
+				ino: snapshot.ino
+			};
+			owner = JSON.parse(ownerSource);
 		} catch (readError) {
 			if (readError.code === "ENOENT") continue;
+			if (readError.code === "ELOOP") throw new AgentRuntimeError("unsafe-state-file", "fleet lock must be a regular file");
 			if (readError instanceof AgentRuntimeError) throw readError;
 		}
 		const ownerPid = typeof owner?.pid === "number" && Number.isSafeInteger(owner.pid) && owner.pid > 0 ? owner.pid : null;
 		if (ownerPid !== null && await processIsAlive(ownerPid) || ownerPid === null && ageMs < 1e4) throw new AgentRuntimeError("agent-busy", "another fleet action is already running for this profile");
-		await rm(lockPath, { force: true });
+		if (ownerSource === null || ownerIdentity === null) throw new AgentRuntimeError("agent-busy", "fleet lock ownership could not be verified");
+		const oldToken = typeof owner?.token === "string" && owner.token.length > 0 ? owner.token : ownerSource;
+		const claimPath = lockPath + ".reap-" + sha256(oldToken);
+		try {
+			await link(lockPath, claimPath);
+		} catch (claimError) {
+			if (claimError.code === "ENOENT") continue;
+			if (claimError.code === "EEXIST") throw new AgentRuntimeError("agent-busy", "another fleet agent is reclaiming a stale profile lock");
+			throw claimError;
+		}
+		try {
+			const claimed = await readRegularFileSnapshot(claimPath);
+			const current = await readRegularFileSnapshot(lockPath);
+			if (claimed === null || current === null || claimed.dev !== ownerIdentity.dev || claimed.ino !== ownerIdentity.ino || current.dev !== ownerIdentity.dev || current.ino !== ownerIdentity.ino) continue;
+			await rm(lockPath);
+			await syncDirectory(lockDir);
+		} finally {
+			await rm(claimPath, { force: true });
+			await syncDirectory(lockDir);
+		}
 	}
 	try {
 		return await operation();
 	} finally {
 		try {
-			if (JSON.parse(await readFile(lockPath, "utf8")).token === token) await rm(lockPath, { force: true });
+			const source = await readRegularOptional(lockPath);
+			if (source !== null) {
+				if (JSON.parse(source).token === token) {
+					await rm(lockPath, { force: true });
+					await syncDirectory(lockDir);
+				}
+			}
 		} catch (error) {
 			if (error.code !== "ENOENT") throw error;
 		}
@@ -8907,49 +9091,73 @@ async function saveAction(config, record, state, fields = {}) {
 	await atomicJson(actionPath(config, record.planId), next);
 	return next;
 }
-async function snapshotProfile(config, plan) {
+function transitionAction(record, state, fields = {}) {
+	return {
+		...record,
+		...fields,
+		state,
+		updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+	};
+}
+async function saveActionBestEffort(config, record, state, fields = {}) {
+	const next = transitionAction(record, state, fields);
+	try {
+		await atomicJson(actionPath(config, record.planId), next);
+		return {
+			record: next,
+			failed: false
+		};
+	} catch {
+		return {
+			record: next,
+			failed: true
+		};
+	}
+}
+async function auditBestEffort(config, event) {
+	try {
+		await audit(config, event);
+		return true;
+	} catch {
+		return false;
+	}
+}
+async function snapshotProfile(config, plan, profile) {
+	if (profile.hash !== plan.profileHash) throw new AgentRuntimeError("profile-snapshot-mismatch", "profile snapshot does not match the approved plan");
 	const destination = join(config.stateDir, "snapshots", plan.digest);
 	await rm(destination, {
 		recursive: true,
 		force: true
 	});
-	await mkdir(destination, {
-		recursive: true,
-		mode: 448
-	});
-	let profileDirectoryPresent = true;
-	try {
-		const info = await lstat(profileDir(config));
-		if (info.isSymbolicLink() || !info.isDirectory()) throw new AgentRuntimeError("unsafe-profile-directory", "profile state accepts a regular directory only");
-	} catch (error) {
-		if (error.code !== "ENOENT") throw error;
-		profileDirectoryPresent = false;
-	}
+	await ensureDurableDirectory(destination);
 	const present = {};
 	for (const name of SNAPSHOT_FILES) {
-		const source = join(profileDir(config), name);
-		try {
-			const info = await lstat(source);
-			if (info.isSymbolicLink() || !info.isFile()) throw new AgentRuntimeError("unsafe-profile-file", "profile snapshots accept regular files only");
-			await copyFile(source, join(destination, name));
+		const source = profile.files[name];
+		if (source !== null) {
+			await durableWriteFile(join(destination, name), source);
 			present[name] = true;
-		} catch (error) {
-			if (error.code !== "ENOENT") throw error;
-			present[name] = false;
-		}
+		} else present[name] = false;
 	}
-	if (profileDirectoryPresent && (present["package.json"] !== true || present["pnpm-lock.yaml"] !== true)) throw new AgentRuntimeError("profile-not-snapshotable", "an existing profile requires package.json and pnpm-lock.yaml for rollback");
+	if (profile.directoryPresent && (present["package.json"] !== true || present["pnpm-lock.yaml"] !== true)) throw new AgentRuntimeError("profile-not-snapshotable", "an existing profile requires package.json and pnpm-lock.yaml for rollback");
 	await atomicJson(join(destination, "snapshot.json"), {
 		planId: plan.planId,
 		digest: plan.digest,
 		manifestDigest: plan.manifestDigest,
 		profileHash: plan.profileHash,
-		profileDirectoryPresent,
+		profileDirectoryPresent: profile.directoryPresent,
 		present
 	});
+	await syncDirectory(destination);
 }
 async function restoreProfile(config, plan) {
 	const source = join(config.stateDir, "snapshots", plan.digest);
+	try {
+		const info = await lstat(source);
+		if (info.isSymbolicLink() || !info.isDirectory()) throw new AgentRuntimeError("unsafe-state-file", "profile snapshot must be a regular directory");
+	} catch (error) {
+		if (error.code === "ENOENT") throw new AgentRuntimeError("snapshot-missing", "profile snapshot is unavailable");
+		throw error;
+	}
 	const metadataSource = await readRegularOptional(join(source, "snapshot.json"));
 	if (metadataSource === null) throw new AgentRuntimeError("snapshot-missing", "profile snapshot is unavailable");
 	const metadata = JSON.parse(metadataSource);
@@ -8962,6 +9170,9 @@ async function restoreProfile(config, plan) {
 		if (error.code !== "ENOENT") throw error;
 	}
 	if (metadata.profileDirectoryPresent !== true) {
+		const files = {};
+		for (const name of SNAPSHOT_FILES) files[name] = await readRegularOptional(join(source, name));
+		if (sha256(JSON.stringify(files)) !== plan.profileHash || SNAPSHOT_FILES.some((name) => files[name] !== null || metadata.present[name] !== false)) throw new AgentRuntimeError("snapshot-mismatch", "profile snapshot contents do not match the approved plan");
 		await rm(targetDir, {
 			recursive: true,
 			force: true
@@ -8969,6 +9180,12 @@ async function restoreProfile(config, plan) {
 		return;
 	}
 	if (metadata.present["package.json"] !== true || metadata.present["pnpm-lock.yaml"] !== true) throw new AgentRuntimeError("snapshot-mismatch", "profile snapshot cannot rebuild the dependency tree");
+	const files = {};
+	for (const name of SNAPSHOT_FILES) {
+		files[name] = await readRegularOptional(join(source, name));
+		if (files[name] !== null !== (metadata.present[name] === true)) throw new AgentRuntimeError("snapshot-mismatch", "profile snapshot file set does not match its metadata");
+	}
+	if (sha256(JSON.stringify(files)) !== plan.profileHash) throw new AgentRuntimeError("snapshot-mismatch", "profile snapshot contents do not match the approved plan");
 	await mkdir(targetDir, {
 		recursive: true,
 		mode: 448
@@ -8976,7 +9193,8 @@ async function restoreProfile(config, plan) {
 	for (const name of SNAPSHOT_FILES) {
 		const destination = join(targetDir, name);
 		await rm(destination, { force: true });
-		if (metadata.present[name] === true) await copyFile(join(source, name), destination);
+		const contents = files[name];
+		if (contents !== null) await durableWriteFile(destination, contents);
 	}
 	await runFile(config.pnpmBinary, [
 		"install",
@@ -8989,8 +9207,9 @@ async function restoreProfile(config, plan) {
 	});
 	if (await computeProfileHash(config) !== plan.profileHash) throw new AgentRuntimeError("rollback-profile-mismatch", "restored profile does not match the approved snapshot");
 }
-async function restartDsh(config) {
-	if (config.restart.kind === "none") return;
+async function restartDsh(config, signal) {
+	assertMutationReadyConfig(config);
+	throwIfAborted(signal);
 	const env = controlledEnv(config);
 	await runFile(config.restart.screenBinary, [
 		"-S",
@@ -9000,7 +9219,8 @@ async function restartDsh(config) {
 	], {
 		env,
 		timeoutMs: 1e4,
-		allowFailure: true
+		allowFailure: true,
+		signal
 	});
 	const listeners = await runFile(config.restart.lsofBinary, [
 		"-nP",
@@ -9010,7 +9230,8 @@ async function restartDsh(config) {
 	], {
 		env,
 		timeoutMs: 1e4,
-		allowFailure: true
+		allowFailure: true,
+		signal
 	});
 	const pids = listeners.stdout.trim() === "" ? [] : listeners.stdout.trim().split(/\s+/).map((value) => Number(value));
 	if (pids.some((pid) => !Number.isSafeInteger(pid) || pid <= 0) || pids.length > 1) throw new AgentRuntimeError("restart-owner-ambiguous", "DSH restart found an ambiguous listener owner");
@@ -9023,7 +9244,8 @@ async function restartDsh(config) {
 			"command="
 		], {
 			env,
-			timeoutMs: 1e4
+			timeoutMs: 1e4,
+			signal
 		})).stdout.trim();
 		const hasWebToken = /(?:^|\s)web(?:\s|$)/.test(command);
 		const hasPort = command.includes("--port " + String(config.restart.port));
@@ -9034,7 +9256,10 @@ async function restartDsh(config) {
 			if (error.code !== "ESRCH") throw error;
 		}
 		const deadline = Date.now() + 5e3;
-		while (Date.now() < deadline && await processIsAlive(listenerPid)) await new Promise((resolve) => setTimeout(resolve, 100));
+		while (Date.now() < deadline && await processIsAlive(listenerPid)) {
+			throwIfAborted(signal);
+			await new Promise((resolve) => setTimeout(resolve, 100));
+		}
 		if (await processIsAlive(listenerPid)) try {
 			process.kill(listenerPid, "SIGKILL");
 		} catch (error) {
@@ -9057,44 +9282,54 @@ async function restartDsh(config) {
 		env,
 		timeoutMs: 1e4,
 		allowFailure: true,
-		ignoreOutput: true
+		ignoreOutput: true,
+		signal
 	})).code !== 0) throw new AgentRuntimeError("restart-failed", "DSH restart failed");
 }
-async function waitForHttp(url, timeoutMs) {
+async function waitForHttp(url, timeoutMs, signal) {
 	const deadline = Date.now() + timeoutMs;
 	while (Date.now() < deadline) {
+		throwIfAborted(signal);
 		try {
-			const response = await fetch(url, { signal: AbortSignal.timeout(Math.min(3e3, Math.max(1, deadline - Date.now()))) });
+			const timeout = AbortSignal.timeout(Math.min(3e3, Math.max(1, deadline - Date.now())));
+			const requestSignal = signal === void 0 ? timeout : AbortSignal.any([signal, timeout]);
+			const response = await fetch(url, { signal: requestSignal });
 			if (response.ok) return response;
 			response.status;
-		} catch (error) {}
+		} catch (error) {
+			throwIfAborted(signal);
+		}
 		await new Promise((resolve) => setTimeout(resolve, 350));
 	}
 	throw new AgentRuntimeError("health-timeout", "DSH health endpoint did not recover before timeout");
 }
-async function verifyHealth(config, plan) {
+async function verifyHealth(config, plan, signal) {
+	assertMutationReadyConfig(config);
 	await runFile(config.dshBinary, [
 		"--profile",
 		config.profile,
 		"--dump-config"
 	], {
 		env: controlledEnv(config),
-		timeoutMs: 2e4
+		timeoutMs: 2e4,
+		signal
 	});
 	if (plan !== void 0) {
 		const source = await readRegularOptional(join(profileDir(config), "package.json"));
 		if (source === null) throw new AgentRuntimeError("profile-missing", "DSH profile is missing after apply");
 		if (JSON.parse(source).dependencies?.[plan.pluginId] !== plan.exactToSpec) throw new AgentRuntimeError("profile-mismatch", "installed dependency does not match the approved plan");
 	}
-	if (config.health.url === void 0) return;
-	await waitForHttp(config.health.url, config.health.timeoutMs);
-	if (!config.health.requireFleetRpc) return;
+	await waitForHttp(config.health.url, config.health.timeoutMs, signal);
 	const endpoint = new URL("/dsh-fleet/status", config.health.url);
 	const deadline = Date.now() + config.health.timeoutMs;
 	let targetPending = plan !== void 0;
+	let runtimeFailed = false;
 	while (Date.now() < deadline) {
+		throwIfAborted(signal);
 		const rpcId = "fleet-agent-health-" + randomUUID();
 		try {
+			const timeout = AbortSignal.timeout(Math.min(3e3, Math.max(1, deadline - Date.now())));
+			const requestSignal = signal === void 0 ? timeout : AbortSignal.any([signal, timeout]);
 			const response = await fetch(endpoint, {
 				method: "POST",
 				headers: { "content-type": "application/json" },
@@ -9104,28 +9339,34 @@ async function verifyHealth(config, plan) {
 					method: "status",
 					payload: null
 				}),
-				signal: AbortSignal.timeout(Math.min(3e3, Math.max(1, deadline - Date.now())))
+				signal: requestSignal
 			});
 			if (response.ok) {
 				const body = await response.json();
-				const fleetHealthy = body.rpcId === rpcId && body.result?.ok === true && body.result.value?.summary?.failed === 0;
+				const failedModules = body.result?.value?.runtime?.failedModules;
+				runtimeFailed = Array.isArray(failedModules) && failedModules.length > 0;
+				const fleetHealthy = body.rpcId === rpcId && body.result?.ok === true && body.result.value?.summary?.failed === 0 && Array.isArray(failedModules) && failedModules.length === 0;
 				const target = plan === void 0 ? void 0 : body.result?.value?.plugins?.find((item) => item.id === plan.pluginId);
 				targetPending = plan !== void 0 && target?.state !== "aligned";
 				if (fleetHealthy && !targetPending) return;
 			}
-		} catch {}
+		} catch {
+			throwIfAborted(signal);
+		}
 		await new Promise((resolve) => setTimeout(resolve, 350));
 	}
+	if (runtimeFailed) throw new AgentRuntimeError("runtime-modules-failed", "DSH Loader reports failed runtime modules");
 	if (targetPending) throw new AgentRuntimeError("plugin-not-active", "approved plugin did not become active");
 	throw new AgentRuntimeError("fleet-rpc-unhealthy", "Fleet RPC reported an unhealthy runtime");
 }
 function installArgument(plan) {
 	return plan.pluginId + "@" + plan.exactToSpec;
 }
-async function applyPackage(config, plan) {
+async function applyPackage(config, plan, signal) {
 	await runFile(config.pnpmBinary, ["--version"], {
 		env: controlledEnv(config),
-		timeoutMs: 1e4
+		timeoutMs: 1e4,
+		signal
 	});
 	await runFile(config.dshBinary, [
 		"plugin",
@@ -9137,11 +9378,12 @@ async function applyPackage(config, plan) {
 		"--ignore-scripts"
 	], {
 		env: controlledEnv(config),
-		timeoutMs: 12e4
+		timeoutMs: 12e4,
+		signal
 	});
 }
-async function inspectAgent(config, now = /* @__PURE__ */ new Date()) {
-	const state = await loadState(config);
+async function inspectAgent(config, now = /* @__PURE__ */ new Date(), signal) {
+	const state = await loadState(config, signal);
 	const ids = [...new Set(state.manifest.plugins.map((plugin) => plugin.id))].sort();
 	const candidates = [];
 	for (const pluginId of ids) try {
@@ -9178,8 +9420,8 @@ async function inspectAgent(config, now = /* @__PURE__ */ new Date()) {
 		candidates
 	};
 }
-async function createStoredPlan(config, pluginId, now = /* @__PURE__ */ new Date()) {
-	const state = await loadState(config);
+async function createStoredPlan(config, pluginId, now = /* @__PURE__ */ new Date(), signal) {
+	const state = await loadState(config, signal);
 	const plan = createAgentPlan({
 		manifest: state.manifest,
 		manifestDigest: state.manifestDigest,
@@ -9205,34 +9447,43 @@ async function readAction(config, planId) {
 	return readJson(actionPath(config, planId));
 }
 async function recoverInterrupted(config, plan, record) {
-	let current = await saveAction(config, record, "rollback", { errorCode: "interrupted-action" });
+	let persistenceFailed = false;
+	let saved = await saveActionBestEffort(config, record, "rollback", { errorCode: "interrupted-action" });
+	let current = saved.record;
+	persistenceFailed ||= saved.failed;
 	try {
 		await restoreProfile(config, plan);
-		current = await saveAction(config, current, "rollback-restarting");
+		saved = await saveActionBestEffort(config, current, "rollback-restarting");
+		current = saved.record;
+		persistenceFailed ||= saved.failed;
 		await restartDsh(config);
-		current = await saveAction(config, current, "rollback-verifying");
+		saved = await saveActionBestEffort(config, current, "rollback-verifying");
+		current = saved.record;
+		persistenceFailed ||= saved.failed;
 		await verifyHealth(config);
-		current = await saveAction(config, current, "rolled-back", { result: "rolled-back" });
-		await audit(config, {
+		saved = await saveActionBestEffort(config, current, "rolled-back", { result: "rolled-back" });
+		current = saved.record;
+		persistenceFailed ||= saved.failed;
+		persistenceFailed ||= !await auditBestEffort(config, {
 			type: "capability/rolled-back",
 			planId: plan.planId,
 			result: "interrupted-action"
 		});
-		return current;
-	} catch {
-		current = await saveAction(config, current, "manual-intervention", {
-			result: "manual-intervention",
-			errorCode: "rollback-failed"
-		});
-		await audit(config, {
-			type: "capability/failed",
-			planId: plan.planId,
-			result: "manual-intervention"
-		});
-		return current;
-	}
+		if (!persistenceFailed) return current;
+	} catch {}
+	saved = await saveActionBestEffort(config, current, "manual-intervention", {
+		result: "manual-intervention",
+		errorCode: persistenceFailed ? "state-persistence-failed" : "rollback-failed"
+	});
+	current = saved.record;
+	await auditBestEffort(config, {
+		type: "capability/failed",
+		planId: plan.planId,
+		result: "manual-intervention"
+	});
+	return current;
 }
-async function applyStoredPlanLocked(config, approval, now) {
+async function applyStoredPlanLocked(config, approval, now, signal) {
 	const plan = await readJson(planPath(config, approval.planId));
 	if (plan === null) throw new AgentRuntimeError("plan-not-found", "approved plan was not found");
 	validateFleetPlan(plan);
@@ -9252,8 +9503,10 @@ async function applyStoredPlanLocked(config, approval, now) {
 		if (existing.state === "succeeded" || existing.state === "rolled-back" || existing.state === "manual-intervention") return existing;
 		return recoverInterrupted(config, plan, existing);
 	}
-	const currentState = await loadState(config);
+	const currentState = await loadState(config, signal);
 	if (currentState.manifestDigest !== plan.manifestDigest || currentState.profileHash !== plan.profileHash || currentState.dshVersion !== plan.observedDshVersion) throw new FleetProtocolError("approval-mismatch", "manifest, profile or DSH version changed after the plan was created");
+	await verifyHealth(config, void 0, signal);
+	throwIfAborted(signal);
 	const recordSeed = {
 		planId: plan.planId,
 		planDigest: plan.digest,
@@ -9267,72 +9520,103 @@ async function applyStoredPlanLocked(config, approval, now) {
 		state: "staged",
 		updatedAt: (/* @__PURE__ */ new Date()).toISOString()
 	};
+	throwIfAborted(signal);
+	await snapshotProfile(config, plan, currentState.profileSnapshot);
+	if (await computeProfileHash(config) !== plan.profileHash) throw new FleetProtocolError("approval-mismatch", "profile changed while the approved snapshot was being persisted");
+	let record = await saveAction(config, recordSeed, "staged");
 	await audit(config, {
 		type: "plan/approved",
 		planId: plan.planId,
 		approvalId: approval.approvalId,
 		principalId: approval.principalId
 	});
-	await snapshotProfile(config, plan);
-	let record = await saveAction(config, recordSeed, "staged");
 	try {
+		throwIfAborted(signal);
 		record = await saveAction(config, record, "applying");
-		await applyPackage(config, plan);
+		if (await computeProfileHash(config) !== plan.profileHash) throw new FleetProtocolError("approval-mismatch", "profile changed immediately before the approved mutation");
+		await applyPackage(config, plan, signal);
+		throwIfAborted(signal);
 		record = await saveAction(config, record, "restarting");
-		await restartDsh(config);
+		await restartDsh(config, signal);
+		throwIfAborted(signal);
 		record = await saveAction(config, record, "verifying");
-		await verifyHealth(config, plan);
-		record = await saveAction(config, record, "succeeded", { result: "success" });
+		await verifyHealth(config, plan, signal);
+		throwIfAborted(signal);
 		await audit(config, {
 			type: "capability/applied",
 			planId: plan.planId,
 			pluginId: plan.pluginId,
 			result: "success"
 		});
+		record = await saveAction(config, record, "succeeded", { result: "success" });
 		return record;
 	} catch (error) {
 		const errorCode = typeof error.code === "string" ? error.code : "apply-failed";
-		record = await saveAction(config, record, "rollback", { errorCode });
-		await audit(config, {
+		let persistenceFailed = false;
+		let saved = await saveActionBestEffort(config, record, "rollback", { errorCode });
+		record = saved.record;
+		persistenceFailed ||= saved.failed;
+		persistenceFailed ||= !await auditBestEffort(config, {
 			type: "capability/failed",
 			planId: plan.planId,
 			pluginId: plan.pluginId,
 			result: errorCode
 		});
-		try {
-			await restoreProfile(config, plan);
-			record = await saveAction(config, record, "rollback-restarting");
-			await restartDsh(config);
-			record = await saveAction(config, record, "rollback-verifying");
-			await verifyHealth(config);
-			record = await saveAction(config, record, "rolled-back", { result: "rolled-back" });
-			await audit(config, {
-				type: "capability/rolled-back",
-				planId: plan.planId,
-				result: errorCode
-			});
-			return record;
-		} catch {
-			record = await saveAction(config, record, "manual-intervention", {
+		if (errorCode === "command-cleanup-failed") {
+			saved = await saveActionBestEffort(config, record, "manual-intervention", {
 				result: "manual-intervention",
-				errorCode: "rollback-failed"
+				errorCode
 			});
-			await audit(config, {
+			record = saved.record;
+			await auditBestEffort(config, {
 				type: "capability/failed",
 				planId: plan.planId,
 				result: "manual-intervention"
 			});
 			return record;
 		}
+		try {
+			await restoreProfile(config, plan);
+			saved = await saveActionBestEffort(config, record, "rollback-restarting");
+			record = saved.record;
+			persistenceFailed ||= saved.failed;
+			await restartDsh(config);
+			saved = await saveActionBestEffort(config, record, "rollback-verifying");
+			record = saved.record;
+			persistenceFailed ||= saved.failed;
+			await verifyHealth(config);
+			saved = await saveActionBestEffort(config, record, "rolled-back", { result: "rolled-back" });
+			record = saved.record;
+			persistenceFailed ||= saved.failed;
+			persistenceFailed ||= !await auditBestEffort(config, {
+				type: "capability/rolled-back",
+				planId: plan.planId,
+				result: errorCode
+			});
+			if (!persistenceFailed) return record;
+		} catch {}
+		saved = await saveActionBestEffort(config, record, "manual-intervention", {
+			result: "manual-intervention",
+			errorCode: persistenceFailed ? "state-persistence-failed" : "rollback-failed"
+		});
+		record = saved.record;
+		await auditBestEffort(config, {
+			type: "capability/failed",
+			planId: plan.planId,
+			result: "manual-intervention"
+		});
+		return record;
 	}
 }
-async function applyStoredPlan(config, approval, now = /* @__PURE__ */ new Date()) {
-	return withProfileLock(config, () => applyStoredPlanLocked(config, approval, now));
+async function applyStoredPlan(config, approval, now = /* @__PURE__ */ new Date(), signal) {
+	assertMutationReadyConfig(config);
+	return withProfileLock(config, () => applyStoredPlanLocked(config, approval, now, signal));
 }
 async function readOrRecoverAction(config, planId) {
 	return withProfileLock(config, async () => {
 		const record = await readAction(config, planId);
 		if (record === null || record.state === "succeeded" || record.state === "rolled-back" || record.state === "manual-intervention") return record;
+		assertMutationReadyConfig(config);
 		const plan = await readJson(planPath(config, planId));
 		if (plan === null) throw new AgentRuntimeError("plan-not-found", "approved plan was not found");
 		validateFleetPlan(plan);
@@ -9353,15 +9637,32 @@ function safeRuntimeError(error) {
 			"approval-expired": "approval has expired",
 			"command-failed": "controlled DSH command failed",
 			"command-timeout": "controlled DSH command exceeded its timeout",
+			"command-output-limit": "controlled DSH command exceeded its output limit",
+			"command-descendant-leak": "controlled command left a background descendant; the profile was rolled back",
+			"command-cleanup-failed": "controlled command process cleanup failed; manual intervention is required",
+			"agent-shutdown": "fleet agent shutdown interrupted the action",
 			"agent-busy": "another fleet action is already running for this profile",
+			"unsafe-mutation-config": "mutation requires restart and loopback Fleet RPC health verification",
 			"health-timeout": "DSH did not become healthy before timeout",
-			"plugin-not-active": "plugin did not become active; profile was rolled back"
+			"plugin-not-active": "plugin did not become active; profile was rolled back",
+			"runtime-modules-failed": "DSH runtime has failed modules; profile was rolled back"
 		}[code] ?? "fleet agent request failed"
 	};
 }
 //#endregion
 //#region src/agent/cli.ts
 const MAX_INPUT_BYTES = 65536;
+const shutdown = new AbortController();
+let receivedSignal;
+function beginShutdown(signal) {
+	if (receivedSignal !== void 0) return;
+	receivedSignal = signal;
+	shutdown.abort(/* @__PURE__ */ new Error("fleet agent received " + signal));
+}
+const onSigint = () => beginShutdown("SIGINT");
+const onSigterm = () => beginShutdown("SIGTERM");
+process.on("SIGINT", onSigint);
+process.on("SIGTERM", onSigterm);
 function isRecord(value) {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -9406,15 +9707,15 @@ async function dispatch() {
 	const payload = await readStdin();
 	if (command === "inspect") {
 		if (payload !== null && (isRecord(payload) ? Object.keys(payload).length !== 0 : true)) throw Object.assign(/* @__PURE__ */ new Error("inspect payload must be empty"), { code: "invalid-payload" });
-		return inspectAgent(config);
+		return inspectAgent(config, /* @__PURE__ */ new Date(), shutdown.signal);
 	}
-	if (command === "plan") return createStoredPlan(config, stringField(exactObject(payload, ["pluginId"], "plan payload").pluginId, "pluginId"));
+	if (command === "plan") return createStoredPlan(config, stringField(exactObject(payload, ["pluginId"], "plan payload").pluginId, "pluginId"), /* @__PURE__ */ new Date(), shutdown.signal);
 	if (command === "status") {
 		const action = await readOrRecoverAction(config, stringField(exactObject(payload, ["planId"], "status payload").planId, "planId"));
 		if (action === null) throw Object.assign(/* @__PURE__ */ new Error("action not found"), { code: "action-not-found" });
 		return action;
 	}
-	return applyStoredPlan(config, exactObject(payload, ["approval"], "apply payload").approval);
+	return applyStoredPlan(config, exactObject(payload, ["approval"], "apply payload").approval, /* @__PURE__ */ new Date(), shutdown.signal);
 }
 try {
 	const value = await dispatch();
@@ -9427,6 +9728,11 @@ try {
 		ok: false,
 		error: safeRuntimeError(error)
 	}) + "\n");
+} finally {
+	process.off("SIGINT", onSigint);
+	process.off("SIGTERM", onSigterm);
+	if (receivedSignal === "SIGINT") process.exitCode = 130;
+	if (receivedSignal === "SIGTERM") process.exitCode = 143;
 }
 //#endregion
 export {};

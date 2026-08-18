@@ -24,6 +24,8 @@
     "cordis.patch.yml",
     "README.md",
     "CHANGELOG.md",
+    "SECURITY.md",
+    "THIRD_PARTY_NOTICES.md",
     "LICENSE",
     "examples/fleet.lock.yaml",
     "examples/agent.config.json"
@@ -46,7 +48,10 @@
     "build": "node ./scripts/build.mjs",
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run",
-    "check": "npm run typecheck && npm run test && npm run build",
+    "check:generated": "node ./scripts/check-generated.mjs",
+    "check:repository": "node ./scripts/repository-check.mjs",
+    "check": "npm run typecheck && npm run test && npm run check:generated && npm run check:repository",
+    "release:check": "npm run check && pnpm audit --prod --audit-level=high && npm pack --dry-run --ignore-scripts",
     "prepack": "npm run check"
   },
   "keywords": [
@@ -67,6 +72,10 @@
     "url": "https://github.com/ruby1304/dsh-fleet/issues"
   },
   "homepage": "https://github.com/ruby1304/dsh-fleet#readme",
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "packageManager": "pnpm@11.22.0",
   "engines": {
     "node": ">=22"

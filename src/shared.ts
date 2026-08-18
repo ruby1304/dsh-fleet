@@ -84,6 +84,9 @@ export interface FleetStatus {
     teamId?: string
     error?: string
   }
+  runtime: {
+    failedModules: string[]
+  }
   summary: FleetSummary
   plugins: PluginStatus[]
   unmanaged: Array<{ id: string; actualSpec: string }>

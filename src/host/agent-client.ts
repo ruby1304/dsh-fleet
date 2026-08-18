@@ -1,6 +1,12 @@
 import { spawn } from 'node:child_process'
 import { isAbsolute, normalize } from 'node:path'
 
+const MAX_OUTPUT_BYTES = 1024 * 1024
+const NON_MUTATION_TERMINATION_GRACE_MS = 30_000
+// The Agent may use shutdown to durably reach a recoverable mutation state.
+const MUTATION_TERMINATION_GRACE_MS = 10 * 60_000
+const LOCAL_GROUP_DRAIN_MS = 2_000
+
 export type AgentTransport = 'local' | 'ssh'
 export type AgentCommand = 'inspect' | 'plan' | 'apply' | 'status'
 
@@ -31,6 +37,20 @@ export class AgentClientError extends Error {
     this.name = 'AgentClientError'
     this.code = code
   }
+}
+
+interface AgentCallOptions {
+  terminationGraceMs?: number
+}
+
+type StopReason = 'cancelled' | 'timeout' | 'output-limit'
+
+function isMutationCommand(command: AgentCommand): boolean {
+  return command === 'apply' || command === 'status'
+}
+
+export function agentTerminationGraceMs(command: AgentCommand): number {
+  return isMutationCommand(command) ? MUTATION_TERMINATION_GRACE_MS : NON_MUTATION_TERMINATION_GRACE_MS
 }
 
 function safePath(value: string, field: string): string {
@@ -96,51 +116,155 @@ function safeAgentError(value: unknown): AgentClientError {
   return new AgentClientError(code, messages[code] ?? 'fleet agent rejected the request')
 }
 
-export function callAgent<T>(targetInput: AgentTargetConfig, command: AgentCommand, payload: unknown, timeoutMs: number, signal?: AbortSignal): Promise<T> {
+export function interruptedAgentError(
+  command: AgentCommand,
+  reason: StopReason,
+  terminationUnknown: boolean,
+  mutationMayHaveStarted = true,
+): AgentClientError {
+  if (isMutationCommand(command) && mutationMayHaveStarted) {
+    return new AgentClientError(
+      'agent-mutation-unknown',
+      'fleet mutation state is unknown; recover it with action-status before continuing',
+    )
+  }
+  if (terminationUnknown) {
+    return new AgentClientError(
+      'agent-termination-unknown',
+      'fleet agent process-group termination could not be confirmed',
+    )
+  }
+  if (reason === 'cancelled') return new AgentClientError('cancelled', 'fleet agent request was cancelled')
+  if (reason === 'timeout') return new AgentClientError('agent-timeout', 'fleet agent did not answer before the timeout')
+  return new AgentClientError('agent-output-limit', 'fleet agent exceeded the output limit')
+}
+
+export function callAgent<T>(
+  targetInput: AgentTargetConfig,
+  command: AgentCommand,
+  payload: unknown,
+  timeoutMs: number,
+  signal?: AbortSignal,
+  options: AgentCallOptions = {},
+): Promise<T> {
   const target = validateAgentTarget(targetInput)
   const invocation = childInvocation(target, command)
+  const terminationGraceMs = options.terminationGraceMs ?? agentTerminationGraceMs(command)
+  if (!Number.isSafeInteger(terminationGraceMs) || terminationGraceMs < 0) {
+    throw new TypeError('terminationGraceMs must be a non-negative safe integer')
+  }
+  const request = JSON.stringify(payload) + '\n'
   return new Promise((resolve, reject) => {
-    if (signal?.aborted === true) {
+    const isAborted = () => signal?.aborted === true
+    if (isAborted()) {
       reject(new AgentClientError('cancelled', 'fleet agent request was cancelled'))
       return
     }
+    const grouped = target.transport === 'local' && process.platform !== 'win32'
     const child = spawn(invocation.file, invocation.args, {
       stdio: ['pipe', 'pipe', 'pipe'],
       shell: false,
+      detached: grouped,
       env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
     })
     let stdout = ''
+    let stdoutBytes = 0
     let stderrBytes = 0
     let settled = false
+    let stopReason: StopReason | undefined
+    let terminationUnknown = false
+    let transportFailed = false
+    let forceTimer: NodeJS.Timeout | undefined
+    let timer: NodeJS.Timeout | undefined
+    const killTransport = (killSignal: NodeJS.Signals) => {
+      try {
+        if (grouped && child.pid !== undefined) process.kill(-child.pid, killSignal)
+        else child.kill(killSignal)
+      } catch (error: unknown) {
+        if ((error as NodeJS.ErrnoException).code !== 'ESRCH') {
+          try {
+            child.kill(killSignal)
+          } catch {
+            // The close/error event remains the source of truth for process completion.
+          }
+        }
+      }
+    }
+    const localGroupExists = () => {
+      if (!grouped || child.pid === undefined) return false
+      try {
+        process.kill(-child.pid, 0)
+        return true
+      } catch (error: unknown) {
+        return (error as NodeJS.ErrnoException).code !== 'ESRCH'
+      }
+    }
+    const stopLocalGroup = async () => {
+      if (!localGroupExists()) return
+      killTransport('SIGKILL')
+      const deadline = Date.now() + LOCAL_GROUP_DRAIN_MS
+      while (localGroupExists() && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10))
+      terminationUnknown = localGroupExists()
+    }
     const finish = (action: () => void) => {
       if (settled) return
       settled = true
-      clearTimeout(timer)
+      if (timer !== undefined) clearTimeout(timer)
+      if (forceTimer !== undefined) clearTimeout(forceTimer)
       signal?.removeEventListener('abort', abort)
       action()
     }
-    const abort = () => {
-      child.kill('SIGTERM')
-      finish(() => reject(new AgentClientError('cancelled', 'fleet agent request was cancelled')))
+    const stop = (reason: StopReason) => {
+      if (settled || stopReason !== undefined) return
+      stopReason = reason
+      if (timer !== undefined) clearTimeout(timer)
+      signal?.removeEventListener('abort', abort)
+      child.stdin.destroy()
+      killTransport('SIGTERM')
+      forceTimer = setTimeout(() => {
+        killTransport('SIGKILL')
+      }, terminationGraceMs)
+      forceTimer.unref()
     }
-    const timer = setTimeout(() => {
-      child.kill('SIGTERM')
-      finish(() => reject(new AgentClientError('agent-timeout', 'fleet agent did not answer before the timeout')))
-    }, timeoutMs)
+    const abort = () => stop('cancelled')
+    timer = setTimeout(() => stop('timeout'), timeoutMs)
     timer.unref()
     signal?.addEventListener('abort', abort, { once: true })
-    child.once('error', () => finish(() => reject(new AgentClientError('agent-unavailable', 'fleet agent transport is unavailable'))))
+    if (isAborted()) abort()
+    child.once('error', () => {
+      transportFailed = true
+      if (child.pid === undefined) {
+        finish(() => reject(stopReason === undefined
+          ? new AgentClientError('agent-unavailable', 'fleet agent transport is unavailable')
+          : interruptedAgentError(command, stopReason, false, false)))
+      }
+    })
     child.stdout.setEncoding('utf8')
     child.stdout.on('data', (chunk: string) => {
-      if (stdout.length <= 1024 * 1024) stdout += chunk
-      if (stdout.length > 1024 * 1024) child.kill('SIGTERM')
+      if (stopReason !== undefined) return
+      stdoutBytes += Buffer.byteLength(chunk)
+      if (stdoutBytes > MAX_OUTPUT_BYTES) {
+        stop('output-limit')
+        return
+      }
+      stdout += chunk
     })
     child.stderr.on('data', (chunk: Buffer) => {
+      if (stopReason !== undefined) return
       stderrBytes += chunk.length
-      if (stderrBytes > 1024 * 1024) child.kill('SIGTERM')
+      if (stderrBytes > MAX_OUTPUT_BYTES) stop('output-limit')
     })
-    child.once('close', code => {
+    child.once('close', async code => {
+      if (stopReason !== undefined) await stopLocalGroup()
       finish(() => {
+        if (stopReason !== undefined) {
+          reject(interruptedAgentError(command, stopReason, terminationUnknown))
+          return
+        }
+        if (transportFailed) {
+          reject(new AgentClientError('agent-unavailable', 'fleet agent transport is unavailable'))
+          return
+        }
         if (code !== 0) {
           reject(new AgentClientError('agent-failed', 'fleet agent command failed'))
           return
@@ -167,7 +291,10 @@ export function callAgent<T>(targetInput: AgentTargetConfig, command: AgentComma
         resolve(response.value as T)
       })
     })
-    child.stdin.end(JSON.stringify(payload) + '\n')
+    child.stdin.on('error', () => {
+      // A child may close stdin before reading the request; close/error handles the outcome.
+    })
+    if (stopReason === undefined) child.stdin.end(request)
   })
 }
 

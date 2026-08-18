@@ -65,7 +65,7 @@ window.__ModuleLoader__.load({
 			return result.value;
 		}
 		function isFleetStatus(value) {
-			return isRecord(value) && isRecord(value.device) && isRecord(value.summary) && Array.isArray(value.plugins);
+			return isRecord(value) && isRecord(value.device) && isRecord(value.runtime) && Array.isArray(value.runtime.failedModules) && value.runtime.failedModules.every((item) => typeof item === "string") && isRecord(value.summary) && Array.isArray(value.plugins);
 		}
 		function isFleetUpdates(value) {
 			return isRecord(value) && typeof value.enabled === "boolean" && typeof value.cached === "boolean" && typeof value.stale === "boolean";
@@ -307,7 +307,17 @@ window.__ModuleLoader__.load({
 						" · 失败 ",
 						status.summary.failed,
 						" · 未管理 ",
-						status.summary.unmanaged
+						status.summary.unmanaged,
+						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("br", {}),
+						/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
+							title: status.runtime.failedModules.join(", "),
+							style: { color: status.runtime.failedModules.length > 0 ? SM.bad : SM.fg2 },
+							children: [
+								"Loader 失败 ",
+								status.runtime.failedModules.length,
+								status.runtime.failedModules.length > 0 ? ` · ${status.runtime.failedModules.join(", ")}` : ""
+							]
+						})
 					]
 				}),
 				/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
@@ -1092,8 +1102,13 @@ window.__ModuleLoader__.load({
 			const driftIssues = (0, react.useMemo)(() => status === null ? 0 : status.summary.missing + status.summary.drifted + status.summary.failed + status.summary.unmanaged, [status]);
 			const availableUpdates = updates?.snapshot?.summary.available ?? 0;
 			const updateFailures = updates?.snapshot?.summary.errors ?? 0;
-			const tone = statusError !== null || status?.manifest.loaded === false || (status?.summary.failed ?? 0) > 0 || updateError !== null || updateFailures > 0 || agentError !== null || agentAction?.state === "manual-intervention" ? SM.bad : driftIssues > 0 || availableUpdates > 0 || updates?.stale === true ? SM.warn : status === null ? SM.fg3 : SM.good;
-			const closedText = status === null ? statusError === null ? "载入中…" : "状态获取失败" : [driftIssues === 0 ? "一致" : `${driftIssues} 项差异`, updateError !== null || updateFailures > 0 ? "更新检查失败" : availableUpdates > 0 ? `${availableUpdates} 个更新` : void 0].filter((value) => value !== void 0).join(" · ");
+			const runtimeFailures = status?.runtime.failedModules.length ?? 0;
+			const tone = statusError !== null || status?.manifest.loaded === false || (status?.summary.failed ?? 0) > 0 || runtimeFailures > 0 || updateError !== null || updateFailures > 0 || agentError !== null || agentAction?.state === "manual-intervention" ? SM.bad : driftIssues > 0 || availableUpdates > 0 || updates?.stale === true ? SM.warn : status === null ? SM.fg3 : SM.good;
+			const closedText = status === null ? statusError === null ? "载入中…" : "状态获取失败" : [
+				driftIssues === 0 && runtimeFailures === 0 ? "一致" : driftIssues > 0 ? `${driftIssues} 项差异` : void 0,
+				runtimeFailures > 0 ? `Loader ${runtimeFailures} 失败` : void 0,
+				updateError !== null || updateFailures > 0 ? "更新检查失败" : availableUpdates > 0 ? `${availableUpdates} 个更新` : void 0
+			].filter((value) => value !== void 0).join(" · ");
 			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 				style: {
 					position: "fixed",

@@ -5,6 +5,19 @@ import { applyStoredPlan, createStoredPlan, inspectAgent, readOrRecoverAction, s
 import type { FleetPlanApproval } from './protocol.ts'
 
 const MAX_INPUT_BYTES = 64 * 1024
+const shutdown = new AbortController()
+let receivedSignal: 'SIGINT' | 'SIGTERM' | undefined
+
+function beginShutdown(signal: 'SIGINT' | 'SIGTERM'): void {
+  if (receivedSignal !== undefined) return
+  receivedSignal = signal
+  shutdown.abort(new Error('fleet agent received ' + signal))
+}
+
+const onSigint = () => beginShutdown('SIGINT')
+const onSigterm = () => beginShutdown('SIGTERM')
+process.on('SIGINT', onSigint)
+process.on('SIGTERM', onSigterm)
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -64,11 +77,11 @@ async function dispatch(): Promise<unknown> {
     if (payload !== null && (isRecord(payload) ? Object.keys(payload).length !== 0 : true)) {
       throw Object.assign(new Error('inspect payload must be empty'), { code: 'invalid-payload' })
     }
-    return inspectAgent(config)
+    return inspectAgent(config, new Date(), shutdown.signal)
   }
   if (command === 'plan') {
     const body = exactObject(payload, ['pluginId'], 'plan payload')
-    return createStoredPlan(config, stringField(body.pluginId, 'pluginId'))
+    return createStoredPlan(config, stringField(body.pluginId, 'pluginId'), new Date(), shutdown.signal)
   }
   if (command === 'status') {
     const body = exactObject(payload, ['planId'], 'status payload')
@@ -77,7 +90,7 @@ async function dispatch(): Promise<unknown> {
     return action
   }
   const body = exactObject(payload, ['approval'], 'apply payload')
-  return applyStoredPlan(config, body.approval as FleetPlanApproval)
+  return applyStoredPlan(config, body.approval as FleetPlanApproval, new Date(), shutdown.signal)
 }
 
 try {
@@ -85,4 +98,9 @@ try {
   process.stdout.write(JSON.stringify({ ok: true, value }) + '\n')
 } catch (error: unknown) {
   process.stdout.write(JSON.stringify({ ok: false, error: safeRuntimeError(error) }) + '\n')
+} finally {
+  process.off('SIGINT', onSigint)
+  process.off('SIGTERM', onSigterm)
+  if (receivedSignal === 'SIGINT') process.exitCode = 130
+  if (receivedSignal === 'SIGTERM') process.exitCode = 143
 }

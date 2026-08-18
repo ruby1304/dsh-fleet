@@ -6,11 +6,11 @@ team:
   id: example-team
 devices:
   m5:
-    assignedTo: ruby
+    assignedTo: owner
     class: portable-control
     channel: dev
   m3:
-    assignedTo: ruby
+    assignedTo: owner
     class: always-on-worker
     channel: stable
 plugins:

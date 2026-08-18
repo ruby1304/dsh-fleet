@@ -142,6 +142,7 @@ const EMPTY_MANIFEST: FleetManifest = {
 export async function collectFleetStatus(ctx: Pick<HostContext, 'loader'>, configInput?: Config): Promise<FleetStatus> {
   const config = resolveConfig(configInput)
   const profilePath = join(config.dshHome, 'profiles', config.profile, 'package.json')
+  const runtime = runtimeSnapshot(ctx.loader)
   let manifest = EMPTY_MANIFEST
   let manifestLoaded = false
   let manifestError: string | undefined
@@ -167,7 +168,7 @@ export async function collectFleetStatus(ctx: Pick<HostContext, 'loader'>, confi
     profile: config.profile,
     dependencies,
     bundles,
-    runtime: runtimeSnapshot(ctx.loader),
+    runtime,
   })
   const deviceSpec = result.device
   return {
@@ -188,6 +189,11 @@ export async function collectFleetStatus(ctx: Pick<HostContext, 'loader'>, confi
       loaded: manifestLoaded,
       ...(manifestLoaded ? { teamId: manifest.team.id } : {}),
       ...(manifestError === undefined ? {} : { error: manifestError }),
+    },
+    runtime: {
+      failedModules: [...new Set(runtime
+        .filter(entry => entry.enabled && entry.fiberPhase === 'failed')
+        .map(entry => entry.moduleName))].sort(),
     },
     summary: result.summary,
     plugins: result.plugins,

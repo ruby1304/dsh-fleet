@@ -1,12 +1,12 @@
 {
   "schemaVersion": 1,
-  "deviceId": "m3-worker",
-  "manifestPath": "/Users/you/dev/dsh-fleet/examples/fleet.lock.yaml",
-  "dshHome": "/Users/you/.dsh",
-  "dshBinary": "/Users/you/.npm-global/bin/dsh",
-  "pnpmBinary": "/Users/you/.local/bin/pnpm",
+  "deviceId": "worker",
+  "manifestPath": "/Users/example/.config/dsh-fleet/fleet.lock.yaml",
+  "dshHome": "/Users/example/.dsh",
+  "dshBinary": "/Users/example/.local/share/dsh-runtime/current/bin/dsh",
+  "pnpmBinary": "/Users/example/.local/bin/pnpm",
   "profile": "web",
-  "stateDir": "/Users/you/.dsh/fleet-agent",
+  "stateDir": "/Users/example/.local/state/dsh-fleet/web",
   "planTtlMs": 300000,
   "restart": {
     "kind": "screen",
@@ -14,7 +14,7 @@
     "lsofBinary": "/usr/sbin/lsof",
     "psBinary": "/bin/ps",
     "ownerMarkers": ["@deepseek-ai/dsh/lib/bin.js"],
-    "sessionName": "dsh-web-m3",
+    "sessionName": "dsh-web-worker",
     "host": "127.0.0.1",
     "port": 3211
   },

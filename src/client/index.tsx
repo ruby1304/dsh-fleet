@@ -70,7 +70,9 @@ function rpcValue<T>(result: RpcResult<unknown>, guard: (value: unknown) => valu
 }
 
 function isFleetStatus(value: unknown): value is FleetStatus {
-  return isRecord(value) && isRecord(value.device) && isRecord(value.summary) && Array.isArray(value.plugins)
+  return isRecord(value) && isRecord(value.device) && isRecord(value.runtime) &&
+    Array.isArray(value.runtime.failedModules) && value.runtime.failedModules.every(item => typeof item === 'string') &&
+    isRecord(value.summary) && Array.isArray(value.plugins)
 }
 
 function isFleetUpdates(value: unknown): value is FleetUpdates {
@@ -221,7 +223,10 @@ function StatusView({ status, error }: { status: FleetStatus | null; error: stri
       color: SM.fg2, fontFamily: SM.fontMono, fontVariantNumeric: 'tabular-nums', lineHeight: 1.65,
     }}>
       期望 {status.summary.desired} · 一致 {status.summary.aligned} · 缺失 {status.summary.missing}<br />
-      漂移 {status.summary.drifted} · 失败 {status.summary.failed} · 未管理 {status.summary.unmanaged}
+      漂移 {status.summary.drifted} · 失败 {status.summary.failed} · 未管理 {status.summary.unmanaged}<br />
+      <span title={status.runtime.failedModules.join(', ')} style={{ color: status.runtime.failedModules.length > 0 ? SM.bad : SM.fg2 }}>
+        Loader 失败 {status.runtime.failedModules.length}{status.runtime.failedModules.length > 0 ? ` · ${status.runtime.failedModules.join(', ')}` : ''}
+      </span>
     </div>
     <div style={{ margin: '0 12px 12px', borderRadius: 12, background: SM.panel, overflow: 'hidden' }}>
       {status.plugins.map(plugin => <div key={plugin.id} style={{
@@ -585,7 +590,8 @@ export function FleetCard({ ctx }: { ctx: ClientContextLike }): React.ReactEleme
   [status])
   const availableUpdates = updates?.snapshot?.summary.available ?? 0
   const updateFailures = updates?.snapshot?.summary.errors ?? 0
-  const tone = statusError !== null || status?.manifest.loaded === false || (status?.summary.failed ?? 0) > 0 || updateError !== null || updateFailures > 0 || agentError !== null || agentAction?.state === 'manual-intervention'
+  const runtimeFailures = status?.runtime.failedModules.length ?? 0
+  const tone = statusError !== null || status?.manifest.loaded === false || (status?.summary.failed ?? 0) > 0 || runtimeFailures > 0 || updateError !== null || updateFailures > 0 || agentError !== null || agentAction?.state === 'manual-intervention'
     ? SM.bad
     : driftIssues > 0 || availableUpdates > 0 || updates?.stale === true
       ? SM.warn
@@ -593,7 +599,8 @@ export function FleetCard({ ctx }: { ctx: ClientContextLike }): React.ReactEleme
   const closedText = status === null
     ? (statusError === null ? '载入中…' : '状态获取失败')
     : [
-        driftIssues === 0 ? '一致' : `${driftIssues} 项差异`,
+        driftIssues === 0 && runtimeFailures === 0 ? '一致' : driftIssues > 0 ? `${driftIssues} 项差异` : undefined,
+        runtimeFailures > 0 ? `Loader ${runtimeFailures} 失败` : undefined,
         updateError !== null || updateFailures > 0
           ? '更新检查失败'
           : availableUpdates > 0 ? `${availableUpdates} 个更新` : undefined,

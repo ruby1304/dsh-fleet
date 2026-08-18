@@ -38,6 +38,11 @@ export interface FleetAgentConfig {
   health: AgentHealthConfig
 }
 
+export interface MutationReadyFleetAgentConfig extends FleetAgentConfig {
+  restart: AgentRestartScreen
+  health: AgentHealthConfig & { url: string; requireFleetRpc: true }
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
@@ -139,6 +144,34 @@ export function parseAgentConfig(value: unknown): FleetAgentConfig {
     planTtlMs: boundedInt(value.planTtlMs, 'planTtlMs', 10 * 60 * 1000, 60_000, 60 * 60 * 1000),
     restart: parseRestart(value.restart),
     health: parseHealth(value.health),
+  }
+}
+
+function mutationConfigError(message: string): TypeError & { code: string } {
+  return Object.assign(new TypeError(message), { code: 'unsafe-mutation-config' })
+}
+
+export function assertMutationReadyConfig(config: FleetAgentConfig): asserts config is MutationReadyFleetAgentConfig {
+  if (config.restart.kind === 'none') {
+    throw mutationConfigError('mutation requires a configured DSH restart')
+  }
+  if (config.health.url === undefined || config.health.requireFleetRpc !== true) {
+    throw mutationConfigError('mutation requires a loopback health URL with Fleet RPC verification')
+  }
+  let health: URL
+  try {
+    health = new URL(config.health.url)
+  } catch {
+    throw mutationConfigError('mutation health URL is invalid')
+  }
+  if (health.protocol !== 'http:' ||
+      (health.hostname !== '127.0.0.1' && health.hostname !== 'localhost' && health.hostname !== '[::1]') ||
+      health.username !== '' || health.password !== '') {
+    throw mutationConfigError('mutation health URL must be credential-free loopback HTTP')
+  }
+  const healthPort = health.port === '' ? 80 : Number(health.port)
+  if (healthPort !== config.restart.port) {
+    throw mutationConfigError('mutation health URL must verify the configured restart port')
   }
 }
 

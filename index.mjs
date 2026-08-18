@@ -7,6 +7,10 @@ import { gt, valid, validRange } from "semver";
 import { parse } from "yaml";
 //#endregion
 //#region src/host/agent-client.ts
+const MAX_OUTPUT_BYTES = 1048576;
+const NON_MUTATION_TERMINATION_GRACE_MS = 3e4;
+const MUTATION_TERMINATION_GRACE_MS = 6e5;
+const LOCAL_GROUP_DRAIN_MS = 2e3;
 function isRecord$1(value) {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -18,6 +22,12 @@ var AgentClientError = class extends Error {
 		this.code = code;
 	}
 };
+function isMutationCommand(command) {
+	return command === "apply" || command === "status";
+}
+function agentTerminationGraceMs(command) {
+	return isMutationCommand(command) ? MUTATION_TERMINATION_GRACE_MS : NON_MUTATION_TERMINATION_GRACE_MS;
+}
 function safePath(value, field) {
 	if (!isAbsolute(value) || normalize(value) !== value || !/^\/[A-Za-z0-9._/-]+$/.test(value)) throw new TypeError(field + " must be a normalized absolute path without shell metacharacters");
 	return value;
@@ -85,13 +95,26 @@ function safeAgentError(value) {
 	const code = typeof candidate === "string" && Object.hasOwn(messages, candidate) ? candidate : "agent-rejected";
 	return new AgentClientError(code, messages[code] ?? "fleet agent rejected the request");
 }
-function callAgent(targetInput, command, payload, timeoutMs, signal) {
-	const invocation = childInvocation(validateAgentTarget(targetInput), command);
+function interruptedAgentError(command, reason, terminationUnknown, mutationMayHaveStarted = true) {
+	if (isMutationCommand(command) && mutationMayHaveStarted) return new AgentClientError("agent-mutation-unknown", "fleet mutation state is unknown; recover it with action-status before continuing");
+	if (terminationUnknown) return new AgentClientError("agent-termination-unknown", "fleet agent process-group termination could not be confirmed");
+	if (reason === "cancelled") return new AgentClientError("cancelled", "fleet agent request was cancelled");
+	if (reason === "timeout") return new AgentClientError("agent-timeout", "fleet agent did not answer before the timeout");
+	return new AgentClientError("agent-output-limit", "fleet agent exceeded the output limit");
+}
+function callAgent(targetInput, command, payload, timeoutMs, signal, options = {}) {
+	const target = validateAgentTarget(targetInput);
+	const invocation = childInvocation(target, command);
+	const terminationGraceMs = options.terminationGraceMs ?? agentTerminationGraceMs(command);
+	if (!Number.isSafeInteger(terminationGraceMs) || terminationGraceMs < 0) throw new TypeError("terminationGraceMs must be a non-negative safe integer");
+	const request = JSON.stringify(payload) + "\n";
 	return new Promise((resolve, reject) => {
-		if (signal?.aborted === true) {
+		const isAborted = () => signal?.aborted === true;
+		if (isAborted()) {
 			reject(new AgentClientError("cancelled", "fleet agent request was cancelled"));
 			return;
 		}
+		const grouped = target.transport === "local" && process.platform !== "win32";
 		const child = spawn(invocation.file, invocation.args, {
 			stdio: [
 				"pipe",
@@ -99,43 +122,102 @@ function callAgent(targetInput, command, payload, timeoutMs, signal) {
 				"pipe"
 			],
 			shell: false,
+			detached: grouped,
 			env: {
 				...process.env,
 				GIT_TERMINAL_PROMPT: "0"
 			}
 		});
 		let stdout = "";
+		let stdoutBytes = 0;
 		let stderrBytes = 0;
 		let settled = false;
+		let stopReason;
+		let terminationUnknown = false;
+		let transportFailed = false;
+		let forceTimer;
+		let timer;
+		const killTransport = (killSignal) => {
+			try {
+				if (grouped && child.pid !== void 0) process.kill(-child.pid, killSignal);
+				else child.kill(killSignal);
+			} catch (error) {
+				if (error.code !== "ESRCH") try {
+					child.kill(killSignal);
+				} catch {}
+			}
+		};
+		const localGroupExists = () => {
+			if (!grouped || child.pid === void 0) return false;
+			try {
+				process.kill(-child.pid, 0);
+				return true;
+			} catch (error) {
+				return error.code !== "ESRCH";
+			}
+		};
+		const stopLocalGroup = async () => {
+			if (!localGroupExists()) return;
+			killTransport("SIGKILL");
+			const deadline = Date.now() + LOCAL_GROUP_DRAIN_MS;
+			while (localGroupExists() && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 10));
+			terminationUnknown = localGroupExists();
+		};
 		const finish = (action) => {
 			if (settled) return;
 			settled = true;
-			clearTimeout(timer);
+			if (timer !== void 0) clearTimeout(timer);
+			if (forceTimer !== void 0) clearTimeout(forceTimer);
 			signal?.removeEventListener("abort", abort);
 			action();
 		};
-		const abort = () => {
-			child.kill("SIGTERM");
-			finish(() => reject(new AgentClientError("cancelled", "fleet agent request was cancelled")));
+		const stop = (reason) => {
+			if (settled || stopReason !== void 0) return;
+			stopReason = reason;
+			if (timer !== void 0) clearTimeout(timer);
+			signal?.removeEventListener("abort", abort);
+			child.stdin.destroy();
+			killTransport("SIGTERM");
+			forceTimer = setTimeout(() => {
+				killTransport("SIGKILL");
+			}, terminationGraceMs);
+			forceTimer.unref();
 		};
-		const timer = setTimeout(() => {
-			child.kill("SIGTERM");
-			finish(() => reject(new AgentClientError("agent-timeout", "fleet agent did not answer before the timeout")));
-		}, timeoutMs);
+		const abort = () => stop("cancelled");
+		timer = setTimeout(() => stop("timeout"), timeoutMs);
 		timer.unref();
 		signal?.addEventListener("abort", abort, { once: true });
-		child.once("error", () => finish(() => reject(new AgentClientError("agent-unavailable", "fleet agent transport is unavailable"))));
+		if (isAborted()) abort();
+		child.once("error", () => {
+			transportFailed = true;
+			if (child.pid === void 0) finish(() => reject(stopReason === void 0 ? new AgentClientError("agent-unavailable", "fleet agent transport is unavailable") : interruptedAgentError(command, stopReason, false, false)));
+		});
 		child.stdout.setEncoding("utf8");
 		child.stdout.on("data", (chunk) => {
-			if (stdout.length <= 1048576) stdout += chunk;
-			if (stdout.length > 1048576) child.kill("SIGTERM");
+			if (stopReason !== void 0) return;
+			stdoutBytes += Buffer.byteLength(chunk);
+			if (stdoutBytes > MAX_OUTPUT_BYTES) {
+				stop("output-limit");
+				return;
+			}
+			stdout += chunk;
 		});
 		child.stderr.on("data", (chunk) => {
+			if (stopReason !== void 0) return;
 			stderrBytes += chunk.length;
-			if (stderrBytes > 1048576) child.kill("SIGTERM");
+			if (stderrBytes > MAX_OUTPUT_BYTES) stop("output-limit");
 		});
-		child.once("close", (code) => {
+		child.once("close", async (code) => {
+			if (stopReason !== void 0) await stopLocalGroup();
 			finish(() => {
+				if (stopReason !== void 0) {
+					reject(interruptedAgentError(command, stopReason, terminationUnknown));
+					return;
+				}
+				if (transportFailed) {
+					reject(new AgentClientError("agent-unavailable", "fleet agent transport is unavailable"));
+					return;
+				}
 				if (code !== 0) {
 					reject(new AgentClientError("agent-failed", "fleet agent command failed"));
 					return;
@@ -162,7 +244,8 @@ function callAgent(targetInput, command, payload, timeoutMs, signal) {
 				resolve(response.value);
 			});
 		});
-		child.stdin.end(JSON.stringify(payload) + "\n");
+		child.stdin.on("error", () => {});
+		if (stopReason === void 0) child.stdin.end(request);
 	});
 }
 function createAgentClient(config) {
@@ -788,6 +871,7 @@ const EMPTY_MANIFEST = {
 async function collectFleetStatus(ctx, configInput) {
 	const config = resolveConfig(configInput);
 	const profilePath = join(config.dshHome, "profiles", config.profile, "package.json");
+	const runtime = runtimeSnapshot(ctx.loader);
 	let manifest = EMPTY_MANIFEST;
 	let manifestLoaded = false;
 	let manifestError;
@@ -813,7 +897,7 @@ async function collectFleetStatus(ctx, configInput) {
 		profile: config.profile,
 		dependencies,
 		bundles,
-		runtime: runtimeSnapshot(ctx.loader)
+		runtime
 	});
 	const deviceSpec = result.device;
 	return {
@@ -841,6 +925,7 @@ async function collectFleetStatus(ctx, configInput) {
 			...manifestLoaded ? { teamId: manifest.team.id } : {},
 			...manifestError === void 0 ? {} : { error: manifestError }
 		},
+		runtime: { failedModules: [...new Set(runtime.filter((entry) => entry.enabled && entry.fiberPhase === "failed").map((entry) => entry.moduleName))].sort() },
 		summary: result.summary,
 		plugins: result.plugins,
 		unmanaged: result.unmanaged
