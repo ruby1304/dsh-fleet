@@ -8697,7 +8697,7 @@ function runFile(file, args, options = {}) {
 	return new Promise((resolve, reject) => {
 		const grouped = process.platform !== "win32";
 		const child = spawn(file, args, {
-			stdio: [
+			stdio: options.ignoreOutput === true ? "ignore" : [
 				"ignore",
 				"pipe",
 				"pipe"
@@ -8734,13 +8734,13 @@ function runFile(file, args, options = {}) {
 			forceTimer.unref();
 		}, options.timeoutMs ?? 12e4);
 		timer.unref();
-		child.stdout.setEncoding("utf8");
-		child.stderr.setEncoding("utf8");
-		child.stdout.on("data", (chunk) => {
+		child.stdout?.setEncoding("utf8");
+		child.stderr?.setEncoding("utf8");
+		child.stdout?.on("data", (chunk) => {
 			stdout += chunk;
 			if (Buffer.byteLength(stdout) > MAX_OUTPUT_BYTES) child.kill("SIGTERM");
 		});
-		child.stderr.on("data", (chunk) => {
+		child.stderr?.on("data", (chunk) => {
 			stderr += chunk;
 			if (Buffer.byteLength(stderr) > MAX_OUTPUT_BYTES) child.kill("SIGTERM");
 		});
@@ -9055,7 +9055,8 @@ async function restartDsh(config) {
 	], {
 		env,
 		timeoutMs: 1e4,
-		allowFailure: true
+		allowFailure: true,
+		ignoreOutput: true
 	})).code !== 0) throw new AgentRuntimeError("restart-failed", "DSH restart failed");
 }
 async function waitForHttp(url, timeoutMs) {

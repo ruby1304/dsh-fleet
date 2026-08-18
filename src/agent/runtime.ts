@@ -82,6 +82,7 @@ interface RunOptions {
   timeoutMs?: number
   allowFailure?: boolean
   cwd?: string
+  ignoreOutput?: boolean
 }
 
 interface SnapshotMetadata {
@@ -120,7 +121,7 @@ function runFile(file: string, args: string[], options: RunOptions = {}): Promis
   return new Promise((resolve, reject) => {
     const grouped = process.platform !== 'win32'
     const child = spawn(file, args, {
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: options.ignoreOutput === true ? 'ignore' : ['ignore', 'pipe', 'pipe'],
       shell: false,
       detached: grouped,
       ...(options.env === undefined ? {} : { env: options.env }),
@@ -153,13 +154,13 @@ function runFile(file: string, args: string[], options: RunOptions = {}): Promis
       forceTimer.unref()
     }, options.timeoutMs ?? 120_000)
     timer.unref()
-    child.stdout.setEncoding('utf8')
-    child.stderr.setEncoding('utf8')
-    child.stdout.on('data', (chunk: string) => {
+    child.stdout?.setEncoding('utf8')
+    child.stderr?.setEncoding('utf8')
+    child.stdout?.on('data', (chunk: string) => {
       stdout += chunk
       if (Buffer.byteLength(stdout) > MAX_OUTPUT_BYTES) child.kill('SIGTERM')
     })
-    child.stderr.on('data', (chunk: string) => {
+    child.stderr?.on('data', (chunk: string) => {
       stderr += chunk
       if (Buffer.byteLength(stderr) > MAX_OUTPUT_BYTES) child.kill('SIGTERM')
     })
@@ -454,7 +455,7 @@ async function restartDsh(config: FleetAgentConfig): Promise<void> {
     '-DmS', config.restart.sessionName,
     '/usr/bin/env', 'DSH_HOME=' + config.dshHome, 'PATH=' + env.PATH,
     config.dshBinary, 'web', '--host', config.restart.host, '--port', String(config.restart.port),
-  ], { env, timeoutMs: 10_000, allowFailure: true })
+  ], { env, timeoutMs: 10_000, allowFailure: true, ignoreOutput: true })
   if (start.code !== 0) throw new AgentRuntimeError('restart-failed', 'DSH restart failed')
 }
 

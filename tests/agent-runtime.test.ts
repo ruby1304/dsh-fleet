@@ -257,4 +257,34 @@ describe('fleet agent runtime', () => {
       await new Promise<void>((resolve, reject) => server.close(error => error === undefined ? resolve() : reject(error)))
     }
   })
+
+  it('does not wait on stdio inherited by a detached screen child', async () => {
+    const { config, root } = await setup()
+    const screenBinary = join(root, 'bin', 'screen')
+    const lsofBinary = join(root, 'bin', 'lsof')
+    const psBinary = join(root, 'bin', 'ps')
+    await writeFile(screenBinary, `#!/usr/bin/env node
+const { spawn } = require('node:child_process')
+if (process.argv.includes('-DmS')) {
+  const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 2000)'], { detached: true, stdio: 'inherit' })
+  child.unref()
+}
+`)
+    await writeFile(lsofBinary, '#!/bin/sh\nexit 1\n')
+    await writeFile(psBinary, '#!/bin/sh\nexit 1\n')
+    await Promise.all([screenBinary, lsofBinary, psBinary].map(path => chmod(path, 0o755)))
+    config.restart = {
+      kind: 'screen',
+      screenBinary,
+      lsofBinary,
+      psBinary,
+      ownerMarkers: ['fake-dsh'],
+      sessionName: 'fake-dsh',
+      host: '127.0.0.1',
+      port: 3211,
+    }
+    const plan = await createStoredPlan(config, 'plugin-a', new Date('2026-08-18T08:00:00.000Z'))
+    const result = await applyStoredPlan(config, approval(plan), new Date('2026-08-18T08:01:30.000Z'))
+    expect(result).toMatchObject({ state: 'succeeded', result: 'success' })
+  })
 })
