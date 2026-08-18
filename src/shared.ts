@@ -88,3 +88,46 @@ export interface FleetStatus {
   plugins: PluginStatus[]
   unmanaged: Array<{ id: string; actualSpec: string }>
 }
+
+export type FleetUpdateSource = 'npm' | 'github' | 'local' | 'unknown'
+export type FleetUpdateState = 'current' | 'available' | 'local' | 'missing' | 'error' | 'unsupported'
+
+export interface FleetUpdateItem {
+  id: string
+  kind: 'dsh' | 'plugin'
+  managed: boolean
+  source: FleetUpdateSource
+  state: FleetUpdateState
+  changeKind?: 'version' | 'head-changed'
+  currentVersion?: string
+  latestVersion?: string
+  currentRevision?: string
+  latestRevision?: string
+  sourceUrl?: string
+  errorCode?: 'registry-unavailable' | 'github-unavailable' | 'not-installed' | 'unsupported-source'
+}
+
+export interface FleetUpdateSummary {
+  tracked: number
+  available: number
+  current: number
+  local: number
+  missing: number
+  errors: number
+  unsupported: number
+}
+
+export interface FleetUpdateSnapshot {
+  checkedAt: string
+  refreshAfter: string
+  summary: FleetUpdateSummary
+  items: FleetUpdateItem[]
+}
+
+export interface FleetUpdates {
+  enabled: boolean
+  cached: boolean
+  stale: boolean
+  lastAttemptAt?: string
+  snapshot?: FleetUpdateSnapshot
+}

@@ -1,4 +1,7 @@
 import { parse } from "yaml";
+import { readFile, stat } from "node:fs/promises";
+import { join } from "node:path";
+import { gt, valid, validRange } from "semver";
 //#region src/host/core.ts
 function isRecord(value) {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -169,4 +172,343 @@ function reconcileFleet(input) {
 	};
 }
 //#endregion
-export { parseFleetManifest, reconcileFleet };
+//#region src/host/updates.ts
+const NPM_NAME = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/i;
+const systemUpdateProbe = {
+	async npmLatest(packageName, timeoutMs) {
+		const response = await fetch(`https://registry.npmjs.org/${encodeURIComponent(packageName)}/latest`, {
+			headers: { accept: "application/json" },
+			credentials: "omit",
+			redirect: "error",
+			signal: AbortSignal.timeout(timeoutMs)
+		});
+		if (!response.ok) throw new Error("registry probe failed");
+		const payload = await response.json();
+		if (typeof payload.version !== "string" || payload.version.trim().length === 0) throw new Error("registry returned an invalid version");
+		return payload.version.trim();
+	},
+	async githubHead(repository, timeoutMs) {
+		const match = /^https:\/\/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\.git$/.exec(repository);
+		if (match?.[1] === void 0 || match[2] === void 0) throw new Error("unsupported GitHub repository");
+		const response = await fetch(`https://api.github.com/repos/${encodeURIComponent(match[1])}/${encodeURIComponent(match[2])}/commits?per_page=1`, {
+			headers: {
+				accept: "application/vnd.github+json",
+				"user-agent": "dsh-fleet",
+				"x-github-api-version": "2026-03-10"
+			},
+			credentials: "omit",
+			redirect: "error",
+			signal: AbortSignal.timeout(timeoutMs)
+		});
+		if (!response.ok) throw new Error("GitHub probe failed");
+		const payload = await response.json();
+		const revision = Array.isArray(payload) ? payload[0]?.sha : void 0;
+		if (typeof revision !== "string" || !/^[0-9a-f]{40}$/i.test(revision)) throw new Error("GitHub returned no HEAD revision");
+		return revision.toLowerCase();
+	}
+};
+function githubDescriptor(spec) {
+	const shorthand = /^github:([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)(?:#.*)?$/.exec(spec);
+	const url = /^(?:git\+)?https:\/\/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)(?:#.*)?$/.exec(spec);
+	const match = shorthand ?? url;
+	if (match?.[1] === void 0 || match[2] === void 0) return void 0;
+	const owner = match[1];
+	const repositoryName = match[2].replace(/\.git$/, "");
+	return {
+		source: "github",
+		repository: `https://github.com/${owner}/${repositoryName}.git`,
+		sourceUrl: `https://github.com/${owner}/${repositoryName}`
+	};
+}
+function describeSource(id, spec) {
+	if (/^(?:link|file|workspace):/.test(spec) || spec.startsWith("/") || spec.startsWith("./") || spec.startsWith("../")) return { source: "local" };
+	const github = githubDescriptor(spec);
+	if (github !== void 0) return github;
+	if (NPM_NAME.test(id) && (validRange(spec) !== null || /^[a-z][a-z0-9._-]*$/i.test(spec))) return {
+		source: "npm",
+		packageName: id,
+		sourceUrl: `https://www.npmjs.com/package/${encodeURIComponent(id)}`
+	};
+	return { source: "unknown" };
+}
+function resolvedRevision(value, spec) {
+	const fromLock = value?.match(/[0-9a-f]{40}/i)?.[0];
+	if (fromLock !== void 0) return fromLock.toLowerCase();
+	return (spec.match(/#([0-9a-f]{40})$/i)?.[1])?.toLowerCase();
+}
+function isAvailable(current, latest) {
+	const currentSemver = valid(current);
+	const latestSemver = valid(latest);
+	if (currentSemver !== null && latestSemver !== null) return gt(latestSemver, currentSemver);
+	return current !== latest;
+}
+async function readInstalledPackage(profileDir, id) {
+	try {
+		const raw = JSON.parse(await readFile(join(profileDir, "node_modules", id, "package.json"), "utf8"));
+		if (typeof raw.version !== "string" || raw.version.trim().length === 0) return void 0;
+		const registry = typeof raw.publishConfig?.registry === "string" ? raw.publishConfig.registry : void 0;
+		const access = typeof raw.publishConfig?.access === "string" ? raw.publishConfig.access : void 0;
+		return {
+			version: raw.version.trim(),
+			private: raw.private === true,
+			...access === void 0 ? {} : { access },
+			...registry === void 0 ? {} : { registry }
+		};
+	} catch {
+		return;
+	}
+}
+async function readProfile(config) {
+	const profileManifest = JSON.parse(await readFile(join(config.profileDir, "package.json"), "utf8"));
+	const dependencies = profileManifest.dependencies ?? {};
+	const bundles = profileManifest.dsh?.profile?.bundles ?? [];
+	let desired = /* @__PURE__ */ new Map();
+	try {
+		const result = reconcileFleet({
+			manifest: parseFleetManifest(await readFile(config.manifestPath, "utf8")),
+			deviceId: config.deviceId,
+			profile: config.profile,
+			dependencies,
+			bundles,
+			runtime: []
+		});
+		desired = new Map(result.plugins.map((plugin) => [plugin.id, plugin]));
+	} catch {}
+	const lockVersions = {};
+	try {
+		const lock = parse(await readFile(join(config.profileDir, "pnpm-lock.yaml"), "utf8"));
+		for (const [id, dependency] of Object.entries(lock.importers?.["."]?.dependencies ?? {})) {
+			const version = typeof dependency === "string" ? dependency : dependency.version;
+			if (version !== void 0) lockVersions[id] = version;
+		}
+	} catch {}
+	return {
+		dependencies,
+		bundles,
+		desired,
+		lockVersions
+	};
+}
+async function checkCore(config, probe) {
+	const base = {
+		id: "@deepseek-ai/dsh",
+		kind: "dsh",
+		managed: true,
+		source: "npm",
+		sourceUrl: "https://www.npmjs.com/package/%40deepseek-ai%2Fdsh",
+		...config.dshVersion === null ? {} : { currentVersion: config.dshVersion },
+		state: "error"
+	};
+	if (config.dshVersion === null) return {
+		...base,
+		errorCode: "not-installed"
+	};
+	try {
+		const latestVersion = await probe.npmLatest("@deepseek-ai/dsh", config.timeoutMs);
+		const available = isAvailable(config.dshVersion, latestVersion);
+		return {
+			...base,
+			latestVersion,
+			state: available ? "available" : "current",
+			...available ? { changeKind: "version" } : {}
+		};
+	} catch {
+		return {
+			...base,
+			errorCode: "registry-unavailable"
+		};
+	}
+}
+async function checkPlugin(id, spec, managed, lockVersion, config, probe) {
+	const descriptor = describeSource(id, spec);
+	const installedPackage = await readInstalledPackage(config.profileDir, id);
+	const currentVersion = installedPackage?.version;
+	const installed = installedPackage !== void 0;
+	const base = {
+		id,
+		kind: "plugin",
+		managed,
+		source: descriptor.source,
+		...currentVersion === void 0 ? {} : { currentVersion },
+		...descriptor.sourceUrl === void 0 ? {} : { sourceUrl: descriptor.sourceUrl },
+		state: installed ? "unsupported" : "missing",
+		...!installed ? { errorCode: "not-installed" } : {}
+	};
+	if (descriptor.source === "local") return {
+		...base,
+		state: installed ? "local" : "missing"
+	};
+	if (descriptor.source === "npm" && descriptor.packageName !== void 0) {
+		if (installedPackage?.private === true || id.startsWith("@") && installedPackage?.access !== "public" || installedPackage?.registry !== void 0 && !/^https:\/\/registry\.npmjs\.org\/?$/i.test(installedPackage.registry)) return {
+			...base,
+			state: "unsupported",
+			errorCode: "unsupported-source"
+		};
+		try {
+			const latestVersion = await probe.npmLatest(descriptor.packageName, config.timeoutMs);
+			if (currentVersion === void 0) return {
+				...base,
+				latestVersion
+			};
+			const available = isAvailable(currentVersion, latestVersion);
+			return {
+				...base,
+				latestVersion,
+				state: available ? "available" : "current",
+				...available ? { changeKind: "version" } : {}
+			};
+		} catch {
+			return {
+				...base,
+				state: "error",
+				errorCode: "registry-unavailable"
+			};
+		}
+	}
+	if (descriptor.source === "github" && descriptor.repository !== void 0) {
+		const currentRevision = resolvedRevision(lockVersion, spec);
+		try {
+			const latestRevision = await probe.githubHead(descriptor.repository, config.timeoutMs);
+			if (!installed) return {
+				...base,
+				latestRevision
+			};
+			if (currentRevision === void 0) return {
+				...base,
+				latestRevision,
+				state: "unsupported",
+				errorCode: "unsupported-source"
+			};
+			return {
+				...base,
+				currentRevision,
+				latestRevision,
+				state: currentRevision === latestRevision ? "current" : "available",
+				...currentRevision === latestRevision ? {} : { changeKind: "head-changed" }
+			};
+		} catch {
+			return {
+				...base,
+				...currentRevision === void 0 ? {} : { currentRevision },
+				state: "error",
+				errorCode: "github-unavailable"
+			};
+		}
+	}
+	return {
+		...base,
+		state: installed ? "unsupported" : "missing",
+		errorCode: installed ? "unsupported-source" : "not-installed"
+	};
+}
+function summarize(items) {
+	return {
+		tracked: items.length,
+		available: items.filter((item) => item.state === "available").length,
+		current: items.filter((item) => item.state === "current").length,
+		local: items.filter((item) => item.state === "local").length,
+		missing: items.filter((item) => item.state === "missing").length,
+		errors: items.filter((item) => item.state === "error").length,
+		unsupported: items.filter((item) => item.state === "unsupported").length
+	};
+}
+const STATE_ORDER = {
+	available: 0,
+	error: 1,
+	missing: 2,
+	local: 3,
+	unsupported: 4,
+	current: 5
+};
+async function mapLimit(values, limit, worker) {
+	const result = new Array(values.length);
+	let cursor = 0;
+	async function consume() {
+		while (cursor < values.length) {
+			const index = cursor++;
+			const value = values[index];
+			if (value !== void 0) result[index] = await worker(value);
+		}
+	}
+	await Promise.all(Array.from({ length: Math.min(limit, values.length) }, consume));
+	return result;
+}
+async function collectFleetUpdates(config, probe = systemUpdateProbe, now = Date.now()) {
+	const profile = await readProfile(config);
+	const core = checkCore(config, probe);
+	const desiredSpecs = new Map([...profile.desired].map(([id, plugin]) => [id, plugin.actualSpec ?? plugin.desiredSpec]));
+	const plugins = await mapLimit([...new Set(profile.bundles.filter((id) => Object.hasOwn(profile.dependencies, id)))], 4, (id) => checkPlugin(id, profile.dependencies[id] ?? desiredSpecs.get(id) ?? "", profile.desired.has(id), profile.lockVersions[id], config, probe));
+	plugins.sort((a, b) => STATE_ORDER[a.state] - STATE_ORDER[b.state] || a.id.localeCompare(b.id));
+	const items = [await core, ...plugins];
+	return {
+		checkedAt: new Date(now).toISOString(),
+		refreshAfter: new Date(now + config.cacheMs).toISOString(),
+		summary: summarize(items),
+		items
+	};
+}
+async function inputFingerprint(config) {
+	const paths = [
+		join(config.profileDir, "package.json"),
+		join(config.profileDir, "pnpm-lock.yaml"),
+		config.manifestPath
+	];
+	const parts = await Promise.all(paths.map(async (path) => {
+		try {
+			const metadata = await stat(path);
+			return `${path}:${metadata.size}:${metadata.mtimeMs}`;
+		} catch {
+			return `${path}:missing`;
+		}
+	}));
+	return [config.dshVersion ?? "unknown", ...parts].join("|");
+}
+function createUpdateMonitor(config, dependencies = {}) {
+	const now = dependencies.now ?? Date.now;
+	const probe = dependencies.probe ?? systemUpdateProbe;
+	const collect = dependencies.collect ?? collectFleetUpdates;
+	let cached;
+	let cachedFingerprint;
+	let lastAttemptAt;
+	let inFlight;
+	return { async get(mode = "if-stale") {
+		if (!config.enabled) return {
+			enabled: false,
+			cached: false,
+			stale: false
+		};
+		const currentTime = now();
+		const fingerprint = await inputFingerprint(config);
+		const inputsChanged = cachedFingerprint !== void 0 && cachedFingerprint !== fingerprint;
+		const expired = cached !== void 0 && Date.parse(cached.refreshAfter) <= currentTime;
+		const stale = inputsChanged || expired;
+		const report = (snapshot, fromCache, reportStale) => ({
+			enabled: true,
+			cached: fromCache,
+			stale: reportStale,
+			...lastAttemptAt === void 0 ? {} : { lastAttemptAt: new Date(lastAttemptAt).toISOString() },
+			...snapshot === void 0 ? {} : { snapshot }
+		});
+		if (mode === "cache") return report(cached, cached !== void 0, stale);
+		if (mode === "if-stale" && cached !== void 0 && !stale) return report(cached, true, false);
+		if (mode === "force" && cached !== void 0 && !stale && lastAttemptAt !== void 0 && currentTime - lastAttemptAt < 6e4) return report(cached, true, stale);
+		if (inFlight === void 0) {
+			lastAttemptAt = currentTime;
+			inFlight = (async () => {
+				const snapshot = await collect(config, probe, currentTime);
+				if (await inputFingerprint(config) !== fingerprint) throw new Error("fleet inputs changed during update check");
+				cached = snapshot;
+				cachedFingerprint = fingerprint;
+				return snapshot;
+			})();
+		}
+		const refresh = inFlight;
+		try {
+			return report(await refresh, false, false);
+		} finally {
+			if (inFlight === refresh) inFlight = void 0;
+		}
+	} };
+}
+//#endregion
+export { collectFleetUpdates, createUpdateMonitor, parseFleetManifest, reconcileFleet, systemUpdateProbe };

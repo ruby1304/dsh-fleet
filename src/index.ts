@@ -5,6 +5,7 @@ import { homedir, hostname, platform, arch } from 'node:os'
 import { join, resolve } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { parseFleetManifest, reconcileFleet } from './host/core.ts'
+import { createUpdateMonitor, type UpdateMode } from './host/updates.ts'
 import type { FleetManifest, FleetStatus, RuntimePhase, RuntimePluginEntry } from './shared.ts'
 
 export const name = 'fleet'
@@ -17,6 +18,9 @@ export interface Config {
   profile?: string
   dshHome?: string
   dshBinary?: string
+  updateCheck?: boolean
+  updateCacheMs?: number
+  updateTimeoutMs?: number
 }
 
 interface ProfileManifest {
@@ -59,12 +63,17 @@ function expandHome(value: string): string {
 function resolveConfig(config: Config | undefined) {
   const dshHome = expandHome(config?.dshHome ?? process.env.DSH_HOME ?? '~/.dsh')
   const defaultBinary = join(homedir(), '.local/bin/dsh')
+  const boundedNumber = (value: number | undefined, fallback: number, minimum: number, maximum: number) =>
+    value === undefined || !Number.isFinite(value) ? fallback : Math.min(maximum, Math.max(minimum, Math.round(value)))
   return {
     deviceId: (config?.deviceId ?? process.env.DSH_FLEET_DEVICE_ID ?? hostname()).trim(),
     manifestPath: expandHome(config?.manifestPath ?? process.env.DSH_FLEET_MANIFEST ?? '~/.dsh/fleet/fleet.lock.yaml'),
     profile: (config?.profile ?? process.env.DSH_FLEET_PROFILE ?? 'web').trim(),
     dshHome,
     dshBinary: expandHome(config?.dshBinary ?? process.env.DSH_FLEET_DSH_BINARY ?? (existsSync(defaultBinary) ? defaultBinary : 'dsh')),
+    updateCheck: config?.updateCheck !== false,
+    updateCacheMs: boundedNumber(config?.updateCacheMs, 6 * 60 * 60 * 1000, 60 * 1000, 24 * 60 * 60 * 1000),
+    updateTimeoutMs: boundedNumber(config?.updateTimeoutMs, 5000, 1000, 15_000),
   }
 }
 
@@ -166,10 +175,31 @@ const fail = (message: string) => ({ ok: false, error: { code: 'internal', messa
 
 export function apply(ctx: Context, config?: Config): void {
   const host = ctx as unknown as HostContext
-  host.connection.rpc.handle(RPC_CHANNEL, async (endpoint) => {
+  const resolved = resolveConfig(config)
+  const updates = createUpdateMonitor({
+    enabled: resolved.updateCheck,
+    cacheMs: resolved.updateCacheMs,
+    timeoutMs: resolved.updateTimeoutMs,
+    deviceId: resolved.deviceId,
+    manifestPath: resolved.manifestPath,
+    profileDir: join(resolved.dshHome, 'profiles', resolved.profile),
+    profile: resolved.profile,
+    dshVersion: readDshVersion(resolved.dshBinary),
+  })
+  host.connection.rpc.handle(RPC_CHANNEL, async (endpoint, payload) => {
     try {
-      if (endpoint !== 'status') return fail('unknown endpoint: ' + endpoint)
-      return ok(await collectFleetStatus(host, config))
+      if (endpoint === 'status') return ok(await collectFleetStatus(host, config))
+      if (endpoint === 'updates') {
+        let mode: UpdateMode = 'if-stale'
+        if (payload !== null && payload !== undefined) {
+          if (typeof payload !== 'object' || Array.isArray(payload) || !('mode' in payload)) throw new TypeError('updates payload must contain mode')
+          const candidate = (payload as { mode?: unknown }).mode
+          if (candidate !== 'cache' && candidate !== 'if-stale' && candidate !== 'force') throw new TypeError('invalid updates mode')
+          mode = candidate
+        }
+        return ok(await updates.get(mode))
+      }
+      return fail('unknown endpoint: ' + endpoint)
     } catch (error: unknown) {
       return fail(error instanceof Error ? error.message : String(error))
     }

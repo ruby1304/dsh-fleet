@@ -114,6 +114,7 @@ plugins: []
       profile: 'web',
       dshHome: root,
       dshBinary: '/usr/bin/false',
+      updateCheck: false,
     })
 
     expect(registration).toMatchObject({ channel: '/dsh-fleet', options: { authority: 'loopback' } })
@@ -127,5 +128,9 @@ plugins: []
         summary: { desired: 0 },
       },
     })
+    const updates = await registration!.handler('updates', { mode: 'cache' }, new AbortController().signal)
+    expect(updates).toEqual({ ok: true, value: { enabled: false, cached: false, stale: false } })
+    const invalid = await registration!.handler('updates', { mode: 'install' }, new AbortController().signal)
+    expect(invalid).toMatchObject({ ok: false, error: { message: 'invalid updates mode' } })
   })
 })

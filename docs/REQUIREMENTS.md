@@ -1,9 +1,9 @@
 # dsh-fleet 产品需求与后续实施说明
 
 - **文档状态**：后续开发基线
-- **更新时间**：2026-08-17
-- **当前代码版本**：本地 `main`；实现基线 `b208460`，客户端槽位修复 `3b41bb0`（进入新 session 后以 `git log -1` 为准）
-- **当前阶段**：V0 已实现核心代码，等待 M5 GUI 可视验证和 M3 跨设备验证
+- **更新时间**：2026-08-18
+- **当前代码版本**：进入新 session 后以 `git log -1` 为准；只读更新监控增量从 `1dbba70` 开始
+- **当前阶段**：V0 inventory/drift 与不执行安装的更新可用性监控均已实现
 - **目标读者**：下一开发 session、未来贡献者、DSH 上游维护者
 
 ---
@@ -401,7 +401,7 @@ b208460 feat: add read-only dsh fleet inventory v0
 已验证：
 
 - TypeScript 类型检查通过；
-- 9 个测试通过；
+- 22 个测试通过；
 - Host、testing、client bundle 构建通过；
 - `pnpm pack --dry-run` 通过；
 - M5 实际 profile 投影成功；
@@ -525,6 +525,27 @@ M5 profile 已包含：
 - 无凭据或会话内容进入 Fleet 返回值；
 - 测试、打包和 DSH 加载均通过；
 - README 足以让第三方用户复现。
+
+### 8.6 只读更新监控增量
+
+2026-08-18 起，V0 增加与 inventory/drift 正交的更新可用性视图。它只回答“公开上游是否出现变化”，不执行收敛：
+
+- `status` RPC 保持纯本地读取，30 秒状态轮询不触发网络；
+- 独立 `updates` RPC 支持 `cache`、`if-stale` 和 `force` 三种模式；
+- DSH core 与 npm `@deepseek-ai/dsh` 的公开 `latest` 发布比较；
+- npm bundle 使用不携带认证信息的 npm 公共 registry HTTPS `latest` 端点查询公开发布版本；
+- `private: true`、未声明 `publishConfig.access: public` 的 scoped 包、声明非 npmjs publish registry 的包和 npm alias 不发送到公共 registry，首版明确标记为不支持；
+- GitHub bundle 只允许严格的 `github:owner/repo` 或公开 HTTPS 形式，以 `pnpm-lock.yaml` 的 resolved SHA 对比远端 HEAD；SHA 不同只称“上游有变化”，不称安全升级；
+- `link:`、`file:`、`workspace:` 标记为本地源码，不访问远端；
+- 普通 dependencies 不进入插件更新列表，只检查 `dsh.profile.bundles`；
+- 默认进程内缓存 6 小时，强制刷新 60 秒防抖，同一时刻的请求合并；
+- profile、lock 或 manifest 变化会使缓存立即 stale；
+- 公共 GitHub 查询使用显式省略 credentials 的 Node HTTPS，不启动 Git，因此不读取 Git 配置、AskPass 或 `.netrc`；RPC 不返回 token、认证 URL、原始上游响应或本地 link 绝对路径；
+- 任一来源失败必须显示为检查失败，不能误判“已是最新”。
+
+实现禁止经过 `dsh plugin ... outdated`：DSH CLI 的 plugin wrapper 会在成功的 pnpm 命令之后 reconciliation profile bundles，必要时重写 profile，因此不属于严格只读边界。
+
+本增量仍不属于 V1 收敛。版本兼容、release channel、批准、快照、安装、健康检查、重启与回滚全部留在 V1 Fleet Agent。
 
 ---
 
