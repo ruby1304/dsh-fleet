@@ -1008,13 +1008,14 @@ function profileDir(config) {
 	return join(config.dshHome, "profiles", config.profile);
 }
 function controlledEnv(config) {
-	const path = [
+	const path = [.../* @__PURE__ */ new Set([
 		dirname(config.pnpmBinary),
 		dirname(config.dshBinary),
+		dirname(process.execPath),
 		"/opt/homebrew/bin",
 		"/usr/bin",
 		"/bin"
-	].join(":");
+	])].join(":");
 	const env = {};
 	for (const key of [
 		"HOME",

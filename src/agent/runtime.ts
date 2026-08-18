@@ -109,7 +109,14 @@ function profileDir(config: FleetAgentConfig): string {
 }
 
 function controlledEnv(config: FleetAgentConfig): NodeJS.ProcessEnv {
-  const path = [dirname(config.pnpmBinary), dirname(config.dshBinary), '/opt/homebrew/bin', '/usr/bin', '/bin'].join(':')
+  const path = [...new Set([
+    dirname(config.pnpmBinary),
+    dirname(config.dshBinary),
+    dirname(process.execPath),
+    '/opt/homebrew/bin',
+    '/usr/bin',
+    '/bin',
+  ])].join(':')
   const env: NodeJS.ProcessEnv = {}
   for (const key of ['HOME', 'USER', 'LOGNAME', 'TMPDIR', 'LANG', 'LC_ALL', 'SHELL', 'TERM', 'XDG_CONFIG_HOME', 'XDG_CACHE_HOME']) {
     if (process.env[key] !== undefined) env[key] = process.env[key]
