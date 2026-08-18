@@ -1004,7 +1004,21 @@ Agent 是 principal 的一种：
 
 V1 已按独立 Fleet Agent 路径开始：计划、审批、快照、健康检查与回滚协议不在运行中的插件进程内执行；Host 只提供 loopback UI 门面和固定 target transport，不接受任意远程 shell。
 
-### 18.1 禁止事项
+### 18.1 V1 rc.7 M5→M3 实机验收
+
+2026-08-18 已完成当前 V1 预览的真实设备闭环：
+
+1. M5 Web 与 M3 Agent 均使用显式绝对路径的 DSH `0.1.0-rc.7`，不依赖 M5 上仍指向 rc.5 的旧 `PATH` wrapper；
+2. M5 操作页通过固定 SSH target，在 M3 隔离 profile 安装 `dsh-vision-subagent@0.1.0`，再精确更新到 `0.3.0`；
+3. 人工制造健康失败后执行 `0.3.0 → 0.1.0`，Action 以 `rolled-back` 结束，profile hash 恢复到计划前值，`package.json` 与实际 `node_modules` 均保持 `0.3.0`；
+4. M3 正式 `web` profile 通过同一路径安装 `dsh-turn-fork@0.1.0`，重启后 Fleet RPC 为 active，安装前后的 12 条 session 记录均保留；
+5. 最终 M3 状态为 DSH rc.7、desired 4、aligned 1、missing 3、failed 0；M5 操作页只保留正式 `m3-worker` target，且不再把已对齐的 turn-fork 列为候选；
+6. 实机过程中暴露并修复三类重启边界：HTTP 先于 Fleet RPC 就绪、旧命令遗留 listener 的归属识别、`screen -DmS` 未完全脱离而 `screen -dmS` 才能正确返回；历史失败记录保留在审计中，最终服务健康；
+7. 浏览器验收覆盖状态、更新、操作三页；最终操作页显示一个 rc.7 生产 target、三个清单派生候选，控制台无 error/warn。
+
+隔离 profile 对 vision-subagent 的安装/更新只证明 Fleet 传输、精确版本和回滚链路，不等于该插件业务语义已经通过发布验收。
+
+### 18.2 禁止事项
 
 - 未经任务授权不直接合并 GitHub main；候选分支和 Draft PR 必须保留审查/CI gate；
 - 不擅自停止当前用户会话；
@@ -1034,4 +1048,5 @@ V1 已按独立 Fleet Agent 路径开始：计划、审批、快照、健康检�
 - 代码已通过批准的 Public GitHub 远端分发；
 - 示例清单、来源边界、稳定版本规则和双设备差异已固化；
 - V1 Agent 的 exact install/update、审批、回滚和 M5→M3 固定 SSH 路径已经实现；
+- V1 预览已完成 M5→M3 rc.7 的隔离安装/更新/故障回滚与正式 profile 安装验收；
 - 仍无 remove/batch/core update、Hub、成员系统、设备 enrollment、签名审批、secrets 分发和通用远程任务。

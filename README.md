@@ -161,6 +161,19 @@ Open the Fleet overlay and select **操作**:
 
 If the request disconnects after approval, `action-status` can recover an interrupted nonterminal action by rolling it back under the target profile lock.
 
+## Live acceptance
+
+The `0.2.0` preview was exercised on 2026-08-18 from an M5 DSH `0.1.0-rc.7` Web instance to an M3 worker running an isolated `0.1.0-rc.7` CLI:
+
+- an isolated M3 profile installed `dsh-vision-subagent@0.1.0` and then updated it to `0.3.0` through the M5 Operations view;
+- a forced unhealthy `0.3.0 → 0.1.0` attempt ended `rolled-back`, restored the exact pre-plan profile hash, and rematerialized `node_modules` at `0.3.0`;
+- the real M3 `web` profile installed `dsh-turn-fork@0.1.0`, restarted under its existing screen owner, reached an active Fleet RPC state, and retained all 12 existing session records;
+- the final M5 Operations view reported only the production `m3-worker` target on rc.7, with `dsh-turn-fork` aligned and three remaining manifest-derived install candidates.
+
+The acceptance sequence exposed and fixed three restart edge cases: HTTP becoming ready before the Fleet RPC plugin, an orphaned listener owned by the legacy DSH command, and the difference between attached `screen -DmS` and detached `screen -dmS` startup. Earlier failed attempts remain in the target audit log; the final profile and service are healthy.
+
+The isolated `dsh-vision-subagent` exercise validates Fleet transport, exact-version installation, update, and rollback. It is not a semantic release approval for that plugin.
+
 ## Current limitations
 
 - install/update only; no remove, batch plan, DSH core upgrade, or config distribution;
