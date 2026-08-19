@@ -192,7 +192,7 @@ function updateColor(item: FleetUpdateItem): string {
 function updateLabel(item: FleetUpdateItem): string {
   if (item.state === 'current') return '已是最新'
   if (item.state === 'available') return item.changeKind === 'head-changed' ? '上游有变化' : '可更新'
-  if (item.state === 'local') return '本地链接'
+  if (item.state === 'local') return item.source === 'artifact' ? '已固定' : '本地链接'
   if (item.state === 'missing') return '未安装'
   if (item.state === 'error') return '检查失败'
   return '不支持检查'
@@ -202,6 +202,7 @@ function sourceLabel(item: FleetUpdateItem): string {
   if (item.kind === 'dsh') return 'CORE'
   if (item.source === 'github') return 'GitHub'
   if (item.source === 'npm') return 'npm'
+  if (item.source === 'artifact') return 'tarball'
   if (item.source === 'local') return 'local'
   return 'other'
 }
@@ -220,7 +221,9 @@ function versionText(item: FleetUpdateItem): string {
   if (item.currentVersion !== undefined && item.latestVersion !== undefined) {
     return `${item.currentVersion} → ${item.latestVersion}`
   }
-  if (item.currentVersion !== undefined && item.state === 'local') return `${item.currentVersion} · 实时源码`
+  if (item.currentVersion !== undefined && item.state === 'local') {
+    return item.source === 'artifact' ? `${item.currentVersion} · 不可变制品` : `${item.currentVersion} · 实时源码`
+  }
   if (item.latestVersion !== undefined) return `最新 ${item.latestVersion}`
   if (item.errorCode === 'registry-unavailable') return 'npm 查询不可用'
   if (item.errorCode === 'github-unavailable') return 'GitHub 查询不可用'
@@ -323,6 +326,8 @@ function UpdatesView({
   const snapshot = updates?.snapshot
   const visibleItems = snapshot?.items.filter(item => item.kind === 'dsh' || item.state !== 'current') ?? []
   const hiddenCurrent = snapshot?.items.filter(item => item.kind === 'plugin' && item.state === 'current').length ?? 0
+  const artifactCount = snapshot?.items.filter(item => item.state === 'local' && item.source === 'artifact').length ?? 0
+  const liveLocalCount = (snapshot?.summary.local ?? 0) - artifactCount
   return <div style={{ padding: '0 12px 12px' }}>
     <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
       <div style={{ flex: 1, minWidth: 0 }}>
@@ -349,7 +354,8 @@ function UpdatesView({
       }}>
         <Pill tone={snapshot.summary.available > 0 ? 'warn' : 'neutral'}>{snapshot.summary.available} 个变化</Pill>
         <Pill>{snapshot.summary.current} 个最新</Pill>
-        <Pill>{snapshot.summary.local} 个本地</Pill>
+        {artifactCount > 0 && <Pill>{artifactCount} 个制品</Pill>}
+        {liveLocalCount > 0 && <Pill>{liveLocalCount} 个本地链接</Pill>}
         {snapshot.summary.errors > 0 && <Pill tone="warn">{snapshot.summary.errors} 个失败</Pill>}
       </div>
       <div style={{ borderRadius: 12, background: SM.panel, overflow: 'hidden' }}>

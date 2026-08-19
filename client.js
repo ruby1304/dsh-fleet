@@ -135,7 +135,7 @@ window.__ModuleLoader__.load({
 		function updateLabel(item) {
 			if (item.state === "current") return "已是最新";
 			if (item.state === "available") return item.changeKind === "head-changed" ? "上游有变化" : "可更新";
-			if (item.state === "local") return "本地链接";
+			if (item.state === "local") return item.source === "artifact" ? "已固定" : "本地链接";
 			if (item.state === "missing") return "未安装";
 			if (item.state === "error") return "检查失败";
 			return "不支持检查";
@@ -144,6 +144,7 @@ window.__ModuleLoader__.load({
 			if (item.kind === "dsh") return "CORE";
 			if (item.source === "github") return "GitHub";
 			if (item.source === "npm") return "npm";
+			if (item.source === "artifact") return "tarball";
 			if (item.source === "local") return "local";
 			return "other";
 		}
@@ -158,7 +159,7 @@ window.__ModuleLoader__.load({
 				if (latest !== void 0) return `HEAD ${latest}`;
 			}
 			if (item.currentVersion !== void 0 && item.latestVersion !== void 0) return `${item.currentVersion} → ${item.latestVersion}`;
-			if (item.currentVersion !== void 0 && item.state === "local") return `${item.currentVersion} · 实时源码`;
+			if (item.currentVersion !== void 0 && item.state === "local") return item.source === "artifact" ? `${item.currentVersion} · 不可变制品` : `${item.currentVersion} · 实时源码`;
 			if (item.latestVersion !== void 0) return `最新 ${item.latestVersion}`;
 			if (item.errorCode === "registry-unavailable") return "npm 查询不可用";
 			if (item.errorCode === "github-unavailable") return "GitHub 查询不可用";
@@ -451,6 +452,8 @@ window.__ModuleLoader__.load({
 			const snapshot = updates?.snapshot;
 			const visibleItems = snapshot?.items.filter((item) => item.kind === "dsh" || item.state !== "current") ?? [];
 			const hiddenCurrent = snapshot?.items.filter((item) => item.kind === "plugin" && item.state === "current").length ?? 0;
+			const artifactCount = snapshot?.items.filter((item) => item.state === "local" && item.source === "artifact").length ?? 0;
+			const liveLocalCount = (snapshot?.summary.local ?? 0) - artifactCount;
 			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 				style: { padding: "0 12px 12px" },
 				children: [
@@ -545,7 +548,8 @@ window.__ModuleLoader__.load({
 								children: [snapshot.summary.available, " 个变化"]
 							}),
 							/* @__PURE__ */ (0, react_jsx_runtime.jsxs)(Pill, { children: [snapshot.summary.current, " 个最新"] }),
-							/* @__PURE__ */ (0, react_jsx_runtime.jsxs)(Pill, { children: [snapshot.summary.local, " 个本地"] }),
+							artifactCount > 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(Pill, { children: [artifactCount, " 个制品"] }),
+							liveLocalCount > 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(Pill, { children: [liveLocalCount, " 个本地链接"] }),
 							snapshot.summary.errors > 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(Pill, {
 								tone: "warn",
 								children: [snapshot.summary.errors, " 个失败"]

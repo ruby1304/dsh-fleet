@@ -23,11 +23,12 @@ async function fixture(): Promise<{ config: UpdateRuntimeConfig; files: string[]
       'npm-plugin': '^1.0.0',
       'github-plugin': 'github:team/github-plugin',
       'local-plugin': 'link:/tmp/local-plugin',
+      'artifact-plugin': 'file:/tmp/artifacts/artifact-plugin-1.0.0-deadbeef.tgz',
       'alias-plugin': 'npm:real-plugin@1.0.0',
       'private-plugin': '^1.0.0',
       'plain-library': '^9.0.0',
     },
-    dsh: { profile: { bundles: ['npm-plugin', 'github-plugin', 'local-plugin', 'alias-plugin', 'private-plugin'] } },
+    dsh: { profile: { bundles: ['npm-plugin', 'github-plugin', 'local-plugin', 'artifact-plugin', 'alias-plugin', 'private-plugin'] } },
   }))
   await writeFile(lockPath, `lockfileVersion: '9.0'
 importers:
@@ -38,6 +39,7 @@ importers:
         specifier: github:team/github-plugin
         version: https://codeload.github.com/team/github-plugin/tar.gz/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
       local-plugin: { specifier: 'link:/tmp/local-plugin', version: 'link:/tmp/local-plugin' }
+      artifact-plugin: { specifier: 'file:/tmp/artifacts/artifact-plugin-1.0.0-deadbeef.tgz', version: 'file:/tmp/artifacts/artifact-plugin-1.0.0-deadbeef.tgz' }
       alias-plugin: { specifier: 'npm:real-plugin@1.0.0', version: 1.0.0 }
       private-plugin: { specifier: ^1.0.0, version: 1.0.0 }
       plain-library: { specifier: ^9.0.0, version: 9.0.0 }
@@ -49,8 +51,9 @@ plugins:
   - { id: npm-plugin, source: npm, revision: ^1.0.0 }
   - { id: github-plugin, source: github:team/github-plugin }
   - { id: local-plugin, source: 'link:/tmp/local-plugin' }
+  - { id: artifact-plugin, source: 'file:/tmp/artifacts/artifact-plugin-1.0.0-deadbeef.tgz' }
 `)
-  for (const [id, version] of [['npm-plugin', '1.0.0'], ['github-plugin', '2.0.0'], ['local-plugin', '0.0.0-dev'], ['alias-plugin', '1.0.0']] as const) {
+  for (const [id, version] of [['npm-plugin', '1.0.0'], ['github-plugin', '2.0.0'], ['local-plugin', '0.0.0-dev'], ['artifact-plugin', '1.0.0'], ['alias-plugin', '1.0.0']] as const) {
     const directory = join(profileDir, 'node_modules', id)
     await mkdir(directory, { recursive: true })
     await writeFile(join(directory, 'package.json'), JSON.stringify({ name: id, version }))
@@ -88,7 +91,7 @@ describe('collectFleetUpdates', () => {
     const report = await collectFleetUpdates(config, probe, Date.parse('2026-08-18T06:00:00.000Z'))
 
     expect(report.checkedAt).toBe('2026-08-18T06:00:00.000Z')
-    expect(report.summary).toEqual({ tracked: 6, available: 3, current: 0, local: 1, missing: 0, errors: 0, unsupported: 2 })
+    expect(report.summary).toEqual({ tracked: 7, available: 3, current: 0, local: 2, missing: 0, errors: 0, unsupported: 2 })
     expect(report.items[0]).toMatchObject({
       id: '@deepseek-ai/dsh', kind: 'dsh', source: 'npm', state: 'available',
       currentVersion: '0.1.0-rc.5', latestVersion: '0.1.0-rc.7', changeKind: 'version',
@@ -102,6 +105,7 @@ describe('collectFleetUpdates', () => {
       latestRevision: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
     })
     expect(report.items.find(item => item.id === 'local-plugin')).toMatchObject({ state: 'local', source: 'local' })
+    expect(report.items.find(item => item.id === 'artifact-plugin')).toMatchObject({ state: 'local', source: 'artifact', currentVersion: '1.0.0' })
     expect(report.items.find(item => item.id === 'alias-plugin')).toMatchObject({ state: 'unsupported', source: 'unknown' })
     expect(report.items.find(item => item.id === 'private-plugin')).toMatchObject({ state: 'unsupported', source: 'npm' })
     expect(report.items.some(item => item.id === 'plain-library')).toBe(false)
@@ -122,7 +126,7 @@ describe('collectFleetUpdates', () => {
       githubHead: vi.fn(async () => { throw new Error('credential detail') }),
     }
     const report = await collectFleetUpdates(config, probe)
-    expect(report.summary).toMatchObject({ tracked: 6, errors: 3, current: 0, local: 1, unsupported: 2 })
+    expect(report.summary).toMatchObject({ tracked: 7, errors: 3, current: 0, local: 2, unsupported: 2 })
     expect(report.items.find(item => item.id === '@deepseek-ai/dsh')).toMatchObject({ state: 'error', errorCode: 'registry-unavailable' })
     expect(report.items.find(item => item.id === 'npm-plugin')).toMatchObject({ state: 'error', errorCode: 'registry-unavailable' })
     expect(report.items.find(item => item.id === 'github-plugin')).toMatchObject({ state: 'error', errorCode: 'github-unavailable' })

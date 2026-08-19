@@ -12,6 +12,7 @@
 - Prevent public federation anchors from granting task execution and keep private plugin artifacts out of shareable configuration.
 - Add launchd restart ownership with managed-port verification while retaining screen compatibility.
 - Move Fleet from the sidebar footer into a first-class Settings section with status, updates, releases and tasks tabs.
+- Distinguish immutable local tarballs from mutable `link:`/directory sources in update inventory and UI.
 - Add crash/replay/concurrency, atomic rollback, public/private release, bootstrap and Settings-layout regression coverage.
 - Preserve schema-v1 inventory and single-plugin operations as a compatibility path; recommend schema v2 for new stable deployments.
 

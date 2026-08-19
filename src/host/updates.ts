@@ -105,6 +105,12 @@ function githubDescriptor(spec: string): SourceDescriptor | undefined {
 }
 
 function describeSource(id: string, spec: string): SourceDescriptor {
+  const localPath = spec.startsWith('file:') ? spec.slice('file:'.length) : spec
+  const localTarball = /\.tgz$/i.test(localPath) && (
+    spec.startsWith('file:') || localPath.startsWith('/') || localPath.startsWith('./') ||
+    localPath.startsWith('../') || /^[A-Za-z]:[\\/]/.test(localPath)
+  )
+  if (localTarball) return { source: 'artifact' }
   if (/^(?:link|file|workspace):/.test(spec) || spec.startsWith('/') || spec.startsWith('./') || spec.startsWith('../')) {
     return { source: 'local' }
   }
@@ -235,7 +241,7 @@ async function checkPlugin(
     state: installed ? 'unsupported' : 'missing',
     ...(!installed ? { errorCode: 'not-installed' as const } : {}),
   }
-  if (descriptor.source === 'local') return { ...base, state: installed ? 'local' : 'missing' }
+  if (descriptor.source === 'local' || descriptor.source === 'artifact') return { ...base, state: installed ? 'local' : 'missing' }
   if (descriptor.source === 'npm' && descriptor.packageName !== undefined) {
     const privateSource = installedPackage?.private === true
       || (id.startsWith('@') && installedPackage?.access !== 'public')

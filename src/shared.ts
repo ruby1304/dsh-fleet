@@ -155,7 +155,7 @@ export interface FleetStatus {
   unmanaged: Array<{ id: string; actualSpec: string }>
 }
 
-export type FleetUpdateSource = 'npm' | 'github' | 'local' | 'unknown'
+export type FleetUpdateSource = 'npm' | 'github' | 'artifact' | 'local' | 'unknown'
 export type FleetUpdateState = 'current' | 'available' | 'local' | 'missing' | 'error' | 'unsupported'
 
 export interface FleetUpdateItem {

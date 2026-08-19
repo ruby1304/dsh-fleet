@@ -41,7 +41,7 @@ const updateReport: FleetUpdates = {
   snapshot: {
     checkedAt: '2026-01-01T00:00:00.000Z',
     refreshAfter: '2026-01-01T06:00:00.000Z',
-    summary: { tracked: 5, available: 2, current: 1, local: 1, missing: 0, errors: 1, unsupported: 0 },
+    summary: { tracked: 6, available: 2, current: 1, local: 2, missing: 0, errors: 1, unsupported: 0 },
     items: [
       {
         id: '@deepseek-ai/dsh', kind: 'dsh', managed: true, source: 'npm', state: 'available', changeKind: 'version',
@@ -52,6 +52,7 @@ const updateReport: FleetUpdates = {
         currentVersion: '1.0.0', currentRevision: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', latestRevision: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
       },
       { id: 'local-plugin', kind: 'plugin', managed: true, source: 'local', state: 'local', currentVersion: '0.1.0' },
+      { id: 'artifact-plugin', kind: 'plugin', managed: true, source: 'artifact', state: 'local', currentVersion: '1.0.0' },
       { id: 'broken-plugin', kind: 'plugin', managed: true, source: 'npm', state: 'error', errorCode: 'registry-unavailable' },
       { id: 'current-plugin', kind: 'plugin', managed: true, source: 'npm', state: 'current', currentVersion: '2.0.0', latestVersion: '2.0.0' },
     ],
@@ -254,6 +255,11 @@ describe('dsh-fleet client slots', () => {
       expect(text).toContain('aaaaaaa → bbbbbbb')
       expect(text).toContain('上游有变化')
       expect(text).toContain('本地链接')
+      expect(text).toContain('1 个制品')
+      expect(text).toContain('1 个本地链接')
+      expect(text).toContain('tarball')
+      expect(text).toContain('1.0.0 · 不可变制品')
+      expect(text).toContain('已固定')
       expect(text).toContain('npm 查询不可用')
       expect(text).toContain('1 个插件已是最新')
 

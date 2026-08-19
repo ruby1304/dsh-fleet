@@ -445,6 +445,8 @@ function githubDescriptor(spec) {
 	};
 }
 function describeSource(id, spec) {
+	const localPath = spec.startsWith("file:") ? spec.slice(5) : spec;
+	if (/\.tgz$/i.test(localPath) && (spec.startsWith("file:") || localPath.startsWith("/") || localPath.startsWith("./") || localPath.startsWith("../") || /^[A-Za-z]:[\\/]/.test(localPath))) return { source: "artifact" };
 	if (/^(?:link|file|workspace):/.test(spec) || spec.startsWith("/") || spec.startsWith("./") || spec.startsWith("../")) return { source: "local" };
 	const github = githubDescriptor(spec);
 	if (github !== void 0) return github;
@@ -558,7 +560,7 @@ async function checkPlugin(id, spec, managed, lockVersion, config, probe) {
 		state: installed ? "unsupported" : "missing",
 		...!installed ? { errorCode: "not-installed" } : {}
 	};
-	if (descriptor.source === "local") return {
+	if (descriptor.source === "local" || descriptor.source === "artifact") return {
 		...base,
 		state: installed ? "local" : "missing"
 	};
