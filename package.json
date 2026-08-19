@@ -1,6 +1,6 @@
 {
   "name": "dsh-fleet",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Atomic plugin releases and signed, recoverable A2A tasks for single-owner DeepSeek Harness fleets.",
   "type": "module",
   "main": "./index.mjs",

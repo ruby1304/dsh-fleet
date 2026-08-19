@@ -136,6 +136,7 @@ interface RunOptions {
   env?: NodeJS.ProcessEnv
   timeoutMs?: number
   allowFailure?: boolean
+  allowDescendants?: boolean
   cwd?: string
   ignoreOutput?: boolean
   signal?: AbortSignal | undefined
@@ -327,7 +328,7 @@ function runFile(file: string, args: string[], options: RunOptions = {}): Promis
       closeCode = code
       resolveLeaderClosed?.()
       if (termination !== null) return
-      if (grouped && child.pid !== undefined && processGroupIsAlive(child.pid)) {
+      if (options.allowDescendants !== true && grouped && child.pid !== undefined && processGroupIsAlive(child.pid)) {
         terminate(new AgentRuntimeError('command-descendant-leak', 'controlled command exited with a live process-group descendant'))
         return
       }
@@ -813,7 +814,7 @@ async function startDsh(config: FleetAgentConfig, signal?: AbortSignal): Promise
       '-dmS', config.restart.sessionName,
       '/usr/bin/env', 'DSH_HOME=' + config.dshHome, 'PATH=' + env.PATH,
       config.dshBinary, 'web', '--host', config.restart.host, '--port', String(config.restart.port),
-    ], { env, timeoutMs: 10_000, allowFailure: true, ignoreOutput: true, signal })
+    ], { env, timeoutMs: 10_000, allowFailure: true, allowDescendants: true, ignoreOutput: true, signal })
     if (start.code !== 0) throw new AgentRuntimeError('restart-failed', 'DSH restart failed')
     return
   }

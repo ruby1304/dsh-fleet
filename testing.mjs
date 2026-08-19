@@ -1934,7 +1934,7 @@ function runFile(file, args, options = {}) {
 			closeCode = code;
 			resolveLeaderClosed?.();
 			if (termination !== null) return;
-			if (grouped && child.pid !== void 0 && processGroupIsAlive(child.pid)) {
+			if (options.allowDescendants !== true && grouped && child.pid !== void 0 && processGroupIsAlive(child.pid)) {
 				terminate(new AgentRuntimeError("command-descendant-leak", "controlled command exited with a live process-group descendant"));
 				return;
 			}
@@ -2422,6 +2422,7 @@ async function startDsh(config, signal) {
 			env,
 			timeoutMs: 1e4,
 			allowFailure: true,
+			allowDescendants: true,
 			ignoreOutput: true,
 			signal
 		})).code !== 0) throw new AgentRuntimeError("restart-failed", "DSH restart failed");

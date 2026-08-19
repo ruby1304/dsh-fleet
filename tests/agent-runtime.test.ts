@@ -603,7 +603,7 @@ describe('fleet agent runtime', () => {
     }
   })
 
-  it('does not wait on stdio inherited by a detached screen child', async () => {
+  it('allows the fixed screen launcher to leave its managed child running', async () => {
     const { config, root } = await setup()
     const screenBinary = join(root, 'bin', 'screen')
     const lsofBinary = join(root, 'bin', 'lsof')
@@ -612,7 +612,7 @@ describe('fleet agent runtime', () => {
 const { spawn } = require('node:child_process')
 if (process.argv.includes('-X')) process.exit(0)
 if (!process.argv.includes('-dmS')) process.exit(9)
-const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 2000)'], { detached: true, stdio: 'inherit' })
+const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 2000)'], { stdio: 'inherit' })
 child.unref()
 `)
     await writeFile(lsofBinary, '#!/bin/sh\nexit 1\n')

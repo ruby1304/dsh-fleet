@@ -1,6 +1,11 @@
 # Changelog
 
-## 0.3.2 - Unreleased
+## 0.3.3 - Unreleased
+
+- Allow only the fixed `screen -dmS` service launcher to retain its expected managed child after the launcher exits; all plugin, package and inspection commands still reject live process-group descendants.
+- Keep post-launch loopback health, listener ownership, plugin alignment and Loader checks as the authority for successful restart or rollback.
+
+## 0.3.2 - 2026-08-19
 
 - Remove a mutable dependency from the staged profile before adding its immutable replacement, preventing pnpm from retaining a stale `link:` materialization behind a changed package specifier.
 - Verify each release plugin resolves inside the staged profile and that its materialized package name/version matches the approved release before service cutover.
