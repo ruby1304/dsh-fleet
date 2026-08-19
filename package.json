@@ -1,7 +1,7 @@
 {
   "name": "dsh-fleet",
-  "version": "0.2.0",
-  "description": "Declarative inventory and owner-approved plugin convergence for DeepSeek Harness fleets.",
+  "version": "0.3.0",
+  "description": "Atomic plugin releases and signed, recoverable A2A tasks for single-owner DeepSeek Harness fleets.",
   "type": "module",
   "main": "./index.mjs",
   "exports": {
@@ -13,12 +13,14 @@
     "./package.json": "./package.json"
   },
   "bin": {
-    "dsh-fleet-agent": "./agent.mjs"
+    "dsh-fleet-agent": "./agent.mjs",
+    "dsh-fleet-bootstrap": "./bootstrap.mjs"
   },
   "files": [
     "index.mjs",
     "testing.mjs",
     "agent.mjs",
+    "bootstrap.mjs",
     "client.js",
     "client.js.map",
     "cordis.patch.yml",
@@ -32,7 +34,9 @@
     "LICENSE",
     "docs",
     "examples/fleet.lock.yaml",
-    "examples/agent.config.json"
+    "examples/agent.config.json",
+    "examples/team-pack.yaml",
+    "examples/device-overlay.yaml"
   ],
   "dsh": {
     "bundle": {

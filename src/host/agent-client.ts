@@ -9,7 +9,10 @@ const MUTATION_TERMINATION_GRACE_MS = 10 * 60_000
 const LOCAL_GROUP_DRAIN_MS = 2_000
 
 export type AgentTransport = 'local' | 'ssh'
-export type AgentCommand = 'inspect' | 'plan' | 'apply' | 'status'
+export type AgentCommand =
+  | 'inspect' | 'plan' | 'apply' | 'status'
+  | 'release-inspect' | 'release-plan' | 'release-apply' | 'release-status'
+  | 'a2a-sign' | 'a2a-verify' | 'a2a-receive' | 'tasks-resume' | 'doctor'
 
 export interface AgentTargetConfig {
   deviceId: string
@@ -47,7 +50,8 @@ interface AgentCallOptions {
 type StopReason = 'cancelled' | 'timeout' | 'output-limit'
 
 function isMutationCommand(command: AgentCommand): boolean {
-  return command === 'apply' || command === 'status'
+  return command === 'apply' || command === 'status' || command === 'release-apply' || command === 'release-status' ||
+    command === 'a2a-receive' || command === 'tasks-resume'
 }
 
 export function agentTerminationGraceMs(command: AgentCommand): number {

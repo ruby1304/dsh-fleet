@@ -1,12 +1,14 @@
 # dsh-fleet 产品需求与后续实施说明
 
 - **文档状态**：后续开发基线
-- **更新时间**：2026-08-18
-- **当前代码版本**：`0.2.0` 开源发布候选；实际发布状态以 `package.json`、Git tag、GitHub Release 和 npm provenance 为准
-- **当前阶段**：V0 inventory/drift 与只读更新监控已验收；单 Owner V1 的取消恢复、强制 restart/health gate 和 Operations 回归已具备自动化证据；整个 Fleet 产品仍远未完成
+- **更新时间**：2026-08-19
+- **当前代码版本**：`0.3.0` 开源发布候选；实际发布状态以 `package.json`、Git tag、GitHub Release 和 npm provenance 为准
+- **当前阶段**：schema-v2 原子 profile release、设备签名 A2A、可恢复异步任务、public pack + private overlay bootstrap 和 Settings UI 已进入候选；完整 Remote Control 与多人 Fleet 仍未完成
 - **目标读者**：下一开发 session、未来贡献者、DSH 上游维护者
 
 ---
+
+> 版本说明：本文保留早期 V0/V1 需求与日期化验收记录作为设计历史。凡“当前实现”与 0.3 代码冲突，以第 7、19、20 节、README、SECURITY_MODEL 和实际测试为准；旧的 sidebar capsule、schema-v1-only、无签名任务/无 bootstrap 描述不再代表现状。
 
 ## 1. 项目定义
 
@@ -315,9 +317,9 @@ capabilitySets:
 
 ---
 
-## 6. V0 清单格式
+## 6. 清单格式
 
-当前实现：`schemaVersion: 1`，只支持 devices 和 plugins。
+`schemaVersion: 1` 是保留的只读/单插件兼容格式，只支持 devices 和 plugins：
 
 ```yaml
 schemaVersion: 1
@@ -371,6 +373,10 @@ plugins:
 - `runtime-inactive`；
 - unmanaged bundle 单独列出。
 
+### 6.3 Schema v2 原子 release
+
+新稳定部署使用 `schemaVersion: 2`：每台设备的每个 profile 只绑定一个 `profileRelease`。release 同时包含 exact npm+SRI、GitHub 40-SHA 和 content-addressed private artifact，作为一个 plan、一个审批、一个 stage/swap/rollback 单元。实际格式见 `examples/fleet.lock.yaml`。
+
 ---
 
 ## 7. 当前代码状态
@@ -386,14 +392,17 @@ plugins:
 - `src/shared.ts`：清单和状态类型；
 - `src/host/core.ts`：YAML 解析、校验、设备选择和差异计算；
 - `src/index.ts`：本机 profile/Loader 采集及 loopback RPC；
-- `src/client/index.tsx`：注册在 `sidebar.footer.action` 的 Fleet 状态与操作面板；
-- `src/agent/`：不可变计划、审批、快照、安装、健康检查、回滚、锁和一次性 CLI；
+- `src/client/index.tsx`：注册为 `settings.section` 的状态、更新、原子发布和任务页面；
+- `src/agent/`：兼容计划、原子 release、审批、stage/swap、健康检查、回滚、锁和一次性 CLI；
+- `src/a2a/`：Ed25519 消息、能力信任、durable task、取消与恢复；
+- `src/bootstrap/`：public team pack、private overlay、设备 identity 和严格非覆盖式渲染；
 - `src/host/agent-client.ts`：固定 local/SSH target 的结构化 Agent transport；
 - `examples/fleet.lock.yaml`：控制端/工作端 示例清单；
 - `tests/core.test.ts`：清单和收敛单测；
 - `tests/host.test.ts`：profile/Loader 采集集成测试；
-- `tests/client.test.tsx`：sidebar footer action 生命周期、展开/收起侧栏布局、状态/更新页，以及 Operations 的精确计划、确认、批准断线恢复和 targets 刷新测试；
+- `tests/client.test.tsx`：Settings 注册、无 fixed/sidebar 冲突、状态/更新/release/task 与断线恢复测试；
 - `tests/agent-*.test.ts`：计划、transport、真实依赖树回滚、并发和中断恢复测试；
+- `tests/release-*.test.ts`、`tests/a2a-*.test.ts`、`tests/*bootstrap*.test.ts`：原子发布、签名/篡改/过期、durable task、陈旧锁和初次配置测试；
 - `tests/rc7-contract.test.ts`：官方 rc.7 类型、CLI 和隔离 profile reconciliation 契约。
 
 验收口径：
@@ -539,13 +548,13 @@ V0 本身仍保持下列边界：
 
 实现禁止经过 `dsh plugin ... outdated`：DSH CLI 的 plugin wrapper 会在成功的 pnpm 命令之后 reconciliation profile bundles，必要时重写 profile，因此不属于严格只读边界。
 
-该只读 detector 本身仍不执行收敛。`0.2.0` 另以独立 Agent 实现批准、快照、安装、健康检查、重启与回滚；两条 RPC/执行边界保持分离。
+该只读 detector 本身仍不执行收敛。`0.2.0` 的独立 Agent 保留为 schema-v1 兼容路径；`0.3.0` 以 schema-v2 完整 release stage/swap/rollback 扩展它。只读 RPC 与写入执行边界继续分离。
 
 ---
 
 ## 9. V1：本机受控收敛
 
-`0.2.0` 候选实现了本章的单 Owner、单插件切片；它不代表 V1 全部完成。当前 transport 是固定配置的一次性 local/SSH 调用，不是最终的多成员 Hub/outbound mTLS 架构。
+本章主要记录 `0.2.0` 的单 Owner、单插件切片。`0.3.0` 已增加完整 profile release 与签名 A2A task，但 transport 仍是固定 local/SSH 调用，不是最终的 hosted relay、成员 Hub 或 outbound mTLS 架构。
 
 ### 9.1 目标
 
@@ -892,7 +901,7 @@ Agent 是 principal 的一种：
 
 ## 16. 测试策略
 
-本章是目标测试矩阵，不等于当前仓库已经覆盖每一项。当前 V0/V1 预览的自动化证据集中在清单/差异、Host RPC、客户端三页、精确 plan/approval、受控进程、快照/回滚、锁/幂等和 rc.7 契约；Hub、成员、吊销、异步任务等未实现条目仍是未来测试。
+本章是目标测试矩阵，不等于当前仓库已经覆盖每一项。当前 0.3 预览的自动化证据覆盖清单/差异、Host RPC、Settings 客户端、完整 release plan/approval、public/private staging、目录级回滚、A2A 签名/篡改/过期/capability、durable task、取消/陈旧锁/重连、bootstrap 和 rc.7 契约；hosted relay、成员/RBAC、attestation、secret distribution 与 live session resume 仍是未来测试。
 
 ### 16.1 单元测试
 
@@ -966,7 +975,7 @@ Agent 是 principal 的一种：
 
 ---
 
-## 18. V0 验收记录与 V1 顺序
+## 18. 历史 V0/V1 验收记录与后续顺序
 
 以下 V0 顺序已于 2026-08-18 完成：
 
@@ -1015,30 +1024,31 @@ V1 已按独立 Fleet Agent 路径开始：计划、审批、快照、健康检�
 2. 检查当前 branch、HEAD、dirty state、package version 和 changelog；
 3. 使用 `pnpm install --frozen-lockfile --ignore-scripts` 安装依赖；
 4. 先运行 `pnpm run check`，再开始变更；
-5. 保持 V0 只读 RPC、固定 target、不可变计划、显式批准、冻结 lockfile 回滚和无任意 shell边界；
-6. Hub、成员系统、签名审批和 secrets 分发仍是未实现范围，不得从 roadmap 推断为当前能力。
+5. 保持 V0 只读 RPC、固定 target、完整 release 审批、目录级回滚、A2A capability 和无任意 shell 边界；
+6. Hosted relay/push、多用户成员/RBAC、attestation、secrets 分发和 live session resume 仍未实现，不得从 roadmap 推断为当前能力。
 
 ---
 
 ## 20. 当前阶段完成定义
 
-当前阶段的交付是“Fleet V0 已验收 + V1 单 Owner 收敛候选”，不是整个 Fleet 产品完成：
+当前阶段的交付是“单 Owner 多设备的安全异步 Remote Control 基础”，不是完整 Codex Remote Control 或多人 Fleet：
 
-- V0 本地只读 inventory、drift、UI/RPC 和更新可用性监控已落地；
-- 控制端 与 工作端 使用同一逻辑清单并按设备职责选出不同目标集合；
-- 控制端、工作端 profile 与现有 Web 已装配并通过真实 RPC 验证；
-- 开源候选只有在当前 PR 合并、tag/Release 建立且 npm provenance 可验证后，才能写成已经发布；
-- 示例清单、来源边界、稳定版本规则和双设备差异已固化；
-- V1 Agent 的 exact install/update、审批、回滚和 控制端→工作端 固定 SSH 路径已经实现；
-- Host 会在展示 target inventory 或生成计划前校验 Agent 的 device ID、profile 与 manifest digest，任何不一致都 fail closed；
-- V1 候选已完成一次日期化的控制端→工作端 rc.7 隔离安装/更新/故障回滚与正式 profile 安装验收；
-- 仍无引导式 bootstrap/pair/doctor、runtime 自动 repair、remove/batch/core update、Hub、成员系统、设备 enrollment、签名审批、secrets 分发和通用远程任务。
+- V0 inventory/drift/update 继续兼容；新稳定路径使用 schema-v2 完整 profile release；
+- public npm/GitHub 与 private artifact 作为一个不可变 release 原子 stage/swap，失败恢复旧 profile；
+- 设备使用 Ed25519 A2A，签名覆盖 team/sender/recipient/kind/payload/expiry，接收端 trust store 决定 capability；
+- Web 只能提交 target + 固定 workspace/profile ID + prompt，不存在 command/argv/path/shell 入口；
+- task 有 durable ID、signed progress/result、cancel、reconnect 和 accepted-task recovery；running worker 丢失不自动重放；
+- public pack 与 private overlay 一键渲染完整 manifest/trust/task-policy/Agent config，identity 私钥不离机，public anchor 不能授予 task execution；
+- Fleet 位于 DSH Settings 内容流，不再占用 sidebar footer 或 fixed overlay；
+- 开源候选只有在当前代码通过完整 check/release:check、tarball inspection、实机候选与 rollback/A2A 验收、CI、tag/Release 和 npm provenance 后，才能写成已发布。
 
-`0.2.0` 候选必须持续满足下列 gate；任一回归都要恢复为 preview 状态：
+`0.3.0` 候选必须持续满足下列 gate：
 
-1. 已启动的 `apply` 或可执行恢复的 `status` 一旦取消、超时或输出超限，本地/SSH Host 都返回 mutation-unknown 并通过 `action-status` 恢复，不能假定动作未发生；Agent 内部要先清空受控命令的同一 process group，再执行补偿回滚，Host 为 mutation 留出 10 分钟 cooperative grace；这不等于对主动 `setsid`/double-fork 的 OS 级 containment；
-2. apply 配置不能跳过 restart、loopback health URL 或 Fleet RPC 健康检查，成功必须要求目标插件 aligned 且全局 Loader failed=0；
-3. Operations 客户端覆盖精确计划、显式确认、approve 失败后的 `action-status` 恢复和 targets 刷新；
-4. 当前工作树通过 `pnpm run check`、`pnpm run release:check`、package inspection 和当前 PR CI。
+1. 完整 release plan/approval 必须绑定 manifest、profile digest、设备、profile、所有 plugin source 和 expiry；
+2. stage 验证、service stop、同文件系统 rename、restart、loopback Fleet RPC、release alignment 和 Loader failed=0 缺一不可；失败不得伪报成功；
+3. A2A 必须拒绝篡改、过期、错 team/recipient、未授权 kind 和 task ID rebinding；私钥权限 fail closed；
+4. task 并发、取消、陈旧锁、receipt replay、accepted recovery 和 running-worker-lost 行为有自动化证据；
+5. bootstrap 不覆盖现有 generation，public/private 边界与 identity binding 有自动化证据；
+6. 当前工作树通过 `pnpm run check`、`pnpm run release:check`、package inspection、浏览器 Settings QA 和当前 PR CI。
 
-即使这些 gate 通过，也只表示 V1 单 Owner 切片是候选，不表示完整 Fleet 产品完成；协议尚未单独回传 restart/health evidence，实机运行态仍需按日期重新验证。
+即使这些 gate 通过，也只表示 bounded asynchronous remote execution 候选完成。Hosted relay/push、interactive live session/tool stream、组织账号、multi-user RBAC、remote attestation 和 secrets 分发仍属后续阶段。

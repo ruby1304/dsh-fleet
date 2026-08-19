@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { homedir, hostname, platform, arch } from 'node:os'
@@ -7,9 +7,13 @@ import { basename, join, resolve } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type { HostConnectionHandle } from '@deepseek-ai/dsh-client-connection'
 import type { RpcResult } from '@deepseek-ai/dsh-host-apiproxy/api'
-import type { AgentActionRecord, AgentInspection } from './agent/runtime.ts'
+import type { AgentActionRecord, AgentInspection, ReleaseActionRecord, ReleaseAgentInspection } from './agent/runtime.ts'
 import { FLEET_AGENT_PROTOCOL_VERSION, type FleetPlan, type FleetPlanApproval } from './agent/protocol.ts'
+import { FLEET_RELEASE_PROTOCOL_VERSION, type FleetReleaseApproval, type FleetReleasePlan } from './agent/release-protocol.ts'
+import type { FleetA2AEnvelope } from './a2a/protocol.ts'
+import type { FleetA2AReceipt } from './a2a/runtime.ts'
 import { AgentClientError, assertAgentIdentity, createAgentClient, type AgentTargetConfig } from './host/agent-client.ts'
+import { digestInstalledArtifact } from './host/artifacts.ts'
 import { parseFleetManifest, reconcileFleet } from './host/core.ts'
 import { createUpdateMonitor, type UpdateMode } from './host/updates.ts'
 import { normalizeDeviceId, type FleetManifest, type FleetStatus, type RuntimePhase, type RuntimePluginEntry } from './shared.ts'
@@ -24,6 +28,7 @@ export interface ConvergenceConfig {
   principalId?: string
   timeoutMs?: number
   targets?: AgentTargetConfig[]
+  signerDeviceId?: string
 }
 
 export interface Config {
@@ -32,6 +37,7 @@ export interface Config {
   profile?: string
   dshHome?: string
   dshBinary?: string
+  artifactStore?: string
   updateCheck?: boolean
   updateCacheMs?: number
   updateTimeoutMs?: number
@@ -75,8 +81,8 @@ function defaultDshBinary(): string {
   const current = process.argv[1]
   const candidates = [
     ...(current !== undefined && (basename(current) === 'dsh' || current.includes('/@deepseek-ai/dsh/')) ? [current] : []),
-    join(homedir(), '.npm-global/bin/dsh'),
     join(homedir(), '.local/bin/dsh'),
+    join(homedir(), '.npm-global/bin/dsh'),
   ]
   return candidates.find(candidate => existsSync(candidate)) ?? 'dsh'
 }
@@ -91,6 +97,7 @@ function resolveConfig(config: Config | undefined) {
     profile: (config?.profile ?? process.env.DSH_FLEET_PROFILE ?? 'web').trim(),
     dshHome,
     dshBinary: expandHome(config?.dshBinary ?? process.env.DSH_FLEET_DSH_BINARY ?? defaultDshBinary()),
+    artifactStore: expandHome(config?.artifactStore ?? process.env.DSH_FLEET_ARTIFACT_STORE ?? '~/.dsh/fleet/artifacts'),
     updateCheck: config?.updateCheck !== false,
     updateCacheMs: boundedNumber(config?.updateCacheMs, 6 * 60 * 60 * 1000, 60 * 1000, 24 * 60 * 60 * 1000),
     updateTimeoutMs: boundedNumber(config?.updateTimeoutMs, 5000, 1000, 15_000),
@@ -99,6 +106,9 @@ function resolveConfig(config: Config | undefined) {
       principalId: (config?.convergence?.principalId ?? process.env.USER ?? 'local-owner').trim(),
       timeoutMs: boundedNumber(config?.convergence?.timeoutMs, 180_000, 5000, 10 * 60 * 1000),
       targets: config?.convergence?.targets ?? [],
+      signerDeviceId: config?.convergence?.signerDeviceId === undefined
+        ? undefined
+        : normalizeDeviceId(config.convergence.signerDeviceId, 'convergence.signerDeviceId'),
     },
   }
 }
@@ -168,6 +178,21 @@ export async function collectFleetStatus(ctx: Pick<HostContext, 'loader'>, confi
     deviceId: config.deviceId,
     profile: config.profile,
     dependencies,
+    artifactDigests: Object.fromEntries((await Promise.all(reconcileFleet({
+      manifest,
+      deviceId: config.deviceId,
+      profile: config.profile,
+      dependencies,
+      bundles,
+      runtime: [],
+    }).plugins.filter(plugin => plugin.desiredArtifactDigest !== undefined).map(async plugin => {
+      const digest = await digestInstalledArtifact(
+        join(config.dshHome, 'profiles', config.profile),
+        config.artifactStore,
+        dependencies[plugin.id] ?? '',
+      )
+      return digest === undefined ? null : [plugin.id, digest] as const
+    }))).filter((entry): entry is readonly [string, string] => entry !== null)),
     bundles,
     runtime,
   })
@@ -225,6 +250,14 @@ async function digestManifest(path: string): Promise<string> {
   return createHash('sha256').update(await readFile(path, 'utf8'), 'utf8').digest('hex')
 }
 
+async function loadManifestBinding(path: string): Promise<{ manifest: FleetManifest; digest: string }> {
+  const source = await readFile(path, 'utf8')
+  return {
+    manifest: parseFleetManifest(source),
+    digest: createHash('sha256').update(source, 'utf8').digest('hex'),
+  }
+}
+
 export function assertAgentConfiguration(
   expected: { deviceId: string; profile: string; manifestDigest: string },
   response: { deviceId: string; profile: string; manifestDigest: string },
@@ -252,6 +285,34 @@ export function apply(ctx: Context, config?: Config): void {
     dshVersion: readDshVersion(resolved.dshBinary),
   })
   const agents = createAgentClient(resolved.convergence)
+  const signedTaskCall = async (
+    targetDeviceId: string,
+    kind: 'task.submit' | 'task.status' | 'task.cancel',
+    taskPayload: Record<string, unknown>,
+    signal: AbortSignal,
+  ): Promise<FleetA2AEnvelope> => {
+    const signerDeviceId = resolved.convergence.signerDeviceId
+    if (signerDeviceId === undefined) throw new AgentClientError('a2a-signer-missing', 'a fixed local A2A signer is not configured')
+    const signer = resolved.convergence.targets.find(target => target.deviceId === signerDeviceId)
+    if (signer === undefined || signer.transport !== 'local') {
+      throw new AgentClientError('a2a-signer-invalid', 'A2A signer must be a configured local Agent target')
+    }
+    const envelope = await agents.call<FleetA2AEnvelope>(signerDeviceId, 'a2a-sign', {
+      recipientDeviceId: targetDeviceId,
+      kind,
+      payload: taskPayload,
+    }, signal)
+    const receipt = await agents.call<FleetA2AReceipt>(targetDeviceId, 'a2a-receive', { envelope }, signal)
+    if (receipt.requestMessageId !== envelope.messageId || typeof receipt.response !== 'object' || receipt.response === null) {
+      throw new AgentClientError('a2a-receipt-invalid', 'target returned an invalid A2A receipt')
+    }
+    const verified = await agents.call<FleetA2AEnvelope>(signerDeviceId, 'a2a-verify', { envelope: receipt.response }, signal)
+    if (verified.sender.deviceId !== targetDeviceId || verified.payload.taskId !== taskPayload.taskId ||
+        (verified.kind !== 'task.progress' && verified.kind !== 'task.result')) {
+      throw new AgentClientError('a2a-response-mismatch', 'signed task response does not match the requested target and task')
+    }
+    return verified
+  }
   host.connection.rpc.handle(RPC_CHANNEL, async (endpoint, payload) => {
     try {
       if (endpoint === 'status') return ok(await collectFleetStatus(host, config))
@@ -277,12 +338,15 @@ export function apply(ctx: Context, config?: Config): void {
           throw new TypeError('targets payload must be empty')
         }
         if (!agents.enabled) return ok({ enabled: false, targets: [] })
-        const manifestDigest = await digestManifest(resolved.manifestPath)
+        const binding = await loadManifestBinding(resolved.manifestPath)
         const targets = await Promise.all(agents.targets.map(async target => {
           try {
-            const inspection = await agents.call<AgentInspection>(target.deviceId, 'inspect', null, signal)
-            assertAgentConfiguration({ deviceId: target.deviceId, profile: resolved.profile, manifestDigest }, inspection)
-            return { ...target, online: true, inspection }
+            const releaseMode = binding.manifest.schemaVersion === 2
+            const inspection = releaseMode
+              ? await agents.call<ReleaseAgentInspection>(target.deviceId, 'release-inspect', null, signal)
+              : await agents.call<AgentInspection>(target.deviceId, 'inspect', null, signal)
+            assertAgentConfiguration({ deviceId: target.deviceId, profile: resolved.profile, manifestDigest: binding.digest }, inspection)
+            return { ...target, online: true, mode: releaseMode ? 'profile-release' : 'single-plugin', inspection }
           } catch (error: unknown) {
             const code = error instanceof AgentClientError ? error.code : 'agent-unavailable'
             return { ...target, online: false, errorCode: code }
@@ -295,6 +359,17 @@ export function apply(ctx: Context, config?: Config): void {
         const deviceId = requiredString(body.deviceId, 'deviceId')
         const pluginId = requiredString(body.pluginId, 'pluginId')
         const plan = await agents.call<FleetPlan>(deviceId, 'plan', { pluginId }, signal)
+        assertAgentConfiguration({
+          deviceId,
+          profile: resolved.profile,
+          manifestDigest: await digestManifest(resolved.manifestPath),
+        }, plan)
+        return ok(plan)
+      }
+      if (endpoint === 'release-plan') {
+        const body = closedPayload(payload, ['deviceId'], 'release plan payload')
+        const deviceId = requiredString(body.deviceId, 'deviceId')
+        const plan = await agents.call<FleetReleasePlan>(deviceId, 'release-plan', null, signal)
         assertAgentConfiguration({
           deviceId,
           profile: resolved.profile,
@@ -321,11 +396,61 @@ export function apply(ctx: Context, config?: Config): void {
         }
         return ok(await agents.call<AgentActionRecord>(deviceId, 'apply', { approval }, signal))
       }
+      if (endpoint === 'release-approve') {
+        const body = closedPayload(payload, ['approvalId', 'deviceId', 'planDigest', 'planExpiresAt', 'planId', 'profile'], 'release approve payload')
+        const deviceId = requiredString(body.deviceId, 'deviceId')
+        const approvedAt = new Date()
+        const planExpiresAt = new Date(requiredString(body.planExpiresAt, 'planExpiresAt'))
+        if (!Number.isFinite(planExpiresAt.getTime()) || planExpiresAt <= approvedAt) throw new TypeError('planExpiresAt must be in the future')
+        const approval: FleetReleaseApproval = {
+          protocolVersion: FLEET_RELEASE_PROTOCOL_VERSION,
+          kind: 'profile-release',
+          approvalId: requiredString(body.approvalId, 'approvalId'),
+          principalId: resolved.convergence.principalId,
+          planId: requiredString(body.planId, 'planId'),
+          planDigest: requiredString(body.planDigest, 'planDigest'),
+          deviceId,
+          profile: requiredString(body.profile, 'profile'),
+          approvedAt: approvedAt.toISOString(),
+          expiresAt: new Date(Math.min(planExpiresAt.getTime(), approvedAt.getTime() + 2 * 60 * 1000)).toISOString(),
+        }
+        return ok(await agents.call<ReleaseActionRecord>(deviceId, 'release-apply', { approval }, signal))
+      }
       if (endpoint === 'action-status') {
         const body = closedPayload(payload, ['deviceId', 'planId'], 'status payload')
         const deviceId = requiredString(body.deviceId, 'deviceId')
         const planId = requiredString(body.planId, 'planId')
         return ok(await agents.call<AgentActionRecord>(deviceId, 'status', { planId }, signal))
+      }
+      if (endpoint === 'release-action-status') {
+        const body = closedPayload(payload, ['deviceId', 'planId'], 'release status payload')
+        const deviceId = requiredString(body.deviceId, 'deviceId')
+        const planId = requiredString(body.planId, 'planId')
+        return ok(await agents.call<ReleaseActionRecord>(deviceId, 'release-status', { planId }, signal))
+      }
+      if (endpoint === 'task-submit') {
+        const body = closedPayload(payload, ['profile', 'prompt', 'targetDeviceId', 'workspaceId'], 'task submit payload')
+        const targetDeviceId = normalizeDeviceId(requiredString(body.targetDeviceId, 'targetDeviceId'))
+        const taskId = 'task:' + randomUUID()
+        const response = await signedTaskCall(targetDeviceId, 'task.submit', {
+          taskId,
+          workspaceId: requiredString(body.workspaceId, 'workspaceId'),
+          profile: requiredString(body.profile, 'profile'),
+          prompt: requiredString(body.prompt, 'prompt'),
+        }, signal)
+        return ok({ taskId, response })
+      }
+      if (endpoint === 'task-status' || endpoint === 'task-cancel') {
+        const body = closedPayload(payload, ['targetDeviceId', 'taskId'], 'task control payload')
+        const targetDeviceId = normalizeDeviceId(requiredString(body.targetDeviceId, 'targetDeviceId'))
+        const taskId = requiredString(body.taskId, 'taskId')
+        const response = await signedTaskCall(targetDeviceId, endpoint === 'task-status' ? 'task.status' : 'task.cancel', { taskId }, signal)
+        return ok({ taskId, response })
+      }
+      if (endpoint === 'tasks-resume') {
+        const body = closedPayload(payload, ['targetDeviceId'], 'tasks resume payload')
+        const targetDeviceId = normalizeDeviceId(requiredString(body.targetDeviceId, 'targetDeviceId'))
+        return ok(await agents.call<{ resumed: number }>(targetDeviceId, 'tasks-resume', null, signal))
       }
       return fail('unknown agent endpoint: ' + endpoint)
     } catch (error: unknown) {

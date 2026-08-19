@@ -1,8 +1,15 @@
-import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ClientConnectionRpc } from '@deepseek-ai/dsh-client-connection/client'
 import type { RpcResult } from '@deepseek-ai/dsh-host-apiproxy/api'
 import type { FleetPlan } from '../agent/protocol.ts'
-import type { AgentActionRecord, AgentInspection } from '../agent/runtime.ts'
+import type { FleetReleasePlan } from '../agent/release-protocol.ts'
+import type {
+  AgentActionRecord,
+  AgentActionState,
+  AgentInspection,
+  ReleaseActionRecord,
+  ReleaseAgentInspection,
+} from '../agent/runtime.ts'
 import type {
   FleetStatus,
   FleetUpdateItem,
@@ -50,8 +57,9 @@ interface AgentTargetView {
   deviceId: string
   transport: 'local' | 'ssh'
   online: boolean
+  mode?: 'single-plugin' | 'profile-release'
   errorCode?: string
-  inspection?: AgentInspection
+  inspection?: AgentInspection | ReleaseAgentInspection
 }
 
 interface AgentTargetsView {
@@ -84,13 +92,23 @@ function isAgentTargets(value: unknown): value is AgentTargetsView {
   return value.targets.every(target => {
     if (!isRecord(target) || typeof target.deviceId !== 'string' ||
         (target.transport !== 'local' && target.transport !== 'ssh') || typeof target.online !== 'boolean') return false
+    if (target.mode !== undefined && target.mode !== 'single-plugin' && target.mode !== 'profile-release') return false
     if (target.errorCode !== undefined && typeof target.errorCode !== 'string') return false
     if (target.inspection === undefined) return target.online === false
     const inspection = target.inspection
-    return isRecord(inspection) && inspection.protocolVersion === 1 && typeof inspection.deviceId === 'string' &&
-      typeof inspection.profile === 'string' && typeof inspection.dshVersion === 'string' &&
-      typeof inspection.manifestDigest === 'string' && typeof inspection.profileHash === 'string' &&
-      Array.isArray(inspection.candidates) && inspection.candidates.every(candidate =>
+    if (!isRecord(inspection) || inspection.protocolVersion !== 1 || typeof inspection.deviceId !== 'string' ||
+      typeof inspection.profile !== 'string' || typeof inspection.dshVersion !== 'string' ||
+      typeof inspection.manifestDigest !== 'string' || typeof inspection.profileHash !== 'string') return false
+    if (inspection.kind === 'profile-release') {
+      return isRecord(inspection.assignedRelease) && typeof inspection.assignedRelease.releaseId === 'string' &&
+        typeof inspection.assignedRelease.releaseVersion === 'string' && Array.isArray(inspection.changes) &&
+        inspection.changes.every(change => isRecord(change) && typeof change.pluginId === 'string' &&
+          (change.action === 'install' || change.action === 'update' || change.action === 'remove')) &&
+        isRecord(inspection.tasks) && typeof inspection.tasks.enabled === 'boolean' &&
+        Array.isArray(inspection.tasks.workspaceIds) && inspection.tasks.workspaceIds.every(id => typeof id === 'string') &&
+        Array.isArray(inspection.tasks.profiles) && inspection.tasks.profiles.every(profile => typeof profile === 'string')
+    }
+    return Array.isArray(inspection.candidates) && inspection.candidates.every(candidate =>
         isRecord(candidate) && typeof candidate.pluginId === 'string' &&
         (candidate.action === 'install' || candidate.action === 'update') &&
         (candidate.fromSpec === null || typeof candidate.fromSpec === 'string') &&
@@ -106,13 +124,45 @@ function isFleetPlan(value: unknown): value is FleetPlan {
     typeof value.expiresAt === 'string'
 }
 
-function isAgentAction(value: unknown): value is AgentActionRecord {
+function isFleetReleasePlan(value: unknown): value is FleetReleasePlan {
+  return isRecord(value) && value.kind === 'profile-release' && typeof value.planId === 'string' &&
+    typeof value.digest === 'string' && typeof value.deviceId === 'string' && typeof value.profile === 'string' &&
+    typeof value.releaseId === 'string' && typeof value.releaseVersion === 'string' &&
+    Array.isArray(value.plugins) && Array.isArray(value.changes) && typeof value.expiresAt === 'string'
+}
+
+function isAgentAction(value: unknown): value is AgentActionRecord | ReleaseActionRecord {
   const states = new Set([
     'approved', 'staging', 'staged', 'applying', 'restarting', 'verifying', 'succeeded',
     'rollback', 'rollback-restarting', 'rollback-verifying', 'rolled-back', 'manual-intervention',
   ])
   return isRecord(value) && typeof value.planId === 'string' && typeof value.state === 'string' && states.has(value.state) &&
-    typeof value.pluginId === 'string' && typeof value.updatedAt === 'string'
+    (typeof value.pluginId === 'string' || typeof value.releaseId === 'string') && typeof value.updatedAt === 'string'
+}
+
+interface FleetTaskReply {
+  taskId: string
+  response: {
+    kind: 'task.progress' | 'task.result'
+    payload: {
+      taskId: string
+      state: string
+      updatedAt: string
+      result?: string | null
+      truncated?: boolean
+      errorCode?: string | null
+    }
+  }
+}
+
+function isFleetTaskReply(value: unknown): value is FleetTaskReply {
+  if (!isRecord(value) || typeof value.taskId !== 'string' || !isRecord(value.response) ||
+      (value.response.kind !== 'task.progress' && value.response.kind !== 'task.result') || !isRecord(value.response.payload)) return false
+  const payload = value.response.payload
+  return payload.taskId === value.taskId && typeof payload.state === 'string' && typeof payload.updatedAt === 'string' &&
+    (payload.result === undefined || payload.result === null || typeof payload.result === 'string') &&
+    (payload.truncated === undefined || typeof payload.truncated === 'boolean') &&
+    (payload.errorCode === undefined || payload.errorCode === null || typeof payload.errorCode === 'string')
 }
 
 const driftColors: Record<PluginDriftState, string> = {
@@ -329,7 +379,7 @@ function UpdatesView({
   </div>
 }
 
-function actionLabel(state: AgentActionRecord['state']): string {
+function actionLabel(state: AgentActionState): string {
   if (state === 'succeeded') return '已完成'
   if (state === 'rolled-back') return '已自动回滚'
   if (state === 'manual-intervention') return '需要人工处理'
@@ -340,7 +390,7 @@ function actionLabel(state: AgentActionRecord['state']): string {
   return '正在准备'
 }
 
-function actionColor(state: AgentActionRecord['state']): string {
+function actionColor(state: AgentActionState): string {
   if (state === 'succeeded') return SM.good
   if (state === 'rolled-back' || state === 'manual-intervention' || state.startsWith('rollback')) return SM.bad
   return SM.warn
@@ -359,62 +409,97 @@ function OperationsView({
   onApprove,
 }: {
   targets: AgentTargetsView | null
-  plan: FleetPlan | null
-  action: AgentActionRecord | null
+  plan: FleetPlan | FleetReleasePlan | null
+  action: AgentActionRecord | ReleaseActionRecord | null
   loading: boolean
   error: string | null
   armed: boolean
   onArm(value: boolean): void
   onReload(): void
-  onPlan(deviceId: string, pluginId: string): void
+  onPlan(deviceId: string, pluginId?: string): void
   onApprove(): void
 }): React.ReactElement {
   return <div style={{ padding: '0 12px 12px' }}>
     <div style={{ marginBottom: 10, padding: '9px 10px', borderRadius: 10, background: SM.panelSoft, color: SM.fg2, lineHeight: 1.55 }}>
-      仅允许清单内的精确版本。每次只处理一个插件，并在目标机快照、重启、健康检查；失败自动回滚。
+      v2 设备按完整 Profile Release 原子切换；公开包与私有制品一起审批、验证和回滚。旧版 v1 设备仍保留单插件兼容流程。
     </div>
     {error !== null && <div style={{ marginBottom: 10, padding: '9px 10px', borderRadius: 10, background: SM.badSoft, color: SM.bad, fontFamily: SM.fontMono }}>{error}</div>}
     {targets?.enabled === false && <div style={{ padding: 12, borderRadius: 10, background: SM.panel, color: SM.fg3 }}>远程收敛未启用</div>}
     {targets === null && error === null && <div style={{ padding: 12, color: SM.fg3 }}>载入中…</div>}
-    {targets?.targets.map(target => <div key={target.deviceId} style={{ marginBottom: 10, borderRadius: 12, background: SM.panel, overflow: 'hidden' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 11px', borderBottom: `1px solid ${SM.border}` }}>
-        <Dot color={target.online ? SM.good : SM.bad} />
-        <strong style={{ flex: 1, fontFamily: SM.fontMono }}>{target.deviceId}</strong>
-        <span style={{ color: SM.fg3, fontFamily: SM.fontMono }}>{target.inspection?.dshVersion ?? target.errorCode ?? '离线'}</span>
-      </div>
-      {target.online && target.inspection?.candidates.map(candidate => <div key={candidate.pluginId} style={{
-        display: 'grid', gridTemplateColumns: 'minmax(0,1fr) auto', gap: 8, alignItems: 'center',
-        minHeight: 48, padding: '7px 10px', borderBottom: `1px solid ${SM.border}`,
-      }}>
-        <div style={{ minWidth: 0 }}>
-          <div title={candidate.pluginId} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: SM.fontMono }}>{candidate.pluginId}</div>
-          <div title={candidate.exactToSpec} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: SM.fg3, fontFamily: SM.fontMono, fontSize: 10.5 }}>
-            {candidate.action === 'install' ? '安装' : '更新'} → {candidate.exactToSpec}
-          </div>
+    {targets?.targets.map(target => {
+      const release = target.inspection !== undefined && 'kind' in target.inspection && target.inspection.kind === 'profile-release'
+        ? target.inspection
+        : null
+      const legacy = target.inspection !== undefined && !('kind' in target.inspection) ? target.inspection : null
+      return <div key={target.deviceId} style={{ marginBottom: 10, borderRadius: 12, background: SM.panel, overflow: 'hidden' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 11px', borderBottom: `1px solid ${SM.border}` }}>
+          <Dot color={target.online ? SM.good : SM.bad} />
+          <strong style={{ flex: 1, fontFamily: SM.fontMono }}>{target.deviceId}</strong>
+          {release !== null && <Pill>RELEASE</Pill>}
+          <span style={{ color: SM.fg3, fontFamily: SM.fontMono }}>{target.inspection?.dshVersion ?? target.errorCode ?? '离线'}</span>
         </div>
-        <button type="button" disabled={loading} onClick={() => onPlan(target.deviceId, candidate.pluginId)} style={{
-          minHeight: 28, padding: '4px 9px', border: 0, borderRadius: 9, background: SM.infoSoft, color: SM.info,
-          cursor: loading ? 'default' : 'pointer', fontFamily: SM.fontSans,
-        }}>生成计划</button>
-      </div>)}
-      {target.online && target.inspection?.candidates.length === 0 && <div style={{ padding: 10, color: SM.good }}>该设备已经一致</div>}
-    </div>)}
+        {target.online && release !== null && <div style={{ padding: '10px 11px' }}>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <strong style={{ fontFamily: SM.fontMono }}>{release.assignedRelease.releaseId}@{release.assignedRelease.releaseVersion}</strong>
+              <div style={{ marginTop: 3, color: release.changes.length === 0 ? SM.good : SM.warn }}>
+                {release.changes.length === 0 ? '文件已一致，等待登记 release' : `${release.changes.length} 项原子变更`}
+              </div>
+            </div>
+            <button type="button" disabled={loading} onClick={() => onPlan(target.deviceId)} style={{
+              minHeight: 30, padding: '4px 10px', border: 0, borderRadius: 9, background: SM.infoSoft, color: SM.info,
+              cursor: loading ? 'default' : 'pointer', fontFamily: SM.fontSans,
+            }}>生成原子计划</button>
+          </div>
+          {release.changes.map(change => <div key={change.pluginId} style={{ marginTop: 6, color: SM.fg3, fontFamily: SM.fontMono, fontSize: 10.5 }}>
+            {change.action.toUpperCase()} · {change.pluginId}
+          </div>)}
+        </div>}
+        {target.online && legacy?.candidates.map(candidate => <div key={candidate.pluginId} style={{
+          display: 'grid', gridTemplateColumns: 'minmax(0,1fr) auto', gap: 8, alignItems: 'center',
+          minHeight: 48, padding: '7px 10px', borderBottom: `1px solid ${SM.border}`,
+        }}>
+          <div style={{ minWidth: 0 }}>
+            <div title={candidate.pluginId} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: SM.fontMono }}>{candidate.pluginId}</div>
+            <div title={candidate.exactToSpec} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: SM.fg3, fontFamily: SM.fontMono, fontSize: 10.5 }}>
+              {candidate.action === 'install' ? '安装' : '更新'} → {candidate.exactToSpec}
+            </div>
+          </div>
+          <button type="button" disabled={loading} onClick={() => onPlan(target.deviceId, candidate.pluginId)} style={{
+            minHeight: 28, padding: '4px 9px', border: 0, borderRadius: 9, background: SM.infoSoft, color: SM.info,
+            cursor: loading ? 'default' : 'pointer', fontFamily: SM.fontSans,
+          }}>生成计划</button>
+        </div>)}
+        {target.online && legacy?.candidates.length === 0 && <div style={{ padding: 10, color: SM.good }}>该设备已经一致</div>}
+      </div>
+    })}
     {plan !== null && <div style={{ marginBottom: 10, padding: 11, borderRadius: 12, background: SM.panel, boxShadow: SM.shadowCard }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 8 }}>
         <Dot color={SM.warn} />
         <strong>待批准计划</strong>
-        <span style={{ marginLeft: 'auto', color: SM.fg3, fontFamily: SM.fontMono }}>{plan.action === 'install' ? 'INSTALL' : 'UPDATE'}</span>
+        <span style={{ marginLeft: 'auto', color: SM.fg3, fontFamily: SM.fontMono }}>
+          {'kind' in plan ? 'PROFILE RELEASE' : plan.action === 'install' ? 'INSTALL' : 'UPDATE'}
+        </span>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: '72px minmax(0,1fr)', gap: '5px 8px', color: SM.fg2 }}>
         <span>设备</span><span style={{ fontFamily: SM.fontMono }}>{plan.deviceId}</span>
-        <span>插件</span><span style={{ fontFamily: SM.fontMono }}>{plan.pluginId}</span>
-        <span>目标</span><span title={plan.exactToSpec} style={{ overflowWrap: 'anywhere', fontFamily: SM.fontMono }}>{plan.exactToSpec}</span>
+        {'kind' in plan ? <>
+          <span>Release</span><span style={{ fontFamily: SM.fontMono }}>{plan.releaseId}@{plan.releaseVersion}</span>
+          <span>插件</span><span style={{ fontFamily: SM.fontMono }}>{plan.plugins.length} 个，{plan.changes.length} 项变更</span>
+          <span>原子性</span><span>整组 stage → rename → health → rollback</span>
+        </> : <>
+          <span>插件</span><span style={{ fontFamily: SM.fontMono }}>{plan.pluginId}</span>
+          <span>目标</span><span title={plan.exactToSpec} style={{ overflowWrap: 'anywhere', fontFamily: SM.fontMono }}>{plan.exactToSpec}</span>
+        </>}
         <span>计划</span><span title={plan.planId} style={{ fontFamily: SM.fontMono }}>{plan.digest.slice(0, 12)}</span>
         <span>过期</span><span style={{ fontFamily: SM.fontMono, fontVariantNumeric: 'tabular-nums' }}>{formatCheckedAt(plan.expiresAt)}</span>
       </div>
+      {'kind' in plan && plan.changes.map(change => <div key={change.pluginId} style={{ marginTop: 5, color: SM.fg3, fontFamily: SM.fontMono, fontSize: 10.5 }}>
+        {change.action.toUpperCase()} · {change.pluginId} · {change.visibility}
+      </div>)}
       <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginTop: 10, color: SM.fg2, cursor: 'pointer' }}>
         <input type="checkbox" checked={armed} onChange={event => onArm(event.currentTarget.checked)} />
-        <span>我确认由 {plan.deviceId} 执行这一精确计划；失败时自动回滚。</span>
+        <span>我确认由 {plan.deviceId} 执行这一{'kind' in plan ? '完整 Profile Release' : '精确插件计划'}；失败时自动回滚。</span>
       </label>
       <button type="button" disabled={!armed || loading} onClick={onApprove} style={{
         width: '100%', minHeight: 32, marginTop: 10, border: 0, borderRadius: 10,
@@ -424,7 +509,9 @@ function OperationsView({
     </div>}
     {action !== null && <div style={{ marginBottom: 10, padding: 10, borderRadius: 10, background: action.state === 'succeeded' ? SM.goodSoft : SM.badSoft, color: actionColor(action.state) }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}><Dot color={actionColor(action.state)} /><strong>{actionLabel(action.state)}</strong></div>
-      <div style={{ marginTop: 4, fontFamily: SM.fontMono, fontVariantNumeric: 'tabular-nums' }}>{action.pluginId} · {action.updatedAt.slice(0, 19).replace('T', ' ')}</div>
+      <div style={{ marginTop: 4, fontFamily: SM.fontMono, fontVariantNumeric: 'tabular-nums' }}>
+        {'releaseId' in action ? `${action.releaseId}@${action.releaseVersion}` : action.pluginId} · {action.updatedAt.slice(0, 19).replace('T', ' ')}
+      </div>
     </div>}
     <button type="button" onClick={onReload} disabled={loading} style={{
       width: '100%', minHeight: 30, border: `1px solid ${SM.borderStrong}`, borderRadius: 10,
@@ -433,9 +520,106 @@ function OperationsView({
   </div>
 }
 
-export function FleetCard({ ctx, wide = true }: { ctx: ClientContextLike; wide?: boolean }): React.ReactElement {
-  const [open, setOpen] = useState(false)
-  const [tab, setTab] = useState<'status' | 'updates' | 'operations'>('status')
+function TasksView({
+  targets,
+  targetDeviceId,
+  workspaceId,
+  profile,
+  prompt,
+  reply,
+  loading,
+  error,
+  onTarget,
+  onWorkspace,
+  onProfile,
+  onPrompt,
+  onSubmit,
+  onStatus,
+  onCancel,
+}: {
+  targets: AgentTargetsView | null
+  targetDeviceId: string
+  workspaceId: string
+  profile: string
+  prompt: string
+  reply: FleetTaskReply | null
+  loading: boolean
+  error: string | null
+  onTarget(value: string): void
+  onWorkspace(value: string): void
+  onProfile(value: string): void
+  onPrompt(value: string): void
+  onSubmit(): void
+  onStatus(): void
+  onCancel(): void
+}): React.ReactElement {
+  const taskTargets = (targets?.targets ?? []).flatMap(target => {
+    const inspection = target.inspection
+    return target.online && inspection !== undefined && 'kind' in inspection && inspection.kind === 'profile-release' && inspection.tasks.enabled
+      ? [{ deviceId: target.deviceId, tasks: inspection.tasks }]
+      : []
+  })
+  const selected = taskTargets.find(target => target.deviceId === targetDeviceId)
+  const state = reply?.response.payload.state
+  const terminal = state === 'succeeded' || state === 'failed' || state === 'cancelled'
+  return <div style={{ padding: '0 12px 12px' }}>
+    <div style={{ marginBottom: 10, padding: '9px 10px', borderRadius: 10, background: SM.panelSoft, color: SM.fg2, lineHeight: 1.55 }}>
+      任务通过设备签名的 A2A 消息提交。目标机只接受下方列出的 workspace/profile ID；没有任意 shell、argv 或路径入口。
+    </div>
+    {error !== null && <div style={{ marginBottom: 10, padding: '9px 10px', borderRadius: 10, background: SM.badSoft, color: SM.bad, fontFamily: SM.fontMono }}>{error}</div>}
+    {targets === null && error === null && <div style={{ padding: 12, color: SM.fg3 }}>载入任务策略…</div>}
+    {targets !== null && taskTargets.length === 0 && <div style={{ padding: 12, borderRadius: 10, background: SM.panel, color: SM.fg3 }}>没有启用 A2A 任务策略的在线设备</div>}
+    {taskTargets.length > 0 && <div style={{ padding: 11, borderRadius: 12, background: SM.panel }}>
+      <label style={{ display: 'grid', gap: 5, marginBottom: 9, color: SM.fg2 }}>
+        <span>目标设备</span>
+        <select value={targetDeviceId} onChange={event => onTarget(event.currentTarget.value)} style={{ minHeight: 34, border: `1px solid ${SM.borderStrong}`, borderRadius: 9, background: SM.panel, color: SM.fg }}>
+          {taskTargets.map(target => <option key={target.deviceId} value={target.deviceId}>{target.deviceId}</option>)}
+        </select>
+      </label>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+        <label style={{ display: 'grid', gap: 5, color: SM.fg2 }}>
+          <span>Workspace ID</span>
+          <select value={workspaceId} onChange={event => onWorkspace(event.currentTarget.value)} style={{ minHeight: 34, border: `1px solid ${SM.borderStrong}`, borderRadius: 9, background: SM.panel, color: SM.fg }}>
+            {(selected?.tasks.workspaceIds ?? []).map(id => <option key={id} value={id}>{id}</option>)}
+          </select>
+        </label>
+        <label style={{ display: 'grid', gap: 5, color: SM.fg2 }}>
+          <span>Profile</span>
+          <select value={profile} onChange={event => onProfile(event.currentTarget.value)} style={{ minHeight: 34, border: `1px solid ${SM.borderStrong}`, borderRadius: 9, background: SM.panel, color: SM.fg }}>
+            {(selected?.tasks.profiles ?? []).map(id => <option key={id} value={id}>{id}</option>)}
+          </select>
+        </label>
+      </div>
+      <label style={{ display: 'grid', gap: 5, marginTop: 9, color: SM.fg2 }}>
+        <span>任务</span>
+        <textarea value={prompt} onChange={event => onPrompt(event.currentTarget.value)} rows={5} maxLength={32 * 1024} placeholder="描述要由目标 DSH 完成的任务" style={{ resize: 'vertical', padding: 9, border: `1px solid ${SM.borderStrong}`, borderRadius: 9, background: SM.panel, color: SM.fg, fontFamily: SM.fontSans }} />
+      </label>
+      <button type="button" disabled={loading || prompt.trim().length === 0 || workspaceId === '' || profile === ''} onClick={onSubmit} style={{
+        width: '100%', minHeight: 34, marginTop: 10, border: 0, borderRadius: 10,
+        background: loading || prompt.trim().length === 0 ? SM.fg4 : SM.info, color: SM.panel,
+        cursor: loading ? 'default' : 'pointer', fontWeight: 600,
+      }}>{loading ? '提交中…' : '签名并提交任务'}</button>
+    </div>}
+    {reply !== null && <div style={{ marginTop: 10, padding: 11, borderRadius: 12, background: SM.panel }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+        <Dot color={state === 'succeeded' ? SM.good : state === 'failed' || state === 'cancelled' ? SM.bad : SM.warn} />
+        <strong style={{ flex: 1 }}>{state}</strong>
+        <span style={{ color: SM.fg3, fontFamily: SM.fontMono }}>{reply.taskId.slice(5, 13)}</span>
+      </div>
+      {reply.response.payload.result !== undefined && reply.response.payload.result !== null && <pre style={{ margin: '9px 0 0', padding: 9, maxHeight: 260, overflow: 'auto', whiteSpace: 'pre-wrap', borderRadius: 9, background: SM.panelSoft, color: SM.fg, fontFamily: SM.fontMono }}>
+        {reply.response.payload.result}{reply.response.payload.truncated ? '\n…结果已截断；完整结果保留在目标设备。' : ''}
+      </pre>}
+      {reply.response.payload.errorCode !== undefined && reply.response.payload.errorCode !== null && <div style={{ marginTop: 7, color: SM.bad, fontFamily: SM.fontMono }}>{reply.response.payload.errorCode}</div>}
+      <div style={{ display: 'flex', gap: 8, marginTop: 9 }}>
+        <button type="button" disabled={loading} onClick={onStatus} style={{ flex: 1, minHeight: 30, border: `1px solid ${SM.borderStrong}`, borderRadius: 9, background: SM.panel, color: SM.fg2 }}>刷新状态</button>
+        {!terminal && <button type="button" disabled={loading} onClick={onCancel} style={{ flex: 1, minHeight: 30, border: 0, borderRadius: 9, background: SM.badSoft, color: SM.bad }}>请求取消</button>}
+      </div>
+    </div>}
+  </div>
+}
+
+export function FleetSettings({ ctx }: { ctx: ClientContextLike }): React.ReactElement {
+  const [tab, setTab] = useState<'status' | 'updates' | 'operations' | 'tasks'>('status')
   const [status, setStatus] = useState<FleetStatus | null>(null)
   const [statusError, setStatusError] = useState<string | null>(null)
   const [statusLoading, setStatusLoading] = useState(false)
@@ -443,17 +627,22 @@ export function FleetCard({ ctx, wide = true }: { ctx: ClientContextLike; wide?:
   const [updateError, setUpdateError] = useState<string | null>(null)
   const [updateLoading, setUpdateLoading] = useState(false)
   const [agentTargets, setAgentTargets] = useState<AgentTargetsView | null>(null)
-  const [agentPlan, setAgentPlan] = useState<FleetPlan | null>(null)
-  const [agentAction, setAgentAction] = useState<AgentActionRecord | null>(null)
+  const [agentPlan, setAgentPlan] = useState<FleetPlan | FleetReleasePlan | null>(null)
+  const [agentAction, setAgentAction] = useState<AgentActionRecord | ReleaseActionRecord | null>(null)
   const [agentError, setAgentError] = useState<string | null>(null)
   const [agentLoading, setAgentLoading] = useState(false)
   const [approvalArmed, setApprovalArmed] = useState(false)
+  const [taskTarget, setTaskTarget] = useState('')
+  const [taskWorkspace, setTaskWorkspace] = useState('')
+  const [taskProfile, setTaskProfile] = useState('')
+  const [taskPrompt, setTaskPrompt] = useState('')
+  const [taskReply, setTaskReply] = useState<FleetTaskReply | null>(null)
+  const [taskError, setTaskError] = useState<string | null>(null)
+  const [taskLoading, setTaskLoading] = useState(false)
   const statusInFlight = useRef<Promise<void> | null>(null)
   const updatesInFlight = useRef<Promise<void> | null>(null)
   const agentsInFlight = useRef<Promise<void> | null>(null)
   const agentMutationInFlight = useRef(false)
-  const rootRef = useRef<HTMLDivElement | null>(null)
-  const [panelAnchor, setPanelAnchor] = useState<{ left: number; bottom: number; maxHeight: number }>()
 
   const loadStatus = useCallback(async () => {
     if (statusInFlight.current !== null) return statusInFlight.current
@@ -521,7 +710,7 @@ export function FleetCard({ ctx, wide = true }: { ctx: ClientContextLike; wide?:
     }
   }, [ctx])
 
-  const requestPlan = useCallback(async (deviceId: string, pluginId: string) => {
+  const requestPlan = useCallback(async (deviceId: string, pluginId?: string) => {
     if (agentMutationInFlight.current) return
     agentMutationInFlight.current = true
     setAgentLoading(true)
@@ -529,8 +718,15 @@ export function FleetCard({ ctx, wide = true }: { ctx: ClientContextLike; wide?:
     setAgentAction(null)
     setApprovalArmed(false)
     try {
-      const result = await ctx.connection.rpc.call(AGENT_CHANNEL, 'plan', { deviceId, pluginId })
-      setAgentPlan(rpcValue(result, isFleetPlan, 'fleet plan unavailable'))
+      const releaseMode = pluginId === undefined
+      const result = await ctx.connection.rpc.call(
+        AGENT_CHANNEL,
+        releaseMode ? 'release-plan' : 'plan',
+        releaseMode ? { deviceId } : { deviceId, pluginId },
+      )
+      setAgentPlan(releaseMode
+        ? rpcValue(result, isFleetReleasePlan, 'fleet release plan unavailable')
+        : rpcValue(result, isFleetPlan, 'fleet plan unavailable'))
       setAgentError(null)
     } catch (cause: unknown) {
       setAgentError(cause instanceof Error ? cause.message : String(cause))
@@ -544,10 +740,11 @@ export function FleetCard({ ctx, wide = true }: { ctx: ClientContextLike; wide?:
     if (agentPlan === null || !approvalArmed || agentMutationInFlight.current) return
     agentMutationInFlight.current = true
     const approvedPlan = agentPlan
+    const releaseMode = 'kind' in approvedPlan
     setAgentLoading(true)
     setApprovalArmed(false)
     try {
-      const result = await ctx.connection.rpc.call(AGENT_CHANNEL, 'approve', {
+      const result = await ctx.connection.rpc.call(AGENT_CHANNEL, releaseMode ? 'release-approve' : 'approve', {
         approvalId: crypto.randomUUID(),
         deviceId: approvedPlan.deviceId,
         planDigest: approvedPlan.digest,
@@ -562,7 +759,7 @@ export function FleetCard({ ctx, wide = true }: { ctx: ClientContextLike; wide?:
     } catch (cause: unknown) {
       const applyError = cause instanceof Error ? cause.message : String(cause)
       try {
-        const status = await ctx.connection.rpc.call(AGENT_CHANNEL, 'action-status', {
+        const status = await ctx.connection.rpc.call(AGENT_CHANNEL, releaseMode ? 'release-action-status' : 'action-status', {
           deviceId: approvedPlan.deviceId,
           planId: approvedPlan.planId,
         })
@@ -579,6 +776,23 @@ export function FleetCard({ ctx, wide = true }: { ctx: ClientContextLike; wide?:
     }
   }, [agentPlan, approvalArmed, ctx, loadAgentTargets])
 
+  const taskCall = useCallback(async (endpoint: 'task-submit' | 'task-status' | 'task-cancel') => {
+    if (taskLoading || taskTarget === '') return
+    setTaskLoading(true)
+    try {
+      const payload = endpoint === 'task-submit'
+        ? { targetDeviceId: taskTarget, workspaceId: taskWorkspace, profile: taskProfile, prompt: taskPrompt.trim() }
+        : { targetDeviceId: taskTarget, taskId: taskReply?.taskId }
+      const result = await ctx.connection.rpc.call(AGENT_CHANNEL, endpoint, payload)
+      setTaskReply(rpcValue(result, isFleetTaskReply, 'fleet task response unavailable'))
+      setTaskError(null)
+    } catch (cause: unknown) {
+      setTaskError(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      setTaskLoading(false)
+    }
+  }, [ctx, taskLoading, taskProfile, taskPrompt, taskReply?.taskId, taskTarget, taskWorkspace])
+
   useEffect(() => {
     void loadStatus()
     const timer = window.setInterval(() => { if (!document.hidden) void loadStatus() }, 30_000)
@@ -586,53 +800,29 @@ export function FleetCard({ ctx, wide = true }: { ctx: ClientContextLike; wide?:
   }, [loadStatus])
 
   useEffect(() => {
-    if (!open || tab !== 'updates' || updates !== null || updateError !== null || updateLoading) return
+    if (tab !== 'updates' || updates !== null || updateError !== null || updateLoading) return
     void loadUpdates('if-stale')
-  }, [loadUpdates, open, tab, updateError, updateLoading, updates])
+  }, [loadUpdates, tab, updateError, updateLoading, updates])
 
   useEffect(() => {
-    if (!open || tab !== 'operations' || agentTargets !== null || agentError !== null || agentLoading) return
+    if ((tab !== 'operations' && tab !== 'tasks') || agentTargets !== null || agentError !== null || agentLoading) return
     void loadAgentTargets()
-  }, [agentError, agentLoading, agentTargets, loadAgentTargets, open, tab])
-
-  useLayoutEffect(() => {
-    if (!open) return
-    const place = () => {
-      const rect = rootRef.current?.getBoundingClientRect()
-      if (rect === undefined || typeof window.innerWidth !== 'number' || typeof window.innerHeight !== 'number') return
-      const panelWidth = Math.min(380, window.innerWidth - 24)
-      const left = Math.max(12, Math.min(rect.left, window.innerWidth - panelWidth - 12))
-      const availableHeight = Math.max(120, rect.top - 20)
-      setPanelAnchor({
-        left,
-        bottom: window.innerHeight - rect.top + 8,
-        maxHeight: Math.min(Math.floor(window.innerHeight * 0.68), availableHeight),
-      })
-    }
-    place()
-    if (typeof window.addEventListener !== 'function') return
-    window.addEventListener('resize', place)
-    return () => window.removeEventListener('resize', place)
-  }, [open, wide])
+  }, [agentError, agentLoading, agentTargets, loadAgentTargets, tab])
 
   useEffect(() => {
-    if (!open || typeof document.addEventListener !== 'function') return
-    const dismiss = (event: PointerEvent | KeyboardEvent) => {
-      if (event instanceof KeyboardEvent && event.key === 'Escape') {
-        setOpen(false)
-        return
-      }
-      if (event instanceof PointerEvent && rootRef.current !== null && event.target instanceof Node && !rootRef.current.contains(event.target)) {
-        setOpen(false)
-      }
-    }
-    document.addEventListener('pointerdown', dismiss)
-    document.addEventListener('keydown', dismiss)
-    return () => {
-      document.removeEventListener('pointerdown', dismiss)
-      document.removeEventListener('keydown', dismiss)
-    }
-  }, [open])
+    if (agentTargets === null) return
+    const available = agentTargets.targets.flatMap(target => {
+      const inspection = target.inspection
+      return target.online && inspection !== undefined && 'kind' in inspection && inspection.kind === 'profile-release' && inspection.tasks.enabled
+        ? [{ deviceId: target.deviceId, tasks: inspection.tasks }]
+        : []
+    })
+    const selected = available.find(target => target.deviceId === taskTarget) ?? available[0]
+    if (selected === undefined) return
+    if (taskTarget !== selected.deviceId) setTaskTarget(selected.deviceId)
+    if (!selected.tasks.workspaceIds.includes(taskWorkspace)) setTaskWorkspace(selected.tasks.workspaceIds[0] ?? '')
+    if (!selected.tasks.profiles.includes(taskProfile)) setTaskProfile(selected.tasks.profiles[0] ?? '')
+  }, [agentTargets, taskProfile, taskTarget, taskWorkspace])
 
   const driftIssues = useMemo(() => status === null
     ? 0
@@ -646,49 +836,43 @@ export function FleetCard({ ctx, wide = true }: { ctx: ClientContextLike; wide?:
     : driftIssues > 0 || availableUpdates > 0 || updates?.stale === true
       ? SM.warn
       : status === null ? SM.fg3 : SM.good
-  const closedText = status === null
-    ? (statusError === null ? '载入中…' : '状态获取失败')
-    : [
-        driftIssues === 0 && runtimeFailures === 0 ? '一致' : driftIssues > 0 ? `${driftIssues} 项差异` : undefined,
-        runtimeFailures > 0 ? `Loader ${runtimeFailures} 失败` : undefined,
-        updateError !== null || updateFailures > 0
-          ? '更新检查失败'
-          : availableUpdates > 0 ? `${availableUpdates} 个更新` : undefined,
-      ]
-        .filter((value): value is string => value !== undefined).join(' · ')
-
-  return <div ref={rootRef} data-dsh-fleet-action style={{
-    position: 'relative', display: 'flex', alignItems: 'center', flex: 'none', pointerEvents: 'auto',
-    width: wide ? '100%' : 36, height: wide ? 42 : 36, margin: wide ? '8px 0 0' : 0,
-    minWidth: 0, fontFamily: SM.fontSans, fontSize: 12, color: SM.fg,
+  return <section aria-label="DSH Fleet" data-dsh-fleet-settings style={{
+    width: '100%', height: '100%', maxWidth: 960, minWidth: 0, minHeight: 0,
+    display: 'flex', boxSizing: 'border-box', overflow: 'hidden', fontFamily: SM.fontSans,
+    fontSize: 12, color: SM.fg, border: `1px solid ${SM.border}`, borderRadius: 18, background: SM.bg,
   }}>
-    {open && <div role="dialog" aria-label="DSH Fleet" data-dsh-fleet-panel style={{
-      position: 'fixed', zIndex: 950, left: panelAnchor?.left ?? 12, bottom: panelAnchor?.bottom ?? 64,
-      width: 380, maxWidth: 'calc(100vw - 24px)', maxHeight: panelAnchor?.maxHeight ?? '68vh', overflow: 'auto',
-      border: `1px solid ${SM.border}`, borderRadius: 20, background: SM.bg, boxShadow: SM.shadowCard,
+      <div data-dsh-fleet-panel style={{
+      width: '100%', height: '100%', minWidth: 0, minHeight: 0, display: 'flex',
+      flexDirection: 'column', overflow: 'hidden', background: SM.bg,
     }}>
-      <div style={{ position: 'sticky', top: 0, zIndex: 1, padding: '11px 12px 9px', background: SM.panel, borderBottom: `1px solid ${SM.border}` }}>
+      <div style={{ padding: '14px 16px 11px', background: SM.panel, borderBottom: `1px solid ${SM.border}` }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ display: 'grid', placeItems: 'center', color: SM.fg2 }}><FleetIcon /></span>
           <Dot color={tone} size={8} />
-          <strong style={{ flex: 1, fontSize: 14 }}>DSH Fleet</strong>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <strong style={{ display: 'block', fontSize: 15 }}>DSH Fleet</strong>
+            <span style={{ color: SM.fg3 }}>设备、Profile Release 与远程执行</span>
+          </div>
           <button type="button" aria-label="刷新状态" title="刷新状态" onClick={() => void loadStatus()} disabled={statusLoading} style={{
             width: 30, height: 30, display: 'grid', placeItems: 'center', border: 0, borderRadius: 10,
             background: SM.panelSoft, color: statusLoading ? SM.fg3 : SM.fg2, cursor: statusLoading ? 'default' : 'pointer',
           }}><RefreshIcon /></button>
         </div>
         <div role="tablist" aria-label="Fleet 视图" style={{ display: 'flex', gap: 4, marginTop: 9, padding: 3, borderRadius: 999, background: SM.bg2 }}>
-          {(['status', 'updates', 'operations'] as const).map(key => <button key={key} type="button" role="tab" aria-selected={tab === key} onClick={() => setTab(key)} style={{
+          {(['status', 'updates', 'operations', 'tasks'] as const).map(key => <button key={key} type="button" role="tab" aria-selected={tab === key} onClick={() => setTab(key)} style={{
             flex: 1, minHeight: 28, border: 0, borderRadius: 999, background: tab === key ? SM.fg : 'transparent',
             color: tab === key ? SM.panel : SM.fg2, cursor: 'pointer', fontFamily: SM.fontSans, fontSize: 11.5,
-          }}>{key === 'status' ? '状态' : key === 'updates' ? `更新${availableUpdates > 0 ? ` ${availableUpdates}` : ''}` : '操作'}</button>)}
+          }}>{key === 'status' ? '状态' : key === 'updates' ? `更新${availableUpdates > 0 ? ` ${availableUpdates}` : ''}` : key === 'operations' ? '发布' : '任务'}</button>)}
         </div>
       </div>
-      <div style={{ paddingTop: 10 }}>
+      <div data-dsh-fleet-scroll style={{
+        flex: 1, minHeight: 0, paddingTop: 10, overflowY: 'auto', overscrollBehavior: 'contain', background: SM.bg,
+      }}>
         {tab === 'status'
           ? <StatusView status={status} error={statusError} />
           : tab === 'updates'
             ? <UpdatesView updates={updates} loading={updateLoading} error={updateError} onRefresh={() => void loadUpdates('force')} />
-            : <OperationsView
+            : tab === 'operations' ? <OperationsView
                 targets={agentTargets}
                 plan={agentPlan}
                 action={agentAction}
@@ -699,29 +883,36 @@ export function FleetCard({ ctx, wide = true }: { ctx: ClientContextLike; wide?:
                 onReload={() => { setAgentTargets(null); setAgentError(null); void loadAgentTargets() }}
                 onPlan={(deviceId, pluginId) => void requestPlan(deviceId, pluginId)}
                 onApprove={() => void approvePlan()}
-              />}
+              />
+              : <TasksView
+                  targets={agentTargets}
+                  targetDeviceId={taskTarget}
+                  workspaceId={taskWorkspace}
+                  profile={taskProfile}
+                  prompt={taskPrompt}
+                  reply={taskReply}
+                  loading={taskLoading}
+                  error={taskError ?? agentError}
+                  onTarget={value => { setTaskTarget(value); setTaskReply(null) }}
+                  onWorkspace={setTaskWorkspace}
+                  onProfile={setTaskProfile}
+                  onPrompt={setTaskPrompt}
+                  onSubmit={() => void taskCall('task-submit')}
+                  onStatus={() => void taskCall('task-status')}
+                  onCancel={() => void taskCall('task-cancel')}
+                />}
       </div>
-    </div>}
-    <button type="button" aria-label={`DSH Fleet：${closedText}`} title="DSH Fleet" aria-expanded={open} onClick={() => setOpen(value => !value)} style={{
-      position: 'relative', display: 'flex', alignItems: 'center', justifyContent: wide ? 'flex-start' : 'center', gap: 8,
-      width: '100%', height: wide ? 42 : 36, minWidth: 0, border: 0, borderRadius: wide ? 12 : 999,
-      background: open ? 'var(--dsw-alias-interactive-bg-hover, #e6e9ed)' : 'transparent',
-      padding: wide ? '0 10px 0 8px' : 0, cursor: 'pointer', color: 'var(--dsw-alias-label-primary, #181a1c)',
-    }}>
-      <span style={{ display: 'grid', placeItems: 'center', color: 'var(--dsw-alias-label-secondary, #5f6670)' }}><FleetIcon /></span>
-      {wide && <>
-        <strong style={{ whiteSpace: 'nowrap' }}>Fleet</strong>
-        <span style={{ minWidth: 0, marginLeft: 'auto', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: SM.fg2, fontFamily: SM.fontMono, fontSize: 10.5, fontVariantNumeric: 'tabular-nums' }}>{closedText}</span>
-        <Dot color={tone} size={7} />
-      </>}
-      {!wide && <span aria-hidden="true" style={{ position: 'absolute', right: 4, bottom: 4 }}><Dot color={tone} size={6} /></span>}
-    </button>
-  </div>
+    </div>
+  </section>
+}
+
+export function FleetCard({ ctx }: { ctx: ClientContextLike; wide?: boolean }): React.ReactElement {
+  return <FleetSettings ctx={ctx} />
 }
 
 export function apply(ctx: ClientContextLike): void {
-  ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register(
-    { name: 'sidebar.footer.action', id: 'dsh-fleet', order: 110, label: () => 'DSH Fleet' },
-    ({ wide = true }: { wide?: boolean }) => <FleetCard ctx={ctx} wide={wide} />,
+  ctx.slots.inject('settings.section', () => ctx.slots.register(
+    { name: 'settings.section', id: 'dsh-fleet', order: 65, label: 'Fleet' },
+    () => <FleetSettings ctx={ctx} />,
   ))
 }

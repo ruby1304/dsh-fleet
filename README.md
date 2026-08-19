@@ -3,73 +3,55 @@
 [![CI](https://github.com/ruby1304/dsh-fleet/actions/workflows/ci.yml/badge.svg)](https://github.com/ruby1304/dsh-fleet/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-Declarative device inventory, drift detection, and owner-approved plugin convergence for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness).
+Atomic plugin releases and signed, recoverable device-to-device tasks for a single owner running [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) on several trusted machines.
 
-## Project status
+## Status
 
-`0.2.0` is a release candidate for DSH `0.1.0-rc.7`. It contains two intentionally different capability levels:
+`0.3.0` targets DSH `>=0.1.0-rc.7 <0.2.0`. It is an open-source preview with a deliberately narrow trust model: one owner, fixed devices, fixed SSH/local transports, and fixed workspace/profile policies.
 
-- V0 provides read-only device inventory, profile drift, Loader health, unmanaged-bundle detection, and public update availability.
-- V1 adds a narrow single-owner workflow for one exact plugin install or update, with explicit approval, restart, health verification, audit, and rollback.
+It now covers the foundations needed for a Remote Control-like workflow:
 
-This is not the complete Fleet product. It is not a multi-user control plane, MDM, general remote shell, secret distributor, or substitute for host security. Hub, enrollment, roles, signed approvals, configuration distribution, batch changes, remove, core DSH upgrades, and general task execution remain out of scope for this release.
+- public plugins and private content-addressed plugins in one atomic profile release;
+- Ed25519-signed team A2A messages with capability-scoped trust;
+- durable asynchronous task IDs, status, cancellation, reconnect and accepted-task recovery;
+- a public team pack plus a private per-device overlay for fast, repeatable setup;
+- Fleet as a first-class DSH Settings section, without a floating sidebar capsule.
 
-Read [the security model](docs/SECURITY_MODEL.md) before enabling mutation.
+It is not yet equivalent to Codex Remote Control. There is no hosted relay/push service, roaming account enrollment, interactive live session resume, tool-call streaming, remote interactive approval loop, multi-user RBAC, remote attestation, or secret distribution. Fleet uses DSH's existing headless execution path and does not invent a second agent protocol.
 
-## How it works
+Read the [security model](docs/SECURITY_MODEL.md) before enabling mutation or remote tasks.
+
+## Architecture
 
 ```text
-loopback DSH Web
-  -> fixed Fleet Host configuration
-  -> local or fixed SSH transport
-  -> one-shot dsh-fleet-agent on the target
-  -> immutable plan and explicit approval
-  -> snapshot and exact package operation
-  -> DSH restart and loopback health verification
-  -> success, proved rollback, or manual intervention
+public team-pack.yaml              private device-overlay.yaml
+  exact public releases             private artifact digests
+  profile compatibility             local workspace paths
+  workspace/profile IDs             restart and health ownership
+  federation-only trust             task-capable peer trust
+             \                     /
+              dsh-fleet-bootstrap
+                       |
+          schema-v2 manifest + trust store
+                + Agent config
+                       |
+loopback DSH Web -> Fleet Host -> fixed local/SSH Agent
+                                      |
+                       atomic profile release or
+                       durable signed DSH task
 ```
 
-The Web client can select only a configured device and a plugin already present in that device's local manifest. It cannot provide package versions, URLs, paths, commands, arguments, or shell fragments.
-
-The Fleet trigger is registered in DSH's additive `sidebar.footer.action` slot, so it participates in the sidebar layout above Settings instead of using viewport-fixed coordinates.
-
-## Features
-
-- device targeting by id, class, channel, and DSH profile;
-- exact reconciliation of profile dependencies and active DSH bundles;
-- Loader-aware `aligned`, `missing`, `spec-drift`, `runtime-inactive`, and `runtime-failed` states;
-- credential-free public npm/GitHub update discovery with caching and explicit unsupported states;
-- exact npm versions and GitHub 40-character commit revisions for stable mutation;
-- fixed local or SSH Agent targets with no shell interpolation;
-- immutable, expiring, profile- and manifest-bound plans;
-- two-step plan review and explicit approval in the Operations UI;
-- cross-process profile locking, snapshots, idempotent action state, and append-only audit events;
-- scripts-disabled installation and frozen-lockfile rollback;
-- mandatory DSH restart, loopback HTTP/Fleet RPC health, target alignment, and zero Loader failures;
-- conservative recovery after cancellation, timeout, output overflow, or transport loss.
-
-## Requirements and compatibility
-
-- Node.js 22 or newer;
-- pnpm 11 for Agent rollback/rematerialization;
-- DSH `>=0.1.0-rc.7 <0.2.0`;
-- macOS or Linux for the mutation-capable Agent;
-- `screen`, `lsof`, and `ps` at fixed absolute paths for the current restart implementation;
-- an existing SSH alias and host-key policy for remote targets.
-
-Do not depend on a non-interactive `PATH`. Pin normalized absolute paths to Node.js, DSH, pnpm, the Agent bundle, Agent config, manifest, and restart tools.
+The public pack cannot contain private artifacts or grant `task.submit`, `task.status`, or `task.cancel`. Those powers exist only in the private overlay on the receiving device.
 
 ## Install
 
-Release deployments should use an immutable npm release or a verified tarball, never a live checkout link.
-
-After an npm release is available:
+Production profiles should install an exact npm release or a reviewed tarball. Never use a live checkout link as production state. Once `0.3.0` is published:
 
 ```bash
-dsh plugin --profile web add dsh-fleet@0.2.0 --save-exact --ignore-scripts
+dsh plugin --profile web add dsh-fleet@0.3.0 --save-exact --ignore-scripts
 ```
 
-To build a reviewable tarball from source:
+To review and pack from source:
 
 ```bash
 git clone https://github.com/ruby1304/dsh-fleet.git
@@ -78,44 +60,65 @@ corepack enable
 pnpm install --frozen-lockfile --ignore-scripts
 pnpm run release:check
 npm pack --ignore-scripts
-shasum -a 256 dsh-fleet-0.2.0.tgz
-dsh plugin --profile web add /absolute/path/to/dsh-fleet-0.2.0.tgz --save-exact --ignore-scripts
+shasum -a 256 dsh-fleet-0.3.0.tgz
+dsh plugin --profile web add /absolute/path/to/dsh-fleet-0.3.0.tgz --save-exact --ignore-scripts
 ```
 
-Use `link:$PWD` only for development:
+The package provides `dsh-fleet-agent` and `dsh-fleet-bootstrap` binaries. Pin their resolved release paths in services and Host target configuration; do not depend on a login-shell `PATH`.
+
+## Fast device setup
+
+Start with [`examples/team-pack.yaml`](examples/team-pack.yaml) and a private copy of [`examples/device-overlay.yaml`](examples/device-overlay.yaml). Replace every illustrative version, integrity, digest, identity and path.
+
+Create one team-scoped Ed25519 identity per device:
 
 ```bash
-dsh plugin --profile web add "link:$PWD" --save-exact --ignore-scripts
+dsh-fleet-bootstrap identity \
+  --output-dir /Users/example/.config/dsh-fleet/identity \
+  --team example-team \
+  --principal owner \
+  --device worker
 ```
 
-## Configure read-only inventory
+This writes an owner-only private key and a public `identity.invite.json`. Exchange only the invite. On the receiving device, copy the invite fields into `trustedPeers` and grant only the required message kinds. A controller that submits tasks normally needs `task.submit`, `task.status`, and `task.cancel`; a worker response key normally needs `task.progress` and `task.result`.
 
-Copy [`examples/fleet.lock.yaml`](examples/fleet.lock.yaml) to a private operational repository or owner-only state directory. Do not use the packaged example as production truth.
+Render a new immutable configuration directory:
 
-```yaml
-schemaVersion: 1
-team:
-  id: example-team
-
-devices:
-  controller:
-    assignedTo: owner
-    class: portable-control
-    channel: dev
-  worker:
-    assignedTo: owner
-    class: always-on-worker
-    channel: stable
-
-plugins:
-  - id: dsh-turn-fork
-    source: npm
-    revision: 0.1.0
-    profiles: [web]
-    target: { devices: [worker] }
+```bash
+dsh-fleet-bootstrap render \
+  --pack /absolute/path/to/team-pack.yaml \
+  --overlay /absolute/private/path/to/device-overlay.yaml \
+  --identity-dir /Users/example/.config/dsh-fleet/identity \
+  --output-dir /Users/example/.config/dsh-fleet/releases/web-1.0.0
 ```
 
-Add the Host row to the DSH profile's `cordis.patch.yml`:
+The renderer validates the key binding, team/device/principal identity, DSH range, exact sources, trust capabilities, workspace IDs, restart health ownership, and Agent schema. It refuses symlinked inputs, unsafe private-key permissions, and existing output files. For an update, render a new directory; do not overwrite a working generation.
+
+The pack's managed `profile.id` and `taskPolicy.profiles` are intentionally independent. A normal controller manages and health-checks the `web` profile while remote work is restricted to an explicitly allowed one-shot profile such as `headless`.
+
+The output contains:
+
+- `fleet.lock.yaml`: schema-v2 atomic release assignment;
+- `trust-store.json`: capability-scoped peer keys;
+- `task-policy.json`: redacted workspace/profile policy for review;
+- `agent.config.json`: complete one-shot Agent configuration.
+
+Run direct inspection before adding the target to the controller:
+
+```bash
+/absolute/path/to/node \
+  /absolute/path/to/agent.mjs \
+  --config /absolute/path/to/agent.config.json \
+  doctor
+```
+
+`doctor` is read-only. It verifies the release binding, live loopback Fleet health, identity key, trust store, artifact/workspace directories, and fixed executables without installing a plugin or running a task. Use `release-inspect` afterward to review the exact proposed release delta.
+
+See the complete [onboarding checklist](docs/ONBOARDING.md).
+
+## Host configuration
+
+Add Fleet to the DSH profile patch. Mutation stays off until explicitly enabled.
 
 ```yaml
 - id: fleet
@@ -124,105 +127,73 @@ Add the Host row to the DSH profile's `cordis.patch.yml`:
     deviceId: controller
     manifestPath: /absolute/private/path/fleet.lock.yaml
     profile: web
-    dshBinary: /absolute/path/to/dsh
-    updateCheck: true
+    dshBinary: /absolute/immutable/path/to/dsh
+    artifactStore: /absolute/private/path/to/artifacts
+    convergence:
+      enabled: true
+      principalId: owner
+      signerDeviceId: controller
+      timeoutMs: 600000
+      targets:
+        - deviceId: controller
+          transport: local
+          nodeBinary: /absolute/path/to/node
+          agentPath: /absolute/path/to/releases/0.3.0/agent.mjs
+          configPath: /absolute/path/to/controller/agent.config.json
+        - deviceId: worker
+          transport: ssh
+          sshHost: worker-mac
+          nodeBinary: /opt/homebrew/bin/node
+          agentPath: /Users/example/.local/share/dsh-fleet/releases/0.3.0/agent.mjs
+          configPath: /Users/example/.config/dsh-fleet/releases/web-1.0.0/agent.config.json
 ```
 
-Restart DSH and verify the Fleet status and update views. This configuration is read-only until `convergence.enabled` and at least one fixed Agent target are explicitly added.
+`sshHost` must be an existing alias with host-key policy. Usernames, SSH options, whitespace and shell punctuation are rejected. Agent, Node and config paths must be normalized absolute paths without spaces.
 
-For a new machine, follow the complete [single-owner device onboarding checklist](docs/ONBOARDING.md). The packaged examples are schema examples, not a pairing mechanism or production state.
+## Atomic plugin releases
 
-## Configure a target Agent
+A stable schema-v2 device is assigned exactly one release per profile. One approval covers the complete profile delta, not a sequence of partially visible plugin changes.
 
-Copy [`examples/agent.config.json`](examples/agent.config.json) to an owner-readable target path, replace every placeholder, and set the file and state directory to owner-only permissions.
+- Public npm plugins require an exact semantic version and SHA-512 SRI.
+- Public GitHub plugins require `owner/repository` plus a lowercase 40-character commit SHA.
+- Private plugins require an exact version and a tarball named `<sha256>.tgz` in the configured artifact store.
+- The Agent validates private tarball digest, package identity/version and DSH bundle metadata.
+- Staging occurs beside the live profile on the same filesystem.
+- The Agent validates the staged profile, stops the owned service, swaps directories by rename, restarts, and proves DSH/Fleet health and release alignment.
+- A failed post-swap check restores the previous profile by rename. Durable release markers recover a crash after commit.
+- Plugins not owned by the previous Fleet release are not removed.
 
-The Agent config fixes:
+The legacy schema-v1 single-plugin planner remains readable for compatibility, but new stable deployments should use schema v2.
 
-- device and profile identity;
-- manifest, DSH home, DSH, pnpm, and state paths;
-- plan lifetime;
-- restart owner, command markers, host, and port;
-- loopback health URL and mandatory Fleet RPC verification.
+## Signed remote tasks
 
-Inspect the target before enabling mutation:
+The Web Settings page submits only:
 
-```bash
-/absolute/path/to/node \
-  /absolute/path/to/agent.mjs \
-  --config /absolute/private/path/agent.config.json \
-  inspect
+```text
+target device ID + fixed workspace ID + fixed profile ID + prompt
 ```
 
-The Agent is one-shot and opens no listener. `restart.kind: none` is accepted for read-only inspection, but plan/apply fail closed unless a mutation-capable restart and credential-free loopback health check with `requireFleetRpc: true` are configured.
+There is no remote path, executable, argument vector, URL, or arbitrary shell field. The Host asks a fixed local signer Agent to sign the request, sends it through a configured local/SSH target, and verifies the target's signed response.
 
-Then add a fixed target to the controller's Fleet Host config:
+Task records are durable. Replaying the same signed message returns its stored receipt; concurrent submissions for one task ID are serialized. The worker bounds duration, output and concurrency, supports cancellation, and exposes signed progress/result messages. `tasks-resume` restarts only tasks that were durably accepted but never began; a lost running worker is not blindly replayed because task side effects may not be idempotent.
 
-```yaml
-convergence:
-  enabled: true
-  principalId: owner
-  timeoutMs: 600000
-  targets:
-    - deviceId: worker
-      transport: ssh
-      sshHost: worker-mac
-      nodeBinary: /opt/homebrew/bin/node
-      agentPath: /Users/example/.local/share/dsh-fleet/releases/0.2.0/agent.mjs
-      configPath: /Users/example/.config/dsh-fleet/agent.json
-```
+This gives useful asynchronous single-owner remote execution and reconnect semantics. It does not provide a live mirrored terminal or recover the internal state of a DSH process that died mid-turn.
 
-`sshHost` must be a preconfigured alias; usernames, command-line options, whitespace, and shell punctuation are rejected. The executable and config paths must be normalized absolute paths without spaces.
+## UI
 
-## Manifest source rules
+Fleet registers `settings.section` and renders inside the normal Settings content flow. Tabs cover status, public updates, atomic releases and signed tasks. It does not register a sidebar footer action or use fixed-position collision geometry.
 
-An entry uses either a read-only `spec`, or a stable `source` plus `revision`:
+## Safety boundaries
 
-```yaml
-plugins:
-  - id: dsh-local-development-plugin
-    spec: link:/opt/example/dsh-local-development-plugin
-    target: { devices: [controller] }
+- The Web endpoint and Fleet RPC must remain loopback-only.
+- Private keys, overlays, manifests, trust stores, task state and artifacts are private operational data.
+- A2A authenticates messages; SSH/local transport still authenticates and reaches the machine.
+- Revocation is removal of a peer key from the receiving device's trust store followed by configuration rollout.
+- Install scripts are disabled. Approved plugins still execute with the DSH owner's authority after installation.
+- Process groups are cleanup, not OS sandboxing. A crashed worker can leave an independently detached child requiring operator inspection.
+- Fleet does not distribute provider credentials or secrets.
 
-  - id: dsh-turn-fork
-    source: npm
-    revision: 0.1.0
-    target: { devices: [worker] }
-
-  - id: dsh-example
-    source: github:owner/dsh-example
-    revision: 0123456789abcdef0123456789abcdef01234567
-    target: { devices: [worker] }
-```
-
-Stable mutation rejects ranges, tags, branches, aliases, URLs, `link:`, `file:`, `workspace:`, and missing Git revisions. Install scripts are disabled. Git packages that require `prepare` therefore fail closed and roll back.
-
-## Operations and recovery
-
-In the Fleet panel, open **Operations**, inspect a configured target, select one manifest-derived candidate, review the full exact plan, tick confirmation, and approve once.
-
-Outcomes are:
-
-- `succeeded`: restart and health gates were proved;
-- `rolled-back`: the old profile/dependency tree and service health were restored;
-- `manual-intervention`: rollback or final state could not be proved;
-- mutation unknown at the Host boundary: recover the exact plan through `action-status` before any second apply.
-
-The current planner creates install/update plans only for a missing dependency or exact dependency-spec drift. `runtime-inactive` and Loader failures are visible health blockers; this release does not invent an automatic repair action for them.
-
-## Security boundary and limitations
-
-- Approval records are integrity-bound and auditable but not cryptographically signed.
-- SSH trusts the owner's existing account and SSH configuration.
-- Host inspection and plans fail closed unless Agent device ID, profile, and manifest digest match the Host binding.
-- Process-group cleanup is not cgroup/job-object containment; a trusted executable that deliberately creates a new session can escape it.
-- The Fleet lock does not coordinate unrelated same-owner profile writers.
-- The final profile digest check and process spawn are not one atomic filesystem transaction.
-- Action state and audit events are separately fsynced.
-- Rollback can require registry/network access to rematerialize the old frozen lockfile.
-- `screen` is the only implemented DSH restart owner.
-- One plan changes one plugin; remove, batch, config distribution, DSH core upgrade, Hub, enrollment, roles, signed approvals, and secret distribution are not implemented.
-
-These are explicit design limits, not hidden guarantees. See [docs/SECURITY_MODEL.md](docs/SECURITY_MODEL.md) and [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md).
+See [docs/SECURITY_MODEL.md](docs/SECURITY_MODEL.md) for the full threat model and recovery rules.
 
 ## Development
 
@@ -233,7 +204,7 @@ pnpm run check
 npm pack --dry-run --ignore-scripts
 ```
 
-`pnpm run check` performs strict TypeScript checking, the full test suite, deterministic bundle verification, example/schema validation, and repository hygiene checks. Generated release bundles are committed and must remain synchronized with `src/`.
+`pnpm run check` performs strict TypeScript checking, the full test suite, deterministic bundle verification, example/schema validation and repository hygiene checks. Generated release bundles are committed and must match `src/`.
 
 ## Documentation
 
@@ -241,10 +212,10 @@ npm pack --dry-run --ignore-scripts
 - [Security model](docs/SECURITY_MODEL.md)
 - [Release and upgrade process](docs/RELEASING.md)
 - [Product requirements and roadmap](docs/REQUIREMENTS.md)
-- [Contributing](CONTRIBUTING.md)
-- [Support](SUPPORT.md)
-- [Security reporting](SECURITY.md)
 - [Changelog](CHANGELOG.md)
+- [Security reporting](SECURITY.md)
+- [Support](SUPPORT.md)
+- [Contributing](CONTRIBUTING.md)
 
 ## License
 

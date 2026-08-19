@@ -31,16 +31,61 @@ export interface FleetPluginSpec {
   spec: string
   source?: string
   revision?: string
+  visibility?: 'public' | 'private'
+  artifactDigest?: string
+  releaseId?: string
+  releaseVersion?: string
   profiles?: string[]
   runtimeModules?: string[]
   target?: FleetPluginTarget
 }
 
+export interface FleetNpmSource {
+  kind: 'npm'
+  version: string
+  integrity?: string
+}
+
+export interface FleetGitHubSource {
+  kind: 'github'
+  repository: string
+  revision: string
+}
+
+export interface FleetArtifactSource {
+  kind: 'artifact'
+  digest: string
+  version: string
+}
+
+export type FleetReleasePluginSource = FleetNpmSource | FleetGitHubSource | FleetArtifactSource
+
+export interface FleetReleasePlugin {
+  id: string
+  visibility: 'public' | 'private'
+  source: FleetReleasePluginSource
+  runtimeModules?: string[]
+}
+
+export interface FleetProfileRelease {
+  id: string
+  version: string
+  profile: string
+  dshRange: string
+  plugins: FleetReleasePlugin[]
+}
+
+export interface FleetManifestV2Metadata {
+  profileReleases: Record<string, FleetProfileRelease>
+  assignments: Record<string, Record<string, string>>
+}
+
 export interface FleetManifest {
-  schemaVersion: 1
+  schemaVersion: 1 | 2
   team: { id: string; name?: string }
   devices: Record<string, FleetDeviceSpec>
   plugins: FleetPluginSpec[]
+  v2?: FleetManifestV2Metadata
 }
 
 export type RuntimePhase = 'pending' | 'loading' | 'active' | 'failed' | 'unloading' | null
@@ -59,6 +104,11 @@ export interface PluginStatus {
   desiredSpec: string
   desiredSource?: string
   desiredRevision?: string
+  visibility?: 'public' | 'private'
+  releaseId?: string
+  releaseVersion?: string
+  desiredArtifactDigest?: string
+  actualArtifactDigest?: string
   actualSpec?: string
   runtimeModules: string[]
   runtimePhase: RuntimePhase

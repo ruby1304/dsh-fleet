@@ -74,14 +74,20 @@ window.__ModuleLoader__.load({
 			if (!isRecord(value) || typeof value.enabled !== "boolean" || !Array.isArray(value.targets)) return false;
 			return value.targets.every((target) => {
 				if (!isRecord(target) || typeof target.deviceId !== "string" || target.transport !== "local" && target.transport !== "ssh" || typeof target.online !== "boolean") return false;
+				if (target.mode !== void 0 && target.mode !== "single-plugin" && target.mode !== "profile-release") return false;
 				if (target.errorCode !== void 0 && typeof target.errorCode !== "string") return false;
 				if (target.inspection === void 0) return target.online === false;
 				const inspection = target.inspection;
-				return isRecord(inspection) && inspection.protocolVersion === 1 && typeof inspection.deviceId === "string" && typeof inspection.profile === "string" && typeof inspection.dshVersion === "string" && typeof inspection.manifestDigest === "string" && typeof inspection.profileHash === "string" && Array.isArray(inspection.candidates) && inspection.candidates.every((candidate) => isRecord(candidate) && typeof candidate.pluginId === "string" && (candidate.action === "install" || candidate.action === "update") && (candidate.fromSpec === null || typeof candidate.fromSpec === "string") && typeof candidate.exactToSpec === "string" && (candidate.sourceKind === "npm" || candidate.sourceKind === "github"));
+				if (!isRecord(inspection) || inspection.protocolVersion !== 1 || typeof inspection.deviceId !== "string" || typeof inspection.profile !== "string" || typeof inspection.dshVersion !== "string" || typeof inspection.manifestDigest !== "string" || typeof inspection.profileHash !== "string") return false;
+				if (inspection.kind === "profile-release") return isRecord(inspection.assignedRelease) && typeof inspection.assignedRelease.releaseId === "string" && typeof inspection.assignedRelease.releaseVersion === "string" && Array.isArray(inspection.changes) && inspection.changes.every((change) => isRecord(change) && typeof change.pluginId === "string" && (change.action === "install" || change.action === "update" || change.action === "remove")) && isRecord(inspection.tasks) && typeof inspection.tasks.enabled === "boolean" && Array.isArray(inspection.tasks.workspaceIds) && inspection.tasks.workspaceIds.every((id) => typeof id === "string") && Array.isArray(inspection.tasks.profiles) && inspection.tasks.profiles.every((profile) => typeof profile === "string");
+				return Array.isArray(inspection.candidates) && inspection.candidates.every((candidate) => isRecord(candidate) && typeof candidate.pluginId === "string" && (candidate.action === "install" || candidate.action === "update") && (candidate.fromSpec === null || typeof candidate.fromSpec === "string") && typeof candidate.exactToSpec === "string" && (candidate.sourceKind === "npm" || candidate.sourceKind === "github"));
 			});
 		}
 		function isFleetPlan(value) {
 			return isRecord(value) && typeof value.planId === "string" && typeof value.digest === "string" && typeof value.deviceId === "string" && typeof value.profile === "string" && typeof value.pluginId === "string" && (value.action === "install" || value.action === "update") && typeof value.exactToSpec === "string" && typeof value.expiresAt === "string";
+		}
+		function isFleetReleasePlan(value) {
+			return isRecord(value) && value.kind === "profile-release" && typeof value.planId === "string" && typeof value.digest === "string" && typeof value.deviceId === "string" && typeof value.profile === "string" && typeof value.releaseId === "string" && typeof value.releaseVersion === "string" && Array.isArray(value.plugins) && Array.isArray(value.changes) && typeof value.expiresAt === "string";
 		}
 		function isAgentAction(value) {
 			const states = /* @__PURE__ */ new Set([
@@ -98,7 +104,12 @@ window.__ModuleLoader__.load({
 				"rolled-back",
 				"manual-intervention"
 			]);
-			return isRecord(value) && typeof value.planId === "string" && typeof value.state === "string" && states.has(value.state) && typeof value.pluginId === "string" && typeof value.updatedAt === "string";
+			return isRecord(value) && typeof value.planId === "string" && typeof value.state === "string" && states.has(value.state) && (typeof value.pluginId === "string" || typeof value.releaseId === "string") && typeof value.updatedAt === "string";
+		}
+		function isFleetTaskReply(value) {
+			if (!isRecord(value) || typeof value.taskId !== "string" || !isRecord(value.response) || value.response.kind !== "task.progress" && value.response.kind !== "task.result" || !isRecord(value.response.payload)) return false;
+			const payload = value.response.payload;
+			return payload.taskId === value.taskId && typeof payload.state === "string" && typeof payload.updatedAt === "string" && (payload.result === void 0 || payload.result === null || typeof payload.result === "string") && (payload.truncated === void 0 || typeof payload.truncated === "boolean") && (payload.errorCode === void 0 || payload.errorCode === null || typeof payload.errorCode === "string");
 		}
 		const driftColors = {
 			aligned: SM.good,
@@ -677,7 +688,7 @@ window.__ModuleLoader__.load({
 							color: SM.fg2,
 							lineHeight: 1.55
 						},
-						children: "仅允许清单内的精确版本。每次只处理一个插件，并在目标机快照、重启、健康检查；失败自动回滚。"
+						children: "v2 设备按完整 Profile Release 原子切换；公开包与私有制品一起审批、验证和回滚。旧版 v1 设备仍保留单插件兼容流程。"
 					}),
 					error !== null && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 						style: {
@@ -706,103 +717,165 @@ window.__ModuleLoader__.load({
 						},
 						children: "载入中…"
 					}),
-					targets?.targets.map((target) => /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-						style: {
-							marginBottom: 10,
-							borderRadius: 12,
-							background: SM.panel,
-							overflow: "hidden"
-						},
-						children: [
-							/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-								style: {
-									display: "flex",
-									alignItems: "center",
-									gap: 8,
-									padding: "10px 11px",
-									borderBottom: `1px solid ${SM.border}`
-								},
-								children: [
-									/* @__PURE__ */ (0, react_jsx_runtime.jsx)(Dot, { color: target.online ? SM.good : SM.bad }),
-									/* @__PURE__ */ (0, react_jsx_runtime.jsx)("strong", {
+					targets?.targets.map((target) => {
+						const release = target.inspection !== void 0 && "kind" in target.inspection && target.inspection.kind === "profile-release" ? target.inspection : null;
+						const legacy = target.inspection !== void 0 && !("kind" in target.inspection) ? target.inspection : null;
+						return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+							style: {
+								marginBottom: 10,
+								borderRadius: 12,
+								background: SM.panel,
+								overflow: "hidden"
+							},
+							children: [
+								/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+									style: {
+										display: "flex",
+										alignItems: "center",
+										gap: 8,
+										padding: "10px 11px",
+										borderBottom: `1px solid ${SM.border}`
+									},
+									children: [
+										/* @__PURE__ */ (0, react_jsx_runtime.jsx)(Dot, { color: target.online ? SM.good : SM.bad }),
+										/* @__PURE__ */ (0, react_jsx_runtime.jsx)("strong", {
+											style: {
+												flex: 1,
+												fontFamily: SM.fontMono
+											},
+											children: target.deviceId
+										}),
+										release !== null && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(Pill, { children: "RELEASE" }),
+										/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+											style: {
+												color: SM.fg3,
+												fontFamily: SM.fontMono
+											},
+											children: target.inspection?.dshVersion ?? target.errorCode ?? "离线"
+										})
+									]
+								}),
+								target.online && release !== null && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+									style: { padding: "10px 11px" },
+									children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 										style: {
-											flex: 1,
-											fontFamily: SM.fontMono
+											display: "flex",
+											gap: 8,
+											alignItems: "center"
 										},
-										children: target.deviceId
-									}),
-									/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+										children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+											style: {
+												flex: 1,
+												minWidth: 0
+											},
+											children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("strong", {
+												style: { fontFamily: SM.fontMono },
+												children: [
+													release.assignedRelease.releaseId,
+													"@",
+													release.assignedRelease.releaseVersion
+												]
+											}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+												style: {
+													marginTop: 3,
+													color: release.changes.length === 0 ? SM.good : SM.warn
+												},
+												children: release.changes.length === 0 ? "文件已一致，等待登记 release" : `${release.changes.length} 项原子变更`
+											})]
+										}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+											type: "button",
+											disabled: loading,
+											onClick: () => onPlan(target.deviceId),
+											style: {
+												minHeight: 30,
+												padding: "4px 10px",
+												border: 0,
+												borderRadius: 9,
+												background: SM.infoSoft,
+												color: SM.info,
+												cursor: loading ? "default" : "pointer",
+												fontFamily: SM.fontSans
+											},
+											children: "生成原子计划"
+										})]
+									}), release.changes.map((change) => /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 										style: {
-											color: SM.fg3,
-											fontFamily: SM.fontMono
-										},
-										children: target.inspection?.dshVersion ?? target.errorCode ?? "离线"
-									})
-								]
-							}),
-							target.online && target.inspection?.candidates.map((candidate) => /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-								style: {
-									display: "grid",
-									gridTemplateColumns: "minmax(0,1fr) auto",
-									gap: 8,
-									alignItems: "center",
-									minHeight: 48,
-									padding: "7px 10px",
-									borderBottom: `1px solid ${SM.border}`
-								},
-								children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-									style: { minWidth: 0 },
-									children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
-										title: candidate.pluginId,
-										style: {
-											overflow: "hidden",
-											textOverflow: "ellipsis",
-											whiteSpace: "nowrap",
-											fontFamily: SM.fontMono
-										},
-										children: candidate.pluginId
-									}), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-										title: candidate.exactToSpec,
-										style: {
-											overflow: "hidden",
-											textOverflow: "ellipsis",
-											whiteSpace: "nowrap",
+											marginTop: 6,
 											color: SM.fg3,
 											fontFamily: SM.fontMono,
 											fontSize: 10.5
 										},
 										children: [
-											candidate.action === "install" ? "安装" : "更新",
-											" → ",
-											candidate.exactToSpec
+											change.action.toUpperCase(),
+											" · ",
+											change.pluginId
 										]
-									})]
-								}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
-									type: "button",
-									disabled: loading,
-									onClick: () => onPlan(target.deviceId, candidate.pluginId),
+									}, change.pluginId))]
+								}),
+								target.online && legacy?.candidates.map((candidate) => /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 									style: {
-										minHeight: 28,
-										padding: "4px 9px",
-										border: 0,
-										borderRadius: 9,
-										background: SM.infoSoft,
-										color: SM.info,
-										cursor: loading ? "default" : "pointer",
-										fontFamily: SM.fontSans
+										display: "grid",
+										gridTemplateColumns: "minmax(0,1fr) auto",
+										gap: 8,
+										alignItems: "center",
+										minHeight: 48,
+										padding: "7px 10px",
+										borderBottom: `1px solid ${SM.border}`
 									},
-									children: "生成计划"
-								})]
-							}, candidate.pluginId)),
-							target.online && target.inspection?.candidates.length === 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
-								style: {
-									padding: 10,
-									color: SM.good
-								},
-								children: "该设备已经一致"
-							})
-						]
-					}, target.deviceId)),
+									children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+										style: { minWidth: 0 },
+										children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+											title: candidate.pluginId,
+											style: {
+												overflow: "hidden",
+												textOverflow: "ellipsis",
+												whiteSpace: "nowrap",
+												fontFamily: SM.fontMono
+											},
+											children: candidate.pluginId
+										}), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+											title: candidate.exactToSpec,
+											style: {
+												overflow: "hidden",
+												textOverflow: "ellipsis",
+												whiteSpace: "nowrap",
+												color: SM.fg3,
+												fontFamily: SM.fontMono,
+												fontSize: 10.5
+											},
+											children: [
+												candidate.action === "install" ? "安装" : "更新",
+												" → ",
+												candidate.exactToSpec
+											]
+										})]
+									}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+										type: "button",
+										disabled: loading,
+										onClick: () => onPlan(target.deviceId, candidate.pluginId),
+										style: {
+											minHeight: 28,
+											padding: "4px 9px",
+											border: 0,
+											borderRadius: 9,
+											background: SM.infoSoft,
+											color: SM.info,
+											cursor: loading ? "default" : "pointer",
+											fontFamily: SM.fontSans
+										},
+										children: "生成计划"
+									})]
+								}, candidate.pluginId)),
+								target.online && legacy?.candidates.length === 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+									style: {
+										padding: 10,
+										color: SM.good
+									},
+									children: "该设备已经一致"
+								})
+							]
+						}, target.deviceId);
+					}),
 					plan !== null && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 						style: {
 							marginBottom: 10,
@@ -828,7 +901,7 @@ window.__ModuleLoader__.load({
 											color: SM.fg3,
 											fontFamily: SM.fontMono
 										},
-										children: plan.action === "install" ? "INSTALL" : "UPDATE"
+										children: "kind" in plan ? "PROFILE RELEASE" : plan.action === "install" ? "INSTALL" : "UPDATE"
 									})
 								]
 							}),
@@ -845,20 +918,44 @@ window.__ModuleLoader__.load({
 										style: { fontFamily: SM.fontMono },
 										children: plan.deviceId
 									}),
-									/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: "插件" }),
-									/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
-										style: { fontFamily: SM.fontMono },
-										children: plan.pluginId
-									}),
-									/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: "目标" }),
-									/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
-										title: plan.exactToSpec,
-										style: {
-											overflowWrap: "anywhere",
-											fontFamily: SM.fontMono
-										},
-										children: plan.exactToSpec
-									}),
+									"kind" in plan ? /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [
+										/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: "Release" }),
+										/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
+											style: { fontFamily: SM.fontMono },
+											children: [
+												plan.releaseId,
+												"@",
+												plan.releaseVersion
+											]
+										}),
+										/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: "插件" }),
+										/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
+											style: { fontFamily: SM.fontMono },
+											children: [
+												plan.plugins.length,
+												" 个，",
+												plan.changes.length,
+												" 项变更"
+											]
+										}),
+										/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: "原子性" }),
+										/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: "整组 stage → rename → health → rollback" })
+									] }) : /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [
+										/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: "插件" }),
+										/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+											style: { fontFamily: SM.fontMono },
+											children: plan.pluginId
+										}),
+										/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: "目标" }),
+										/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+											title: plan.exactToSpec,
+											style: {
+												overflowWrap: "anywhere",
+												fontFamily: SM.fontMono
+											},
+											children: plan.exactToSpec
+										})
+									] }),
 									/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: "计划" }),
 									/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
 										title: plan.planId,
@@ -875,6 +972,21 @@ window.__ModuleLoader__.load({
 									})
 								]
 							}),
+							"kind" in plan && plan.changes.map((change) => /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+								style: {
+									marginTop: 5,
+									color: SM.fg3,
+									fontFamily: SM.fontMono,
+									fontSize: 10.5
+								},
+								children: [
+									change.action.toUpperCase(),
+									" · ",
+									change.pluginId,
+									" · ",
+									change.visibility
+								]
+							}, change.pluginId)),
 							/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("label", {
 								style: {
 									display: "flex",
@@ -891,7 +1003,9 @@ window.__ModuleLoader__.load({
 								}), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", { children: [
 									"我确认由 ",
 									plan.deviceId,
-									" 执行这一精确计划；失败时自动回滚。"
+									" 执行这一",
+									"kind" in plan ? "完整 Profile Release" : "精确插件计划",
+									"；失败时自动回滚。"
 								] })]
 							}),
 							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
@@ -936,7 +1050,7 @@ window.__ModuleLoader__.load({
 								fontVariantNumeric: "tabular-nums"
 							},
 							children: [
-								action.pluginId,
+								"releaseId" in action ? `${action.releaseId}@${action.releaseVersion}` : action.pluginId,
 								" · ",
 								action.updatedAt.slice(0, 19).replace("T", " ")
 							]
@@ -961,8 +1075,272 @@ window.__ModuleLoader__.load({
 				]
 			});
 		}
-		function FleetCard({ ctx, wide = true }) {
-			const [open, setOpen] = (0, react.useState)(false);
+		function TasksView({ targets, targetDeviceId, workspaceId, profile, prompt, reply, loading, error, onTarget, onWorkspace, onProfile, onPrompt, onSubmit, onStatus, onCancel }) {
+			const taskTargets = (targets?.targets ?? []).flatMap((target) => {
+				const inspection = target.inspection;
+				return target.online && inspection !== void 0 && "kind" in inspection && inspection.kind === "profile-release" && inspection.tasks.enabled ? [{
+					deviceId: target.deviceId,
+					tasks: inspection.tasks
+				}] : [];
+			});
+			const selected = taskTargets.find((target) => target.deviceId === targetDeviceId);
+			const state = reply?.response.payload.state;
+			const terminal = state === "succeeded" || state === "failed" || state === "cancelled";
+			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+				style: { padding: "0 12px 12px" },
+				children: [
+					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+						style: {
+							marginBottom: 10,
+							padding: "9px 10px",
+							borderRadius: 10,
+							background: SM.panelSoft,
+							color: SM.fg2,
+							lineHeight: 1.55
+						},
+						children: "任务通过设备签名的 A2A 消息提交。目标机只接受下方列出的 workspace/profile ID；没有任意 shell、argv 或路径入口。"
+					}),
+					error !== null && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+						style: {
+							marginBottom: 10,
+							padding: "9px 10px",
+							borderRadius: 10,
+							background: SM.badSoft,
+							color: SM.bad,
+							fontFamily: SM.fontMono
+						},
+						children: error
+					}),
+					targets === null && error === null && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+						style: {
+							padding: 12,
+							color: SM.fg3
+						},
+						children: "载入任务策略…"
+					}),
+					targets !== null && taskTargets.length === 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+						style: {
+							padding: 12,
+							borderRadius: 10,
+							background: SM.panel,
+							color: SM.fg3
+						},
+						children: "没有启用 A2A 任务策略的在线设备"
+					}),
+					taskTargets.length > 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+						style: {
+							padding: 11,
+							borderRadius: 12,
+							background: SM.panel
+						},
+						children: [
+							/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("label", {
+								style: {
+									display: "grid",
+									gap: 5,
+									marginBottom: 9,
+									color: SM.fg2
+								},
+								children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: "目标设备" }), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("select", {
+									value: targetDeviceId,
+									onChange: (event) => onTarget(event.currentTarget.value),
+									style: {
+										minHeight: 34,
+										border: `1px solid ${SM.borderStrong}`,
+										borderRadius: 9,
+										background: SM.panel,
+										color: SM.fg
+									},
+									children: taskTargets.map((target) => /* @__PURE__ */ (0, react_jsx_runtime.jsx)("option", {
+										value: target.deviceId,
+										children: target.deviceId
+									}, target.deviceId))
+								})]
+							}),
+							/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+								style: {
+									display: "grid",
+									gridTemplateColumns: "1fr 1fr",
+									gap: 8
+								},
+								children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("label", {
+									style: {
+										display: "grid",
+										gap: 5,
+										color: SM.fg2
+									},
+									children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: "Workspace ID" }), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("select", {
+										value: workspaceId,
+										onChange: (event) => onWorkspace(event.currentTarget.value),
+										style: {
+											minHeight: 34,
+											border: `1px solid ${SM.borderStrong}`,
+											borderRadius: 9,
+											background: SM.panel,
+											color: SM.fg
+										},
+										children: (selected?.tasks.workspaceIds ?? []).map((id) => /* @__PURE__ */ (0, react_jsx_runtime.jsx)("option", {
+											value: id,
+											children: id
+										}, id))
+									})]
+								}), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("label", {
+									style: {
+										display: "grid",
+										gap: 5,
+										color: SM.fg2
+									},
+									children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: "Profile" }), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("select", {
+										value: profile,
+										onChange: (event) => onProfile(event.currentTarget.value),
+										style: {
+											minHeight: 34,
+											border: `1px solid ${SM.borderStrong}`,
+											borderRadius: 9,
+											background: SM.panel,
+											color: SM.fg
+										},
+										children: (selected?.tasks.profiles ?? []).map((id) => /* @__PURE__ */ (0, react_jsx_runtime.jsx)("option", {
+											value: id,
+											children: id
+										}, id))
+									})]
+								})]
+							}),
+							/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("label", {
+								style: {
+									display: "grid",
+									gap: 5,
+									marginTop: 9,
+									color: SM.fg2
+								},
+								children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: "任务" }), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("textarea", {
+									value: prompt,
+									onChange: (event) => onPrompt(event.currentTarget.value),
+									rows: 5,
+									maxLength: 32768,
+									placeholder: "描述要由目标 DSH 完成的任务",
+									style: {
+										resize: "vertical",
+										padding: 9,
+										border: `1px solid ${SM.borderStrong}`,
+										borderRadius: 9,
+										background: SM.panel,
+										color: SM.fg,
+										fontFamily: SM.fontSans
+									}
+								})]
+							}),
+							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+								type: "button",
+								disabled: loading || prompt.trim().length === 0 || workspaceId === "" || profile === "",
+								onClick: onSubmit,
+								style: {
+									width: "100%",
+									minHeight: 34,
+									marginTop: 10,
+									border: 0,
+									borderRadius: 10,
+									background: loading || prompt.trim().length === 0 ? SM.fg4 : SM.info,
+									color: SM.panel,
+									cursor: loading ? "default" : "pointer",
+									fontWeight: 600
+								},
+								children: loading ? "提交中…" : "签名并提交任务"
+							})
+						]
+					}),
+					reply !== null && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+						style: {
+							marginTop: 10,
+							padding: 11,
+							borderRadius: 12,
+							background: SM.panel
+						},
+						children: [
+							/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+								style: {
+									display: "flex",
+									alignItems: "center",
+									gap: 7
+								},
+								children: [
+									/* @__PURE__ */ (0, react_jsx_runtime.jsx)(Dot, { color: state === "succeeded" ? SM.good : state === "failed" || state === "cancelled" ? SM.bad : SM.warn }),
+									/* @__PURE__ */ (0, react_jsx_runtime.jsx)("strong", {
+										style: { flex: 1 },
+										children: state
+									}),
+									/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+										style: {
+											color: SM.fg3,
+											fontFamily: SM.fontMono
+										},
+										children: reply.taskId.slice(5, 13)
+									})
+								]
+							}),
+							reply.response.payload.result !== void 0 && reply.response.payload.result !== null && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("pre", {
+								style: {
+									margin: "9px 0 0",
+									padding: 9,
+									maxHeight: 260,
+									overflow: "auto",
+									whiteSpace: "pre-wrap",
+									borderRadius: 9,
+									background: SM.panelSoft,
+									color: SM.fg,
+									fontFamily: SM.fontMono
+								},
+								children: [reply.response.payload.result, reply.response.payload.truncated ? "\n…结果已截断；完整结果保留在目标设备。" : ""]
+							}),
+							reply.response.payload.errorCode !== void 0 && reply.response.payload.errorCode !== null && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+								style: {
+									marginTop: 7,
+									color: SM.bad,
+									fontFamily: SM.fontMono
+								},
+								children: reply.response.payload.errorCode
+							}),
+							/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+								style: {
+									display: "flex",
+									gap: 8,
+									marginTop: 9
+								},
+								children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+									type: "button",
+									disabled: loading,
+									onClick: onStatus,
+									style: {
+										flex: 1,
+										minHeight: 30,
+										border: `1px solid ${SM.borderStrong}`,
+										borderRadius: 9,
+										background: SM.panel,
+										color: SM.fg2
+									},
+									children: "刷新状态"
+								}), !terminal && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+									type: "button",
+									disabled: loading,
+									onClick: onCancel,
+									style: {
+										flex: 1,
+										minHeight: 30,
+										border: 0,
+										borderRadius: 9,
+										background: SM.badSoft,
+										color: SM.bad
+									},
+									children: "请求取消"
+								})]
+							})
+						]
+					})
+				]
+			});
+		}
+		function FleetSettings({ ctx }) {
 			const [tab, setTab] = (0, react.useState)("status");
 			const [status, setStatus] = (0, react.useState)(null);
 			const [statusError, setStatusError] = (0, react.useState)(null);
@@ -976,12 +1354,17 @@ window.__ModuleLoader__.load({
 			const [agentError, setAgentError] = (0, react.useState)(null);
 			const [agentLoading, setAgentLoading] = (0, react.useState)(false);
 			const [approvalArmed, setApprovalArmed] = (0, react.useState)(false);
+			const [taskTarget, setTaskTarget] = (0, react.useState)("");
+			const [taskWorkspace, setTaskWorkspace] = (0, react.useState)("");
+			const [taskProfile, setTaskProfile] = (0, react.useState)("");
+			const [taskPrompt, setTaskPrompt] = (0, react.useState)("");
+			const [taskReply, setTaskReply] = (0, react.useState)(null);
+			const [taskError, setTaskError] = (0, react.useState)(null);
+			const [taskLoading, setTaskLoading] = (0, react.useState)(false);
 			const statusInFlight = (0, react.useRef)(null);
 			const updatesInFlight = (0, react.useRef)(null);
 			const agentsInFlight = (0, react.useRef)(null);
 			const agentMutationInFlight = (0, react.useRef)(false);
-			const rootRef = (0, react.useRef)(null);
-			const [panelAnchor, setPanelAnchor] = (0, react.useState)();
 			const loadStatus = (0, react.useCallback)(async () => {
 				if (statusInFlight.current !== null) return statusInFlight.current;
 				const request = (async () => {
@@ -1053,11 +1436,12 @@ window.__ModuleLoader__.load({
 				setAgentAction(null);
 				setApprovalArmed(false);
 				try {
-					const result = await ctx.connection.rpc.call(AGENT_CHANNEL, "plan", {
+					const releaseMode = pluginId === void 0;
+					const result = await ctx.connection.rpc.call(AGENT_CHANNEL, releaseMode ? "release-plan" : "plan", releaseMode ? { deviceId } : {
 						deviceId,
 						pluginId
 					});
-					setAgentPlan(rpcValue(result, isFleetPlan, "fleet plan unavailable"));
+					setAgentPlan(releaseMode ? rpcValue(result, isFleetReleasePlan, "fleet release plan unavailable") : rpcValue(result, isFleetPlan, "fleet plan unavailable"));
 					setAgentError(null);
 				} catch (cause) {
 					setAgentError(cause instanceof Error ? cause.message : String(cause));
@@ -1070,10 +1454,11 @@ window.__ModuleLoader__.load({
 				if (agentPlan === null || !approvalArmed || agentMutationInFlight.current) return;
 				agentMutationInFlight.current = true;
 				const approvedPlan = agentPlan;
+				const releaseMode = "kind" in approvedPlan;
 				setAgentLoading(true);
 				setApprovalArmed(false);
 				try {
-					const result = await ctx.connection.rpc.call(AGENT_CHANNEL, "approve", {
+					const result = await ctx.connection.rpc.call(AGENT_CHANNEL, releaseMode ? "release-approve" : "approve", {
 						approvalId: crypto.randomUUID(),
 						deviceId: approvedPlan.deviceId,
 						planDigest: approvedPlan.digest,
@@ -1088,7 +1473,7 @@ window.__ModuleLoader__.load({
 				} catch (cause) {
 					const applyError = cause instanceof Error ? cause.message : String(cause);
 					try {
-						const status = await ctx.connection.rpc.call(AGENT_CHANNEL, "action-status", {
+						const status = await ctx.connection.rpc.call(AGENT_CHANNEL, releaseMode ? "release-action-status" : "action-status", {
 							deviceId: approvedPlan.deviceId,
 							planId: approvedPlan.planId
 						});
@@ -1109,6 +1494,36 @@ window.__ModuleLoader__.load({
 				ctx,
 				loadAgentTargets
 			]);
+			const taskCall = (0, react.useCallback)(async (endpoint) => {
+				if (taskLoading || taskTarget === "") return;
+				setTaskLoading(true);
+				try {
+					const payload = endpoint === "task-submit" ? {
+						targetDeviceId: taskTarget,
+						workspaceId: taskWorkspace,
+						profile: taskProfile,
+						prompt: taskPrompt.trim()
+					} : {
+						targetDeviceId: taskTarget,
+						taskId: taskReply?.taskId
+					};
+					const result = await ctx.connection.rpc.call(AGENT_CHANNEL, endpoint, payload);
+					setTaskReply(rpcValue(result, isFleetTaskReply, "fleet task response unavailable"));
+					setTaskError(null);
+				} catch (cause) {
+					setTaskError(cause instanceof Error ? cause.message : String(cause));
+				} finally {
+					setTaskLoading(false);
+				}
+			}, [
+				ctx,
+				taskLoading,
+				taskProfile,
+				taskPrompt,
+				taskReply?.taskId,
+				taskTarget,
+				taskWorkspace
+			]);
 			(0, react.useEffect)(() => {
 				loadStatus();
 				const timer = window.setInterval(() => {
@@ -1117,113 +1532,84 @@ window.__ModuleLoader__.load({
 				return () => window.clearInterval(timer);
 			}, [loadStatus]);
 			(0, react.useEffect)(() => {
-				if (!open || tab !== "updates" || updates !== null || updateError !== null || updateLoading) return;
+				if (tab !== "updates" || updates !== null || updateError !== null || updateLoading) return;
 				loadUpdates("if-stale");
 			}, [
 				loadUpdates,
-				open,
 				tab,
 				updateError,
 				updateLoading,
 				updates
 			]);
 			(0, react.useEffect)(() => {
-				if (!open || tab !== "operations" || agentTargets !== null || agentError !== null || agentLoading) return;
+				if (tab !== "operations" && tab !== "tasks" || agentTargets !== null || agentError !== null || agentLoading) return;
 				loadAgentTargets();
 			}, [
 				agentError,
 				agentLoading,
 				agentTargets,
 				loadAgentTargets,
-				open,
 				tab
 			]);
-			(0, react.useLayoutEffect)(() => {
-				if (!open) return;
-				const place = () => {
-					const rect = rootRef.current?.getBoundingClientRect();
-					if (rect === void 0 || typeof window.innerWidth !== "number" || typeof window.innerHeight !== "number") return;
-					const panelWidth = Math.min(380, window.innerWidth - 24);
-					const left = Math.max(12, Math.min(rect.left, window.innerWidth - panelWidth - 12));
-					const availableHeight = Math.max(120, rect.top - 20);
-					setPanelAnchor({
-						left,
-						bottom: window.innerHeight - rect.top + 8,
-						maxHeight: Math.min(Math.floor(window.innerHeight * .68), availableHeight)
-					});
-				};
-				place();
-				if (typeof window.addEventListener !== "function") return;
-				window.addEventListener("resize", place);
-				return () => window.removeEventListener("resize", place);
-			}, [open, wide]);
 			(0, react.useEffect)(() => {
-				if (!open || typeof document.addEventListener !== "function") return;
-				const dismiss = (event) => {
-					if (event instanceof KeyboardEvent && event.key === "Escape") {
-						setOpen(false);
-						return;
-					}
-					if (event instanceof PointerEvent && rootRef.current !== null && event.target instanceof Node && !rootRef.current.contains(event.target)) setOpen(false);
-				};
-				document.addEventListener("pointerdown", dismiss);
-				document.addEventListener("keydown", dismiss);
-				return () => {
-					document.removeEventListener("pointerdown", dismiss);
-					document.removeEventListener("keydown", dismiss);
-				};
-			}, [open]);
+				if (agentTargets === null) return;
+				const available = agentTargets.targets.flatMap((target) => {
+					const inspection = target.inspection;
+					return target.online && inspection !== void 0 && "kind" in inspection && inspection.kind === "profile-release" && inspection.tasks.enabled ? [{
+						deviceId: target.deviceId,
+						tasks: inspection.tasks
+					}] : [];
+				});
+				const selected = available.find((target) => target.deviceId === taskTarget) ?? available[0];
+				if (selected === void 0) return;
+				if (taskTarget !== selected.deviceId) setTaskTarget(selected.deviceId);
+				if (!selected.tasks.workspaceIds.includes(taskWorkspace)) setTaskWorkspace(selected.tasks.workspaceIds[0] ?? "");
+				if (!selected.tasks.profiles.includes(taskProfile)) setTaskProfile(selected.tasks.profiles[0] ?? "");
+			}, [
+				agentTargets,
+				taskProfile,
+				taskTarget,
+				taskWorkspace
+			]);
 			const driftIssues = (0, react.useMemo)(() => status === null ? 0 : status.summary.missing + status.summary.drifted + status.summary.failed + status.summary.unmanaged, [status]);
 			const availableUpdates = updates?.snapshot?.summary.available ?? 0;
 			const updateFailures = updates?.snapshot?.summary.errors ?? 0;
 			const runtimeFailures = status?.runtime.failedModules.length ?? 0;
 			const tone = statusError !== null || status?.manifest.loaded === false || (status?.summary.failed ?? 0) > 0 || runtimeFailures > 0 || updateError !== null || updateFailures > 0 || agentError !== null || agentAction?.state === "manual-intervention" ? SM.bad : driftIssues > 0 || availableUpdates > 0 || updates?.stale === true ? SM.warn : status === null ? SM.fg3 : SM.good;
-			const closedText = status === null ? statusError === null ? "载入中…" : "状态获取失败" : [
-				driftIssues === 0 && runtimeFailures === 0 ? "一致" : driftIssues > 0 ? `${driftIssues} 项差异` : void 0,
-				runtimeFailures > 0 ? `Loader ${runtimeFailures} 失败` : void 0,
-				updateError !== null || updateFailures > 0 ? "更新检查失败" : availableUpdates > 0 ? `${availableUpdates} 个更新` : void 0
-			].filter((value) => value !== void 0).join(" · ");
-			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-				ref: rootRef,
-				"data-dsh-fleet-action": true,
+			return /* @__PURE__ */ (0, react_jsx_runtime.jsx)("section", {
+				"aria-label": "DSH Fleet",
+				"data-dsh-fleet-settings": true,
 				style: {
-					position: "relative",
-					display: "flex",
-					alignItems: "center",
-					flex: "none",
-					pointerEvents: "auto",
-					width: wide ? "100%" : 36,
-					height: wide ? 42 : 36,
-					margin: wide ? "8px 0 0" : 0,
+					width: "100%",
+					height: "100%",
+					maxWidth: 960,
 					minWidth: 0,
+					minHeight: 0,
+					display: "flex",
+					boxSizing: "border-box",
+					overflow: "hidden",
 					fontFamily: SM.fontSans,
 					fontSize: 12,
-					color: SM.fg
+					color: SM.fg,
+					border: `1px solid ${SM.border}`,
+					borderRadius: 18,
+					background: SM.bg
 				},
-				children: [open && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-					role: "dialog",
-					"aria-label": "DSH Fleet",
+				children: /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 					"data-dsh-fleet-panel": true,
 					style: {
-						position: "fixed",
-						zIndex: 950,
-						left: panelAnchor?.left ?? 12,
-						bottom: panelAnchor?.bottom ?? 64,
-						width: 380,
-						maxWidth: "calc(100vw - 24px)",
-						maxHeight: panelAnchor?.maxHeight ?? "68vh",
-						overflow: "auto",
-						border: `1px solid ${SM.border}`,
-						borderRadius: 20,
-						background: SM.bg,
-						boxShadow: SM.shadowCard
+						width: "100%",
+						height: "100%",
+						minWidth: 0,
+						minHeight: 0,
+						display: "flex",
+						flexDirection: "column",
+						overflow: "hidden",
+						background: SM.bg
 					},
 					children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 						style: {
-							position: "sticky",
-							top: 0,
-							zIndex: 1,
-							padding: "11px 12px 9px",
+							padding: "14px 16px 11px",
 							background: SM.panel,
 							borderBottom: `1px solid ${SM.border}`
 						},
@@ -1234,16 +1620,33 @@ window.__ModuleLoader__.load({
 								gap: 8
 							},
 							children: [
+								/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+									style: {
+										display: "grid",
+										placeItems: "center",
+										color: SM.fg2
+									},
+									children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(FleetIcon, {})
+								}),
 								/* @__PURE__ */ (0, react_jsx_runtime.jsx)(Dot, {
 									color: tone,
 									size: 8
 								}),
-								/* @__PURE__ */ (0, react_jsx_runtime.jsx)("strong", {
+								/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 									style: {
 										flex: 1,
-										fontSize: 14
+										minWidth: 0
 									},
-									children: "DSH Fleet"
+									children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("strong", {
+										style: {
+											display: "block",
+											fontSize: 15
+										},
+										children: "DSH Fleet"
+									}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+										style: { color: SM.fg3 },
+										children: "设备、Profile Release 与远程执行"
+									})]
 								}),
 								/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
 									type: "button",
@@ -1279,7 +1682,8 @@ window.__ModuleLoader__.load({
 							children: [
 								"status",
 								"updates",
-								"operations"
+								"operations",
+								"tasks"
 							].map((key) => /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
 								type: "button",
 								role: "tab",
@@ -1296,11 +1700,19 @@ window.__ModuleLoader__.load({
 									fontFamily: SM.fontSans,
 									fontSize: 11.5
 								},
-								children: key === "status" ? "状态" : key === "updates" ? `更新${availableUpdates > 0 ? ` ${availableUpdates}` : ""}` : "操作"
+								children: key === "status" ? "状态" : key === "updates" ? `更新${availableUpdates > 0 ? ` ${availableUpdates}` : ""}` : key === "operations" ? "发布" : "任务"
 							}, key))
 						})]
 					}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
-						style: { paddingTop: 10 },
+						"data-dsh-fleet-scroll": true,
+						style: {
+							flex: 1,
+							minHeight: 0,
+							paddingTop: 10,
+							overflowY: "auto",
+							overscrollBehavior: "contain",
+							background: SM.bg
+						},
 						children: tab === "status" ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)(StatusView, {
 							status,
 							error: statusError
@@ -1309,7 +1721,7 @@ window.__ModuleLoader__.load({
 							loading: updateLoading,
 							error: updateError,
 							onRefresh: () => void loadUpdates("force")
-						}) : /* @__PURE__ */ (0, react_jsx_runtime.jsx)(OperationsView, {
+						}) : tab === "operations" ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)(OperationsView, {
 							targets: agentTargets,
 							plan: agentPlan,
 							action: agentAction,
@@ -1324,92 +1736,44 @@ window.__ModuleLoader__.load({
 							},
 							onPlan: (deviceId, pluginId) => void requestPlan(deviceId, pluginId),
 							onApprove: () => void approvePlan()
+						}) : /* @__PURE__ */ (0, react_jsx_runtime.jsx)(TasksView, {
+							targets: agentTargets,
+							targetDeviceId: taskTarget,
+							workspaceId: taskWorkspace,
+							profile: taskProfile,
+							prompt: taskPrompt,
+							reply: taskReply,
+							loading: taskLoading,
+							error: taskError ?? agentError,
+							onTarget: (value) => {
+								setTaskTarget(value);
+								setTaskReply(null);
+							},
+							onWorkspace: setTaskWorkspace,
+							onProfile: setTaskProfile,
+							onPrompt: setTaskPrompt,
+							onSubmit: () => void taskCall("task-submit"),
+							onStatus: () => void taskCall("task-status"),
+							onCancel: () => void taskCall("task-cancel")
 						})
 					})]
-				}), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("button", {
-					type: "button",
-					"aria-label": `DSH Fleet：${closedText}`,
-					title: "DSH Fleet",
-					"aria-expanded": open,
-					onClick: () => setOpen((value) => !value),
-					style: {
-						position: "relative",
-						display: "flex",
-						alignItems: "center",
-						justifyContent: wide ? "flex-start" : "center",
-						gap: 8,
-						width: "100%",
-						height: wide ? 42 : 36,
-						minWidth: 0,
-						border: 0,
-						borderRadius: wide ? 12 : 999,
-						background: open ? "var(--dsw-alias-interactive-bg-hover, #e6e9ed)" : "transparent",
-						padding: wide ? "0 10px 0 8px" : 0,
-						cursor: "pointer",
-						color: "var(--dsw-alias-label-primary, #181a1c)"
-					},
-					children: [
-						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
-							style: {
-								display: "grid",
-								placeItems: "center",
-								color: "var(--dsw-alias-label-secondary, #5f6670)"
-							},
-							children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(FleetIcon, {})
-						}),
-						wide && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [
-							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("strong", {
-								style: { whiteSpace: "nowrap" },
-								children: "Fleet"
-							}),
-							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
-								style: {
-									minWidth: 0,
-									marginLeft: "auto",
-									overflow: "hidden",
-									textOverflow: "ellipsis",
-									whiteSpace: "nowrap",
-									color: SM.fg2,
-									fontFamily: SM.fontMono,
-									fontSize: 10.5,
-									fontVariantNumeric: "tabular-nums"
-								},
-								children: closedText
-							}),
-							/* @__PURE__ */ (0, react_jsx_runtime.jsx)(Dot, {
-								color: tone,
-								size: 7
-							})
-						] }),
-						!wide && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
-							"aria-hidden": "true",
-							style: {
-								position: "absolute",
-								right: 4,
-								bottom: 4
-							},
-							children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(Dot, {
-								color: tone,
-								size: 6
-							})
-						})
-					]
-				})]
+				})
 			});
 		}
+		function FleetCard({ ctx }) {
+			return /* @__PURE__ */ (0, react_jsx_runtime.jsx)(FleetSettings, { ctx });
+		}
 		function apply(ctx) {
-			ctx.slots.inject("sidebar.footer.action", () => ctx.slots.register({
-				name: "sidebar.footer.action",
+			ctx.slots.inject("settings.section", () => ctx.slots.register({
+				name: "settings.section",
 				id: "dsh-fleet",
-				order: 110,
-				label: () => "DSH Fleet"
-			}, ({ wide = true }) => /* @__PURE__ */ (0, react_jsx_runtime.jsx)(FleetCard, {
-				ctx,
-				wide
-			})));
+				order: 65,
+				label: "Fleet"
+			}, () => /* @__PURE__ */ (0, react_jsx_runtime.jsx)(FleetSettings, { ctx })));
 		}
 		//#endregion
 		exports.FleetCard = FleetCard;
+		exports.FleetSettings = FleetSettings;
 		exports.apply = apply;
 		exports.inject = inject;
 		return module.exports;

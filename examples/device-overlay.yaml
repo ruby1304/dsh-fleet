@@ -1,0 +1,50 @@
+# PRIVATE TEMPLATE: copy outside the repository and replace every example path,
+# digest, device identity and trust entry. It contains no private key material.
+schemaVersion: 1
+team:
+  id: example-team
+  name: Example DSH fleet
+device:
+  id: worker
+  assignedTo: owner
+  class: always-on-worker
+  channel: stable
+release:
+  id: web-1.0.0
+  version: 1.0.0
+privatePlugins:
+  - id: dsh-example-private
+    version: 1.0.0
+    digest: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+workspacePaths:
+  project: /Users/example/src/dsh-project
+# Add peer identity.invite.json values here and grant only the needed kinds.
+trustedPeers: []
+agent:
+  dshHome: /Users/example/.dsh
+  dshBinary: /Users/example/.local/share/dsh-runtime/current/bin/dsh
+  pnpmBinary: /Users/example/.local/bin/pnpm
+  stateDir: /Users/example/.local/state/dsh-fleet/web
+  artifactStore: /Users/example/.local/share/dsh-fleet/artifacts
+  tarBinary: /usr/bin/tar
+  planTtlMs: 300000
+  restart:
+    kind: launchd
+    launchctlBinary: /bin/launchctl
+    lsofBinary: /usr/sbin/lsof
+    psBinary: /bin/ps
+    ownerMarkers: ["@deepseek-ai/dsh/lib/bin.js"]
+    serviceTarget: gui/502/com.example.dsh-web
+    host: 127.0.0.1
+    port: 3211
+    managedPorts: [3211]
+  health:
+    url: http://127.0.0.1:3211
+    timeoutMs: 45000
+    requireFleetRpc: true
+  maxMessageTtlMs: 900000
+  tasks:
+    enabled: false
+    timeoutMs: 3600000
+    maxOutputBytes: 1048576
+    maxConcurrent: 1

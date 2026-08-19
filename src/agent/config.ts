@@ -15,9 +15,22 @@ export interface AgentRestartScreen {
   sessionName: string
   host: string
   port: number
+  managedPorts?: number[]
 }
 
-export type AgentRestartConfig = AgentRestartNone | AgentRestartScreen
+export interface AgentRestartLaunchd {
+  kind: 'launchd'
+  launchctlBinary: string
+  lsofBinary: string
+  psBinary: string
+  ownerMarkers: string[]
+  serviceTarget: string
+  host: string
+  port: number
+  managedPorts?: number[]
+}
+
+export type AgentRestartConfig = AgentRestartNone | AgentRestartScreen | AgentRestartLaunchd
 
 export interface AgentHealthConfig {
   url?: string
@@ -25,8 +38,25 @@ export interface AgentHealthConfig {
   requireFleetRpc: boolean
 }
 
+export interface AgentA2AConfig {
+  teamId: string
+  principalId: string
+  privateKeyPath: string
+  trustStorePath: string
+  maxMessageTtlMs: number
+}
+
+export interface AgentTasksConfig {
+  enabled: boolean
+  workspaces: Record<string, string>
+  profiles: string[]
+  timeoutMs: number
+  maxOutputBytes: number
+  maxConcurrent: number
+}
+
 export interface FleetAgentConfig {
-  schemaVersion: 1
+  schemaVersion: 1 | 2
   deviceId: string
   manifestPath: string
   dshHome: string
@@ -37,11 +67,27 @@ export interface FleetAgentConfig {
   planTtlMs: number
   restart: AgentRestartConfig
   health: AgentHealthConfig
+  artifactStore?: string
+  tarBinary?: string
+  a2a?: AgentA2AConfig
+  tasks?: AgentTasksConfig
 }
 
 export interface MutationReadyFleetAgentConfig extends FleetAgentConfig {
-  restart: AgentRestartScreen
+  restart: AgentRestartScreen | AgentRestartLaunchd
   health: AgentHealthConfig & { url: string; requireFleetRpc: true }
+}
+
+export interface ReleaseReadyFleetAgentConfig extends MutationReadyFleetAgentConfig {
+  schemaVersion: 2
+  artifactStore: string
+  tarBinary: string
+}
+
+export interface A2AReadyFleetAgentConfig extends FleetAgentConfig {
+  schemaVersion: 2
+  a2a: AgentA2AConfig
+  tasks: AgentTasksConfig
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -79,25 +125,50 @@ function parseRestart(value: unknown): AgentRestartConfig {
     exactKeys(value, ['kind'], 'restart')
     return { kind: 'none' }
   }
-  if (kind !== 'screen') throw new TypeError('restart.kind must be none or screen')
-  exactKeys(value, ['kind', 'screenBinary', 'lsofBinary', 'psBinary', 'ownerMarkers', 'sessionName', 'host', 'port'], 'restart')
-  const sessionName = nonEmpty(value.sessionName, 'restart.sessionName')
-  if (!/^[A-Za-z0-9._-]+$/.test(sessionName)) throw new TypeError('restart.sessionName contains unsupported characters')
+  if (kind !== 'screen' && kind !== 'launchd') throw new TypeError('restart.kind must be none, screen or launchd')
+  exactKeys(value, kind === 'screen'
+    ? ['kind', 'screenBinary', 'lsofBinary', 'psBinary', 'ownerMarkers', 'sessionName', 'host', 'port', 'managedPorts']
+    : ['kind', 'launchctlBinary', 'lsofBinary', 'psBinary', 'ownerMarkers', 'serviceTarget', 'host', 'port', 'managedPorts'], 'restart')
   const host = nonEmpty(value.host, 'restart.host')
   if (host !== '127.0.0.1' && host !== 'localhost' && host !== '::1') throw new TypeError('restart.host must be loopback')
   if (!Array.isArray(value.ownerMarkers) || value.ownerMarkers.length === 0 || value.ownerMarkers.length > 8 ||
       value.ownerMarkers.some(marker => typeof marker !== 'string' || marker.trim() !== marker || marker.length === 0 || marker.length > 240 || /[\r\n\0]/.test(marker))) {
     throw new TypeError('restart.ownerMarkers must contain 1 to 8 fixed command fragments')
   }
-  return {
-    kind: 'screen',
-    screenBinary: absolutePath(value.screenBinary, 'restart.screenBinary'),
+  const port = boundedInt(value.port, 'restart.port', 0, 1024, 65535)
+  const rawManagedPorts = value.managedPorts ?? [port]
+  if (!Array.isArray(rawManagedPorts) || rawManagedPorts.length === 0 || rawManagedPorts.length > 16 ||
+      rawManagedPorts.some(item => typeof item !== 'number' || !Number.isSafeInteger(item) || item < 1024 || item > 65535) ||
+      new Set(rawManagedPorts).size !== rawManagedPorts.length || !rawManagedPorts.includes(port)) {
+    throw new TypeError('restart.managedPorts must be 1 to 16 unique ports including restart.port')
+  }
+  const common = {
     lsofBinary: absolutePath(value.lsofBinary, 'restart.lsofBinary'),
     psBinary: absolutePath(value.psBinary, 'restart.psBinary'),
     ownerMarkers: value.ownerMarkers as string[],
-    sessionName,
     host,
-    port: boundedInt(value.port, 'restart.port', 0, 1024, 65535),
+    port,
+    managedPorts: rawManagedPorts as number[],
+  }
+  if (kind === 'screen') {
+    const sessionName = nonEmpty(value.sessionName, 'restart.sessionName')
+    if (!/^[A-Za-z0-9._-]+$/.test(sessionName)) throw new TypeError('restart.sessionName contains unsupported characters')
+    return {
+      kind: 'screen',
+      screenBinary: absolutePath(value.screenBinary, 'restart.screenBinary'),
+      sessionName,
+      ...common,
+    }
+  }
+  const serviceTarget = nonEmpty(value.serviceTarget, 'restart.serviceTarget')
+  if (!/^(?:gui|user)\/[1-9][0-9]*\/[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(serviceTarget)) {
+    throw new TypeError('restart.serviceTarget must be a fixed gui/UID/label or user/UID/label target')
+  }
+  return {
+    kind: 'launchd',
+    launchctlBinary: absolutePath(value.launchctlBinary, 'restart.launchctlBinary'),
+    serviceTarget,
+    ...common,
   }
 }
 
@@ -124,17 +195,71 @@ function parseHealth(value: unknown): AgentHealthConfig {
   }
 }
 
+function safeIdentifier(value: unknown, field: string): string {
+  const id = nonEmpty(value, field)
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(id)) throw new TypeError(field + ' contains unsupported characters')
+  return id
+}
+
+function parseA2A(value: unknown): AgentA2AConfig | undefined {
+  if (value === undefined) return undefined
+  if (!isRecord(value)) throw new TypeError('a2a must be an object')
+  exactKeys(value, ['teamId', 'principalId', 'privateKeyPath', 'trustStorePath', 'maxMessageTtlMs'], 'a2a')
+  return {
+    teamId: safeIdentifier(value.teamId, 'a2a.teamId'),
+    principalId: safeIdentifier(value.principalId, 'a2a.principalId'),
+    privateKeyPath: absolutePath(value.privateKeyPath, 'a2a.privateKeyPath'),
+    trustStorePath: absolutePath(value.trustStorePath, 'a2a.trustStorePath'),
+    maxMessageTtlMs: boundedInt(value.maxMessageTtlMs, 'a2a.maxMessageTtlMs', 15 * 60 * 1000, 60_000, 24 * 60 * 60 * 1000),
+  }
+}
+
+function parseTasks(value: unknown): AgentTasksConfig | undefined {
+  if (value === undefined) return undefined
+  if (!isRecord(value)) throw new TypeError('tasks must be an object')
+  exactKeys(value, ['enabled', 'workspaces', 'profiles', 'timeoutMs', 'maxOutputBytes', 'maxConcurrent'], 'tasks')
+  if (typeof value.enabled !== 'boolean') throw new TypeError('tasks.enabled must be boolean')
+  if (!isRecord(value.workspaces)) throw new TypeError('tasks.workspaces must be an object')
+  const workspaces: Record<string, string> = {}
+  for (const [rawId, path] of Object.entries(value.workspaces)) {
+    const id = safeIdentifier(rawId, 'tasks workspace id')
+    workspaces[id] = absolutePath(path, 'tasks.workspaces.' + id)
+  }
+  if (value.enabled && Object.keys(workspaces).length === 0) throw new TypeError('enabled tasks require at least one workspace')
+  if (!Array.isArray(value.profiles) || value.profiles.length === 0 || value.profiles.length > 16 ||
+      value.profiles.some(profile => typeof profile !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(profile)) ||
+      new Set(value.profiles).size !== value.profiles.length) {
+    throw new TypeError('tasks.profiles must contain 1 to 16 unique safe profile ids')
+  }
+  return {
+    enabled: value.enabled,
+    workspaces,
+    profiles: value.profiles as string[],
+    timeoutMs: boundedInt(value.timeoutMs, 'tasks.timeoutMs', 60 * 60 * 1000, 60_000, 6 * 60 * 60 * 1000),
+    maxOutputBytes: boundedInt(value.maxOutputBytes, 'tasks.maxOutputBytes', 1024 * 1024, 4096, 1024 * 1024),
+    maxConcurrent: boundedInt(value.maxConcurrent, 'tasks.maxConcurrent', 1, 1, 4),
+  }
+}
+
 export function parseAgentConfig(value: unknown): FleetAgentConfig {
   if (!isRecord(value)) throw new TypeError('agent config must be an object')
   exactKeys(value, [
     'schemaVersion', 'deviceId', 'manifestPath', 'dshHome', 'dshBinary', 'pnpmBinary', 'profile', 'stateDir',
-    'planTtlMs', 'restart', 'health',
+    'planTtlMs', 'restart', 'health', 'artifactStore', 'tarBinary', 'a2a', 'tasks',
   ], 'agent config')
-  if (value.schemaVersion !== 1) throw new TypeError('agent config schemaVersion must equal 1')
+  if (value.schemaVersion !== 1 && value.schemaVersion !== 2) throw new TypeError('agent config schemaVersion must equal 1 or 2')
   const profile = nonEmpty(value.profile, 'profile')
   if (!/^[A-Za-z0-9._-]+$/.test(profile)) throw new TypeError('profile contains unsupported characters')
+  const artifactStore = value.artifactStore === undefined ? undefined : absolutePath(value.artifactStore, 'artifactStore')
+  const tarBinary = value.tarBinary === undefined ? undefined : absolutePath(value.tarBinary, 'tarBinary')
+  if (value.schemaVersion === 2 && (artifactStore === undefined || tarBinary === undefined)) {
+    throw new TypeError('schemaVersion 2 requires artifactStore and tarBinary')
+  }
+  const a2a = parseA2A(value.a2a)
+  const tasks = parseTasks(value.tasks)
+  if (tasks?.enabled === true && a2a === undefined) throw new TypeError('enabled tasks require a2a identity and trust configuration')
   return {
-    schemaVersion: 1,
+    schemaVersion: value.schemaVersion,
     deviceId: normalizeDeviceId(value.deviceId),
     manifestPath: absolutePath(value.manifestPath, 'manifestPath'),
     dshHome: absolutePath(value.dshHome, 'dshHome'),
@@ -145,6 +270,23 @@ export function parseAgentConfig(value: unknown): FleetAgentConfig {
     planTtlMs: boundedInt(value.planTtlMs, 'planTtlMs', 10 * 60 * 1000, 60_000, 60 * 60 * 1000),
     restart: parseRestart(value.restart),
     health: parseHealth(value.health),
+    ...(artifactStore === undefined ? {} : { artifactStore }),
+    ...(tarBinary === undefined ? {} : { tarBinary }),
+    ...(a2a === undefined ? {} : { a2a }),
+    ...(tasks === undefined ? {} : { tasks }),
+  }
+}
+
+export function assertReleaseReadyConfig(config: FleetAgentConfig): asserts config is ReleaseReadyFleetAgentConfig {
+  assertMutationReadyConfig(config)
+  if (config.schemaVersion !== 2 || config.artifactStore === undefined || config.tarBinary === undefined) {
+    throw mutationConfigError('atomic profile releases require schemaVersion 2 with artifactStore and tarBinary')
+  }
+}
+
+export function assertA2AReadyConfig(config: FleetAgentConfig): asserts config is A2AReadyFleetAgentConfig {
+  if (config.schemaVersion !== 2 || config.a2a === undefined || config.tasks === undefined) {
+    throw mutationConfigError('A2A requires schemaVersion 2 with identity, trust and task policy')
   }
 }
 

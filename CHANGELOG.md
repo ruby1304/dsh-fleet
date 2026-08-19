@@ -1,6 +1,21 @@
 # Changelog
 
-## 0.2.0 - Unreleased
+## 0.3.0 - Unreleased
+
+- Add schema-v2 atomic profile releases that combine exact public npm/GitHub sources and content-addressed private artifacts under one approval and one profile swap.
+- Stage profiles on the live filesystem, verify private tarballs and npm integrity, validate before cutover, prove post-restart DSH/Fleet health, and restore the previous directory on failure.
+- Add Ed25519-signed, capability-scoped team A2A envelopes with strict payloads, recipient/team binding, expiry and replay-safe receipts.
+- Add durable policy-bounded tasks with fixed workspace/profile IDs, bounded time/output/concurrency, cancellation, signed progress/results, reconnect and accepted-task recovery.
+- Add public team packs, private per-device overlays, owner-only identity generation and strict non-overwriting bootstrap rendering.
+- Keep the managed service profile independent from the allowed task profiles so a Web controller can dispatch only to one-shot `headless` execution.
+- Add a read-only Agent `doctor` for release, health, identity, trust, executable and workspace readiness.
+- Prevent public federation anchors from granting task execution and keep private plugin artifacts out of shareable configuration.
+- Add launchd restart ownership with managed-port verification while retaining screen compatibility.
+- Move Fleet from the sidebar footer into a first-class Settings section with status, updates, releases and tasks tabs.
+- Add crash/replay/concurrency, atomic rollback, public/private release, bootstrap and Settings-layout regression coverage.
+- Preserve schema-v1 inventory and single-plugin operations as a compatibility path; recommend schema v2 for new stable deployments.
+
+## 0.2.0 - 2026-08-18
 
 This is a single-owner V1 release candidate, not the complete Fleet product.
 

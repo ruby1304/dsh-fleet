@@ -3,9 +3,16 @@ import { createHash, randomUUID } from 'node:crypto'
 import { constants } from 'node:fs'
 import { link, lstat, mkdir, open, readFile, rename, rm } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
+import { parse as parseYaml } from 'yaml'
+import { digestInstalledArtifact } from '../host/artifacts.ts'
 import { parseFleetManifest } from '../host/core.ts'
 import type { FleetManifest } from '../shared.ts'
-import { assertMutationReadyConfig, type FleetAgentConfig } from './config.ts'
+import {
+  assertMutationReadyConfig,
+  assertReleaseReadyConfig,
+  type FleetAgentConfig,
+  type ReleaseReadyFleetAgentConfig,
+} from './config.ts'
 import { createAgentPlan } from './planner.ts'
 import {
   FleetProtocolError,
@@ -14,6 +21,16 @@ import {
   type FleetPlan,
   type FleetPlanApproval,
 } from './protocol.ts'
+import { createReleasePlan } from './release-planner.ts'
+import {
+  validateFleetAppliedRelease,
+  validateFleetReleaseApproval,
+  validateFleetReleasePlan,
+  type FleetAppliedRelease,
+  type FleetReleaseApproval,
+  type FleetReleasePlan,
+  type FleetReleasePluginBinding,
+} from './release-protocol.ts'
 
 const SNAPSHOT_FILES = ['package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'cordis.patch.yml'] as const
 const MAX_OUTPUT_BYTES = 1024 * 1024
@@ -68,8 +85,42 @@ export interface AgentInspection {
   candidates: AgentCandidate[]
 }
 
+export interface ReleaseAgentInspection {
+  protocolVersion: 1
+  kind: 'profile-release'
+  deviceId: string
+  profile: string
+  dshVersion: string
+  manifestDigest: string
+  profileHash: string
+  currentRelease: Pick<FleetAppliedRelease, 'releaseId' | 'releaseVersion' | 'releaseDigest'> | null
+  assignedRelease: { releaseId: string; releaseVersion: string; releaseDigest: string }
+  changes: FleetReleasePlan['changes']
+  tasks: { enabled: boolean; workspaceIds: string[]; profiles: string[] }
+}
+
+export interface ReleaseActionRecord {
+  planId: string
+  planDigest: string
+  approvalId: string
+  principalId: string
+  idempotencyKey: string
+  deviceId: string
+  profile: string
+  releaseId: string
+  releaseVersion: string
+  releaseDigest: string
+  stageProfile: string
+  backupProfile: string
+  state: AgentActionState
+  updatedAt: string
+  result?: 'success' | 'rolled-back' | 'manual-intervention'
+  errorCode?: string
+}
+
 interface ProfileManifest {
   dependencies?: Record<string, string>
+  dsh?: { profile?: { bundles?: string[] } }
 }
 
 interface LoadedState {
@@ -662,61 +713,113 @@ async function restoreProfile(config: FleetAgentConfig, plan: FleetPlan): Promis
   }
 }
 
-async function restartDsh(config: FleetAgentConfig, signal?: AbortSignal): Promise<void> {
-  assertMutationReadyConfig(config)
-  throwIfAborted(signal)
-  const env = controlledEnv(config)
-  await runFile(config.restart.screenBinary, ['-S', config.restart.sessionName, '-X', 'quit'], {
-    env,
-    timeoutMs: 10_000,
-    allowFailure: true,
-    signal,
-  })
+async function listenerPids(config: FleetAgentConfig, port: number, signal?: AbortSignal): Promise<number[]> {
+  if (config.restart.kind === 'none') return []
   const listeners = await runFile(config.restart.lsofBinary, [
-    '-nP', '-t', '-iTCP:' + String(config.restart.port), '-sTCP:LISTEN',
-  ], { env, timeoutMs: 10_000, allowFailure: true, signal })
+    '-nP', '-t', '-iTCP:' + String(port), '-sTCP:LISTEN',
+  ], { env: controlledEnv(config), timeoutMs: 10_000, allowFailure: true, signal })
   const pids = listeners.stdout.trim() === '' ? [] : listeners.stdout.trim().split(/\s+/).map(value => Number(value))
   if (pids.some(pid => !Number.isSafeInteger(pid) || pid <= 0) || pids.length > 1) {
     throw new AgentRuntimeError('restart-owner-ambiguous', 'DSH restart found an ambiguous listener owner')
   }
-  const listenerPid = pids[0]
-  if (listenerPid !== undefined) {
-    const owner = await runFile(config.restart.psBinary, ['-p', String(listenerPid), '-o', 'command='], {
+  return pids
+}
+
+async function verifyListenerOwner(config: FleetAgentConfig, pid: number, port: number, signal?: AbortSignal): Promise<void> {
+  if (config.restart.kind === 'none') throw new AgentRuntimeError('unsafe-mutation-config', 'restart owner is not configured')
+  const owner = await runFile(config.restart.psBinary, ['-p', String(pid), '-o', 'command='], {
+    env: controlledEnv(config),
+    timeoutMs: 10_000,
+    signal,
+  })
+  const command = owner.stdout.trim()
+  const hasOwnerMarker = config.restart.ownerMarkers.some(marker => command.includes(marker))
+  const isMainPort = port === config.restart.port
+  const hasWebToken = /(?:^|\s)web(?:\s|$)/.test(command)
+  const hasPort = command.includes('--port ' + String(config.restart.port))
+  if (!hasOwnerMarker || (isMainPort && (!hasWebToken || !hasPort))) {
+    throw new AgentRuntimeError('restart-owner-mismatch', 'configured port is not owned by a recognizable DSH process')
+  }
+}
+
+async function stopDsh(config: FleetAgentConfig, signal?: AbortSignal): Promise<void> {
+  assertMutationReadyConfig(config)
+  throwIfAborted(signal)
+  const env = controlledEnv(config)
+  const ports = config.restart.managedPorts ?? [config.restart.port]
+  const owners = new Map<number, number>()
+  for (const port of ports) {
+    const pid = (await listenerPids(config, port, signal))[0]
+    if (pid !== undefined) {
+      await verifyListenerOwner(config, pid, port, signal)
+      owners.set(port, pid)
+    }
+  }
+  if (config.restart.kind === 'screen') {
+    await runFile(config.restart.screenBinary, ['-S', config.restart.sessionName, '-X', 'quit'], {
       env,
       timeoutMs: 10_000,
+      allowFailure: true,
       signal,
     })
-    const command = owner.stdout.trim()
-    const hasWebToken = /(?:^|\s)web(?:\s|$)/.test(command)
-    const hasPort = command.includes('--port ' + String(config.restart.port))
-    const hasOwnerMarker = config.restart.ownerMarkers.some(marker => command.includes(marker))
-    if (!hasOwnerMarker || !hasWebToken || !hasPort) {
-      throw new AgentRuntimeError('restart-owner-mismatch', 'configured port is not owned by a recognizable DSH Web process')
-    }
-    try {
-      process.kill(listenerPid, 'SIGTERM')
-    } catch (error: unknown) {
-      if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error
-    }
-    const deadline = Date.now() + 5000
-    while (Date.now() < deadline && await processIsAlive(listenerPid)) {
-      throwIfAborted(signal)
-      await new Promise(resolve => setTimeout(resolve, 100))
-    }
-    if (await processIsAlive(listenerPid)) {
-      try {
-        process.kill(listenerPid, 'SIGKILL')
-      } catch (error: unknown) {
+  } else {
+    await runFile(config.restart.launchctlBinary, ['kill', 'SIGTERM', config.restart.serviceTarget], {
+      env,
+      timeoutMs: 10_000,
+      allowFailure: owners.size === 0,
+      signal,
+    })
+  }
+  const deadline = Date.now() + 5000
+  while (Date.now() < deadline) {
+    throwIfAborted(signal)
+    const active = (await Promise.all(ports.map(port => listenerPids(config, port, signal)))).flat()
+    if (active.length === 0) return
+    await new Promise(resolve => setTimeout(resolve, 100))
+  }
+  if (config.restart.kind === 'screen') {
+    for (const pid of new Set(owners.values())) {
+      try { process.kill(pid, 'SIGTERM') } catch (error: unknown) {
         if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error
       }
     }
+    await new Promise(resolve => setTimeout(resolve, 500))
+    for (const pid of new Set(owners.values())) {
+      if (await processIsAlive(pid)) {
+        try { process.kill(pid, 'SIGKILL') } catch (error: unknown) {
+          if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error
+        }
+      }
+    }
+    const active = (await Promise.all(ports.map(port => listenerPids(config, port, signal)))).flat()
+    if (active.length === 0) return
   }
-  const start = await runFile(config.restart.screenBinary, [
-    '-dmS', config.restart.sessionName,
-    '/usr/bin/env', 'DSH_HOME=' + config.dshHome, 'PATH=' + env.PATH,
-    config.dshBinary, 'web', '--host', config.restart.host, '--port', String(config.restart.port),
-  ], { env, timeoutMs: 10_000, allowFailure: true, ignoreOutput: true, signal })
-  if (start.code !== 0) throw new AgentRuntimeError('restart-failed', 'DSH restart failed')
+  throw new AgentRuntimeError('restart-cleanup-failed', 'managed DSH listeners did not exit cleanly')
+}
+
+async function startDsh(config: FleetAgentConfig, signal?: AbortSignal): Promise<void> {
+  assertMutationReadyConfig(config)
+  throwIfAborted(signal)
+  const env = controlledEnv(config)
+  if (config.restart.kind === 'screen') {
+    const start = await runFile(config.restart.screenBinary, [
+      '-dmS', config.restart.sessionName,
+      '/usr/bin/env', 'DSH_HOME=' + config.dshHome, 'PATH=' + env.PATH,
+      config.dshBinary, 'web', '--host', config.restart.host, '--port', String(config.restart.port),
+    ], { env, timeoutMs: 10_000, allowFailure: true, ignoreOutput: true, signal })
+    if (start.code !== 0) throw new AgentRuntimeError('restart-failed', 'DSH restart failed')
+    return
+  }
+  await runFile(config.restart.launchctlBinary, ['kickstart', config.restart.serviceTarget], {
+    env,
+    timeoutMs: 10_000,
+    signal,
+  })
+}
+
+async function restartDsh(config: FleetAgentConfig, signal?: AbortSignal): Promise<void> {
+  await stopDsh(config, signal)
+  await startDsh(config, signal)
 }
 
 async function waitForHttp(url: string, timeoutMs: number, signal?: AbortSignal): Promise<Response> {
@@ -740,7 +843,12 @@ async function waitForHttp(url: string, timeoutMs: number, signal?: AbortSignal)
   throw new AgentRuntimeError('health-timeout', 'DSH health endpoint did not recover before timeout')
 }
 
-async function verifyHealth(config: FleetAgentConfig, plan?: FleetPlan, signal?: AbortSignal): Promise<void> {
+async function verifyHealth(
+  config: FleetAgentConfig,
+  plan?: FleetPlan,
+  signal?: AbortSignal,
+  expectedPluginIds: readonly string[] = [],
+): Promise<void> {
   assertMutationReadyConfig(config)
   await runFile(config.dshBinary, ['--profile', config.profile, '--dump-config'], {
     env: controlledEnv(config),
@@ -758,7 +866,8 @@ async function verifyHealth(config: FleetAgentConfig, plan?: FleetPlan, signal?:
   await waitForHttp(config.health.url, config.health.timeoutMs, signal)
   const endpoint = new URL('/dsh-fleet/status', config.health.url)
   const deadline = Date.now() + config.health.timeoutMs
-  let targetPending = plan !== undefined
+  const targetIds = plan === undefined ? [...expectedPluginIds] : [plan.pluginId]
+  let targetPending = targetIds.length > 0
   let runtimeFailed = false
   while (Date.now() < deadline) {
     throwIfAborted(signal)
@@ -788,8 +897,8 @@ async function verifyHealth(config: FleetAgentConfig, plan?: FleetPlan, signal?:
         runtimeFailed = Array.isArray(failedModules) && failedModules.length > 0
         const fleetHealthy = body.rpcId === rpcId && body.result?.ok === true &&
           body.result.value?.summary?.failed === 0 && Array.isArray(failedModules) && failedModules.length === 0
-        const target = plan === undefined ? undefined : body.result?.value?.plugins?.find(item => item.id === plan.pluginId)
-        targetPending = plan !== undefined && target?.state !== 'aligned'
+        const plugins = body.result?.value?.plugins ?? []
+        targetPending = targetIds.some(id => plugins.find(item => item.id === id)?.state !== 'aligned')
         if (fleetHealthy && !targetPending) return
       }
     } catch {
@@ -1047,6 +1156,571 @@ export async function readOrRecoverAction(config: FleetAgentConfig, planId: stri
     if (plan === null) throw new AgentRuntimeError('plan-not-found', 'approved plan was not found')
     validateFleetPlan(plan)
     return recoverInterrupted(config, plan, record)
+  })
+}
+
+function releasePlanPath(config: FleetAgentConfig, planId: string): string {
+  if (!/^release-plan:[0-9a-f]{64}$/.test(planId)) throw new AgentRuntimeError('invalid-plan-id', 'release plan id is invalid')
+  return join(config.stateDir, 'release-plans', planId.slice('release-plan:'.length) + '.json')
+}
+
+function releaseActionPath(config: FleetAgentConfig, planId: string): string {
+  if (!/^release-plan:[0-9a-f]{64}$/.test(planId)) throw new AgentRuntimeError('invalid-plan-id', 'release plan id is invalid')
+  return join(config.stateDir, 'release-actions', planId.slice('release-plan:'.length) + '.json')
+}
+
+function appliedReleasePath(config: FleetAgentConfig): string {
+  return join(config.stateDir, 'releases', config.profile + '.json')
+}
+
+function releaseProfileNames(plan: FleetReleasePlan): { stageProfile: string; backupProfile: string; failedProfile: string } {
+  const suffix = plan.digest.slice(0, 24)
+  return {
+    stageProfile: 'fleet-stage-' + suffix,
+    backupProfile: 'fleet-backup-' + suffix,
+    failedProfile: 'fleet-failed-' + suffix,
+  }
+}
+
+async function regularDirectoryExists(path: string): Promise<boolean> {
+  try {
+    const info = await lstat(path)
+    if (info.isSymbolicLink() || !info.isDirectory()) throw new AgentRuntimeError('unsafe-profile-directory', 'release swap paths must be regular directories')
+    return true
+  } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
+    throw error
+  }
+}
+
+export async function readAppliedRelease(config: FleetAgentConfig): Promise<FleetAppliedRelease | null> {
+  const value = await readJson<FleetAppliedRelease>(appliedReleasePath(config))
+  if (value === null) return null
+  validateFleetAppliedRelease(value)
+  if (value.deviceId !== config.deviceId || value.profile !== config.profile) {
+    throw new AgentRuntimeError('applied-release-mismatch', 'applied release identity does not match this Agent')
+  }
+  return value
+}
+
+async function currentArtifactDigests(
+  config: ReleaseReadyFleetAgentConfig,
+  state: LoadedState,
+): Promise<Record<string, string>> {
+  const releaseId = state.manifest.v2?.assignments[config.deviceId]?.[config.profile]
+  const release = releaseId === undefined ? undefined : state.manifest.v2?.profileReleases[releaseId]
+  const entries = await Promise.all((release?.plugins ?? []).filter(plugin => plugin.source.kind === 'artifact').map(async plugin => {
+    const actualSpec = state.dependencies[plugin.id]
+    if (actualSpec === undefined) return null
+    const digest = await digestInstalledArtifact(profileDir(config), config.artifactStore, actualSpec)
+    return digest === undefined ? null : [plugin.id, digest] as const
+  }))
+  return Object.fromEntries(entries.filter((entry): entry is readonly [string, string] => entry !== null))
+}
+
+async function buildReleasePlan(
+  config: ReleaseReadyFleetAgentConfig,
+  now: Date,
+  signal?: AbortSignal,
+): Promise<{ plan: FleetReleasePlan; state: LoadedState; appliedRelease: FleetAppliedRelease | null }> {
+  const state = await loadState(config, signal)
+  const appliedRelease = await readAppliedRelease(config)
+  const plan = createReleasePlan({
+    manifest: state.manifest,
+    manifestDigest: state.manifestDigest,
+    dependencies: state.dependencies,
+    artifactDigests: await currentArtifactDigests(config, state),
+    appliedRelease,
+    profileHash: state.profileHash,
+    observedDshVersion: state.dshVersion,
+    now,
+    deviceId: config.deviceId,
+    profile: config.profile,
+    planTtlMs: config.planTtlMs,
+  })
+  return { plan, state, appliedRelease }
+}
+
+export async function inspectReleaseAgent(
+  config: FleetAgentConfig,
+  now = new Date(),
+  signal?: AbortSignal,
+): Promise<ReleaseAgentInspection> {
+  assertReleaseReadyConfig(config)
+  const { plan, appliedRelease } = await buildReleasePlan(config, now, signal)
+  return {
+    protocolVersion: 1,
+    kind: 'profile-release',
+    deviceId: plan.deviceId,
+    profile: plan.profile,
+    dshVersion: plan.observedDshVersion,
+    manifestDigest: plan.manifestDigest,
+    profileHash: plan.profileHash,
+    currentRelease: appliedRelease === null ? null : {
+      releaseId: appliedRelease.releaseId,
+      releaseVersion: appliedRelease.releaseVersion,
+      releaseDigest: appliedRelease.releaseDigest,
+    },
+    assignedRelease: {
+      releaseId: plan.releaseId,
+      releaseVersion: plan.releaseVersion,
+      releaseDigest: plan.releaseDigest,
+    },
+    changes: plan.changes,
+    tasks: {
+      enabled: config.tasks?.enabled === true && config.a2a !== undefined,
+      workspaceIds: Object.keys(config.tasks?.workspaces ?? {}).sort(),
+      profiles: [...(config.tasks?.profiles ?? [])].sort(),
+    },
+  }
+}
+
+export async function verifyReleaseAgentHealth(
+  config: FleetAgentConfig,
+  signal?: AbortSignal,
+): Promise<void> {
+  assertReleaseReadyConfig(config)
+  await verifyHealth(config, undefined, signal)
+}
+
+export async function createStoredReleasePlan(
+  config: FleetAgentConfig,
+  now = new Date(),
+  signal?: AbortSignal,
+): Promise<FleetReleasePlan> {
+  assertReleaseReadyConfig(config)
+  const { plan } = await buildReleasePlan(config, now, signal)
+  await atomicJson(releasePlanPath(config, plan.planId), plan)
+  await audit(config, {
+    type: 'profile-release/plan-created',
+    planId: plan.planId,
+    releaseId: plan.releaseId,
+    releaseVersion: plan.releaseVersion,
+    changes: plan.changes.map(change => ({ pluginId: change.pluginId, action: change.action })),
+  })
+  return plan
+}
+
+async function readReleaseAction(config: FleetAgentConfig, planId: string): Promise<ReleaseActionRecord | null> {
+  return readJson<ReleaseActionRecord>(releaseActionPath(config, planId))
+}
+
+async function saveReleaseAction(
+  config: FleetAgentConfig,
+  record: ReleaseActionRecord,
+  state: AgentActionState,
+  fields: Partial<ReleaseActionRecord> = {},
+): Promise<ReleaseActionRecord> {
+  const next = { ...record, ...fields, state, updatedAt: new Date().toISOString() }
+  await atomicJson(releaseActionPath(config, record.planId), next)
+  return next
+}
+
+async function saveReleaseActionBestEffort(
+  config: FleetAgentConfig,
+  record: ReleaseActionRecord,
+  state: AgentActionState,
+  fields: Partial<ReleaseActionRecord> = {},
+): Promise<{ record: ReleaseActionRecord; failed: boolean }> {
+  const next = { ...record, ...fields, state, updatedAt: new Date().toISOString() }
+  try {
+    await atomicJson(releaseActionPath(config, record.planId), next)
+    return { record: next, failed: false }
+  } catch {
+    return { record: next, failed: true }
+  }
+}
+
+function configForProfile(config: ReleaseReadyFleetAgentConfig, profile: string): ReleaseReadyFleetAgentConfig {
+  return { ...config, profile }
+}
+
+async function resolveReleaseArtifact(
+  config: ReleaseReadyFleetAgentConfig,
+  plugin: FleetReleasePluginBinding,
+  signal?: AbortSignal,
+): Promise<string> {
+  if (plugin.sourceKind !== 'artifact' || plugin.artifactDigest === null || plugin.packageVersion === null) {
+    throw new AgentRuntimeError('artifact-binding-invalid', 'private artifact binding is incomplete')
+  }
+  const path = join(config.artifactStore, plugin.artifactDigest + '.tgz')
+  const actualDigest = await digestInstalledArtifact(profileDir(config), config.artifactStore, 'file:' + path)
+  if (actualDigest !== plugin.artifactDigest) {
+    throw new AgentRuntimeError('artifact-digest-mismatch', 'private artifact is missing or does not match its approved digest')
+  }
+  const extracted = await runFile(config.tarBinary, ['-xOf', path, 'package/package.json'], {
+    env: controlledEnv(config),
+    timeoutMs: 20_000,
+    signal,
+  })
+  let manifest: { name?: unknown; version?: unknown; dsh?: { bundle?: { patch?: unknown } } }
+  try {
+    manifest = JSON.parse(extracted.stdout) as typeof manifest
+  } catch {
+    throw new AgentRuntimeError('artifact-manifest-invalid', 'private artifact package manifest is invalid')
+  }
+  if (manifest.name !== plugin.pluginId || manifest.version !== plugin.packageVersion || typeof manifest.dsh?.bundle?.patch !== 'string') {
+    throw new AgentRuntimeError('artifact-identity-mismatch', 'private artifact package identity, version or DSH bundle metadata does not match the release')
+  }
+  return path
+}
+
+async function releaseInstallArgument(
+  config: ReleaseReadyFleetAgentConfig,
+  plugin: FleetReleasePluginBinding,
+  signal?: AbortSignal,
+): Promise<string> {
+  if (plugin.sourceKind === 'artifact') return resolveReleaseArtifact(config, plugin, signal)
+  return plugin.pluginId + '@' + plugin.exactSpec
+}
+
+function objectValue(value: unknown): Record<string, unknown> | null {
+  return typeof value === 'object' && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : null
+}
+
+function npmLockBindsIntegrity(lockSource: string, plugin: FleetReleasePluginBinding): boolean {
+  if (plugin.sourceKind !== 'npm' || plugin.integrity === null || plugin.packageVersion === null) return false
+  let lock: Record<string, unknown> | null
+  try {
+    lock = objectValue(parseYaml(lockSource) as unknown)
+  } catch {
+    return false
+  }
+  const importers = objectValue(lock?.importers)
+  const rootImporter = objectValue(importers?.['.'])
+  const dependencyGroups = ['dependencies', 'optionalDependencies', 'devDependencies']
+  let dependency: Record<string, unknown> | null = null
+  for (const group of dependencyGroups) {
+    const candidate = objectValue(objectValue(rootImporter?.[group])?.[plugin.pluginId])
+    if (candidate !== null) {
+      dependency = candidate
+      break
+    }
+  }
+  if (dependency?.specifier !== plugin.exactSpec || typeof dependency.version !== 'string') return false
+  const lockedVersion = dependency.version
+  if (lockedVersion !== plugin.packageVersion && !lockedVersion.startsWith(plugin.packageVersion + '(')) return false
+  const packages = objectValue(lock?.packages)
+  if (packages === null) return false
+  const expectedKey = plugin.pluginId + '@' + lockedVersion
+  for (const [rawKey, value] of Object.entries(packages)) {
+    const key = rawKey.startsWith('/') ? rawKey.slice(1) : rawKey
+    if (key !== expectedKey) continue
+    const resolution = objectValue(objectValue(value)?.resolution)
+    return resolution?.integrity === plugin.integrity
+  }
+  return false
+}
+
+async function verifyReleaseProfileFiles(
+  config: ReleaseReadyFleetAgentConfig,
+  plan: FleetReleasePlan,
+  profile: string,
+): Promise<void> {
+  const targetConfig = configForProfile(config, profile)
+  const source = await readRegularOptional(join(profileDir(targetConfig), 'package.json'))
+  if (source === null) throw new AgentRuntimeError('profile-missing', 'staged release profile is missing')
+  const parsed = JSON.parse(source) as ProfileManifest
+  const dependencies = parsed.dependencies ?? {}
+  const bundles = parsed.dsh?.profile?.bundles ?? []
+  const lockSource = await readRegularOptional(join(profileDir(targetConfig), 'pnpm-lock.yaml'))
+  if (lockSource === null) throw new AgentRuntimeError('profile-lock-missing', 'release profile lockfile is missing')
+  for (const plugin of plan.plugins) {
+    const actualSpec = dependencies[plugin.pluginId]
+    if (actualSpec === undefined || !bundles.includes(plugin.pluginId)) {
+      throw new AgentRuntimeError('release-profile-mismatch', 'release plugin is missing from dependencies or DSH bundles')
+    }
+    if (plugin.sourceKind === 'artifact') {
+      const digest = await digestInstalledArtifact(profileDir(targetConfig), config.artifactStore, actualSpec)
+      if (digest !== plugin.artifactDigest) throw new AgentRuntimeError('artifact-digest-mismatch', 'materialized private artifact digest does not match the release')
+    } else if (actualSpec !== plugin.exactSpec) {
+      throw new AgentRuntimeError('release-profile-mismatch', 'materialized public plugin spec does not match the release')
+    }
+    if (plugin.sourceKind === 'npm' && !npmLockBindsIntegrity(lockSource, plugin)) {
+      throw new AgentRuntimeError('npm-integrity-mismatch', 'pnpm lockfile does not contain the approved npm integrity')
+    }
+  }
+  for (const change of plan.changes.filter(change => change.action === 'remove')) {
+    if (dependencies[change.pluginId] !== undefined || bundles.includes(change.pluginId)) {
+      throw new AgentRuntimeError('release-profile-mismatch', 'retired release plugin remains in the staged profile')
+    }
+  }
+  await runFile(config.dshBinary, ['--profile', profile, '--dump-config'], {
+    env: controlledEnv(config),
+    timeoutMs: 20_000,
+  })
+}
+
+async function stageRelease(
+  config: ReleaseReadyFleetAgentConfig,
+  plan: FleetReleasePlan,
+  snapshot: ProfileSnapshot,
+  signal?: AbortSignal,
+): Promise<void> {
+  if (!snapshot.directoryPresent || snapshot.files['package.json'] === null || snapshot.files['pnpm-lock.yaml'] === null) {
+    throw new AgentRuntimeError('profile-not-stageable', 'atomic release requires an existing profile with package.json and pnpm-lock.yaml')
+  }
+  const { stageProfile } = releaseProfileNames(plan)
+  const stageConfig = configForProfile(config, stageProfile)
+  const stageDir = profileDir(stageConfig)
+  await rm(stageDir, { recursive: true, force: true })
+  await ensureDurableDirectory(stageDir)
+  for (const name of SNAPSHOT_FILES) {
+    const source = snapshot.files[name]
+    if (source !== null) await durableWriteFile(join(stageDir, name), source)
+  }
+  if (await computeProfileHash(stageConfig) !== plan.profileHash) {
+    throw new AgentRuntimeError('profile-stage-mismatch', 'staged profile does not match the approved source profile')
+  }
+  await runFile(config.pnpmBinary, ['--version'], { env: controlledEnv(config), timeoutMs: 10_000, signal })
+  const bindings = new Map(plan.plugins.map(plugin => [plugin.pluginId, plugin]))
+  for (const change of plan.changes) {
+    throwIfAborted(signal)
+    if (change.action === 'remove') {
+      await runFile(config.dshBinary, ['plugin', '--profile', stageProfile, 'remove', change.pluginId, '--ignore-scripts'], {
+        env: controlledEnv(config), timeoutMs: 120_000, signal,
+      })
+      continue
+    }
+    const plugin = bindings.get(change.pluginId)
+    if (plugin === undefined) throw new AgentRuntimeError('release-plan-invalid', 'release change has no final plugin binding')
+    const argument = await releaseInstallArgument(config, plugin, signal)
+    await runFile(config.dshBinary, [
+      'plugin', '--profile', stageProfile, 'add', argument, '--save-exact', '--ignore-scripts',
+    ], { env: controlledEnv(config), timeoutMs: 120_000, signal })
+  }
+  await verifyReleaseProfileFiles(config, plan, stageProfile)
+}
+
+async function ensureServiceStarted(config: ReleaseReadyFleetAgentConfig): Promise<void> {
+  const running = (await listenerPids(config, config.restart.port))[0] !== undefined
+  if (!running) await startDsh(config)
+}
+
+async function swapStagedRelease(config: ReleaseReadyFleetAgentConfig, plan: FleetReleasePlan, signal?: AbortSignal): Promise<void> {
+  const names = releaseProfileNames(plan)
+  const profilesRoot = dirname(profileDir(config))
+  const liveDir = profileDir(config)
+  const stageDir = join(profilesRoot, names.stageProfile)
+  const backupDir = join(profilesRoot, names.backupProfile)
+  if (!await regularDirectoryExists(stageDir)) throw new AgentRuntimeError('release-stage-missing', 'staged release directory is missing')
+  await rm(backupDir, { recursive: true, force: true })
+  await stopDsh(config, signal)
+  throwIfAborted(signal)
+  await rename(liveDir, backupDir)
+  await syncDirectory(profilesRoot)
+  try {
+    await rename(stageDir, liveDir)
+    await syncDirectory(profilesRoot)
+  } catch (error: unknown) {
+    await rename(backupDir, liveDir)
+    await syncDirectory(profilesRoot)
+    await startDsh(config)
+    throw error
+  }
+}
+
+async function persistAppliedRelease(config: FleetAgentConfig, plan: FleetReleasePlan): Promise<FleetAppliedRelease> {
+  const applied: FleetAppliedRelease = {
+    schemaVersion: 1,
+    deviceId: plan.deviceId,
+    profile: plan.profile,
+    releaseId: plan.releaseId,
+    releaseVersion: plan.releaseVersion,
+    releaseDigest: plan.releaseDigest,
+    plugins: plan.plugins,
+    appliedAt: new Date().toISOString(),
+  }
+  validateFleetAppliedRelease(applied)
+  await atomicJson(appliedReleasePath(config), applied)
+  return applied
+}
+
+async function rollbackRelease(
+  config: ReleaseReadyFleetAgentConfig,
+  plan: FleetReleasePlan,
+  record: ReleaseActionRecord,
+  errorCode: string,
+): Promise<ReleaseActionRecord> {
+  const names = releaseProfileNames(plan)
+  const profilesRoot = dirname(profileDir(config))
+  const liveDir = profileDir(config)
+  const stageDir = join(profilesRoot, names.stageProfile)
+  const backupDir = join(profilesRoot, names.backupProfile)
+  const failedDir = join(profilesRoot, names.failedProfile)
+  let current = (await saveReleaseActionBestEffort(config, record, 'rollback', { errorCode })).record
+  try {
+    if (await regularDirectoryExists(backupDir)) {
+      try { await stopDsh(config) } catch {
+        const active = (await listenerPids(config, config.restart.port))[0]
+        if (active !== undefined) throw new AgentRuntimeError('restart-cleanup-failed', 'cannot stop the failed release for rollback')
+      }
+      await rm(failedDir, { recursive: true, force: true })
+      if (await regularDirectoryExists(liveDir)) await rename(liveDir, failedDir)
+      await rename(backupDir, liveDir)
+      await syncDirectory(profilesRoot)
+    }
+    await rm(stageDir, { recursive: true, force: true })
+    current = await saveReleaseAction(config, current, 'rollback-restarting')
+    await ensureServiceStarted(config)
+    current = await saveReleaseAction(config, current, 'rollback-verifying')
+    await verifyHealth(config)
+    await rm(failedDir, { recursive: true, force: true })
+    await auditBestEffort(config, { type: 'profile-release/rolled-back', planId: plan.planId, releaseId: plan.releaseId, result: errorCode })
+    return saveReleaseAction(config, current, 'rolled-back', { result: 'rolled-back', errorCode })
+  } catch {
+    await auditBestEffort(config, { type: 'profile-release/manual-intervention', planId: plan.planId, releaseId: plan.releaseId, result: errorCode })
+    return (await saveReleaseActionBestEffort(config, current, 'manual-intervention', {
+      result: 'manual-intervention',
+      errorCode: 'rollback-failed',
+    })).record
+  }
+}
+
+async function recoverReleaseInterrupted(
+  config: ReleaseReadyFleetAgentConfig,
+  plan: FleetReleasePlan,
+  record: ReleaseActionRecord,
+): Promise<ReleaseActionRecord> {
+  const applied = await readAppliedRelease(config)
+  if (applied?.releaseDigest === plan.releaseDigest) {
+    try {
+      await verifyReleaseProfileFiles(config, plan, config.profile)
+      await ensureServiceStarted(config)
+      await verifyHealth(config, undefined, undefined, plan.plugins.map(plugin => plugin.pluginId))
+      const names = releaseProfileNames(plan)
+      const profilesRoot = dirname(profileDir(config))
+      await Promise.all([
+        rm(join(profilesRoot, names.stageProfile), { recursive: true, force: true }),
+        rm(join(profilesRoot, names.backupProfile), { recursive: true, force: true }),
+        rm(join(profilesRoot, names.failedProfile), { recursive: true, force: true }),
+      ])
+      return saveReleaseAction(config, record, 'succeeded', { result: 'success' })
+    } catch {
+      // A persisted release without a healthy matching profile must be recovered through rollback below.
+    }
+  }
+  return rollbackRelease(config, plan, record, 'interrupted-action')
+}
+
+async function applyStoredReleasePlanLocked(
+  config: ReleaseReadyFleetAgentConfig,
+  approval: FleetReleaseApproval,
+  now: Date,
+  signal?: AbortSignal,
+): Promise<ReleaseActionRecord> {
+  const plan = await readJson<FleetReleasePlan>(releasePlanPath(config, approval.planId))
+  if (plan === null) throw new AgentRuntimeError('plan-not-found', 'approved release plan was not found')
+  validateFleetReleasePlan(plan)
+  const existing = await readReleaseAction(config, plan.planId)
+  let validation: ReturnType<typeof validateFleetReleaseApproval>
+  try {
+    validation = validateFleetReleaseApproval(plan, approval, now)
+  } catch (error: unknown) {
+    if (existing !== null && !['succeeded', 'rolled-back', 'manual-intervention'].includes(existing.state)) {
+      return recoverReleaseInterrupted(config, plan, existing)
+    }
+    throw error
+  }
+  if (existing !== null) {
+    if (existing.idempotencyKey !== validation.idempotencyKey) {
+      if (!['succeeded', 'rolled-back', 'manual-intervention'].includes(existing.state)) {
+        return recoverReleaseInterrupted(config, plan, existing)
+      }
+      throw new AgentRuntimeError('idempotency-conflict', 'release plan already has a different approval')
+    }
+    if (['succeeded', 'rolled-back', 'manual-intervention'].includes(existing.state)) return existing
+    return recoverReleaseInterrupted(config, plan, existing)
+  }
+  const current = await loadState(config, signal)
+  if (current.manifestDigest !== plan.manifestDigest || current.profileHash !== plan.profileHash || current.dshVersion !== plan.observedDshVersion) {
+    throw new FleetProtocolError('approval-mismatch', 'manifest, profile or DSH version changed after the release plan was created')
+  }
+  await verifyHealth(config, undefined, signal)
+  const names = releaseProfileNames(plan)
+  let record: ReleaseActionRecord = {
+    planId: plan.planId,
+    planDigest: plan.digest,
+    approvalId: approval.approvalId,
+    principalId: approval.principalId,
+    idempotencyKey: validation.idempotencyKey,
+    deviceId: plan.deviceId,
+    profile: plan.profile,
+    releaseId: plan.releaseId,
+    releaseVersion: plan.releaseVersion,
+    releaseDigest: plan.releaseDigest,
+    stageProfile: names.stageProfile,
+    backupProfile: names.backupProfile,
+    state: 'approved',
+    updatedAt: new Date().toISOString(),
+  }
+  record = await saveReleaseAction(config, record, 'approved')
+  await audit(config, {
+    type: 'profile-release/approved', planId: plan.planId, releaseId: plan.releaseId,
+    approvalId: approval.approvalId, principalId: approval.principalId,
+  })
+  let releaseCommitted = false
+  try {
+    if (plan.changes.length === 0) {
+      await verifyReleaseProfileFiles(config, plan, config.profile)
+      await verifyHealth(config, undefined, signal, plan.plugins.map(plugin => plugin.pluginId))
+      await persistAppliedRelease(config, plan)
+      releaseCommitted = true
+      record = await saveReleaseAction(config, record, 'succeeded', { result: 'success' })
+      await auditBestEffort(config, { type: 'profile-release/applied', planId: plan.planId, releaseId: plan.releaseId, result: 'adopted' })
+      return record
+    }
+    record = await saveReleaseAction(config, record, 'staging')
+    await stageRelease(config, plan, current.profileSnapshot, signal)
+    throwIfAborted(signal)
+    if (await computeProfileHash(config) !== plan.profileHash) {
+      throw new FleetProtocolError('approval-mismatch', 'live profile changed while the release was staged')
+    }
+    record = await saveReleaseAction(config, record, 'staged')
+    record = await saveReleaseAction(config, record, 'applying')
+    await swapStagedRelease(config, plan, signal)
+    throwIfAborted(signal)
+    record = await saveReleaseAction(config, record, 'restarting')
+    await startDsh(config, signal)
+    throwIfAborted(signal)
+    record = await saveReleaseAction(config, record, 'verifying')
+    await verifyReleaseProfileFiles(config, plan, config.profile)
+    await verifyHealth(config, undefined, signal, plan.plugins.map(plugin => plugin.pluginId))
+    throwIfAborted(signal)
+    await persistAppliedRelease(config, plan)
+    releaseCommitted = true
+    record = await saveReleaseAction(config, record, 'succeeded', { result: 'success' })
+    await auditBestEffort(config, { type: 'profile-release/applied', planId: plan.planId, releaseId: plan.releaseId, result: 'success' })
+    const profilesRoot = dirname(profileDir(config))
+    await rm(join(profilesRoot, names.backupProfile), { recursive: true, force: true }).catch(() => undefined)
+    return record
+  } catch (error: unknown) {
+    if (releaseCommitted) return recoverReleaseInterrupted(config, plan, record)
+    const errorCode = typeof (error as { code?: unknown }).code === 'string' ? (error as { code: string }).code : 'release-apply-failed'
+    await auditBestEffort(config, { type: 'profile-release/failed', planId: plan.planId, releaseId: plan.releaseId, result: errorCode })
+    return rollbackRelease(config, plan, record, errorCode)
+  }
+}
+
+export async function applyStoredReleasePlan(
+  config: FleetAgentConfig,
+  approval: FleetReleaseApproval,
+  now = new Date(),
+  signal?: AbortSignal,
+): Promise<ReleaseActionRecord> {
+  assertReleaseReadyConfig(config)
+  return withProfileLock(config, () => applyStoredReleasePlanLocked(config, approval, now, signal))
+}
+
+export async function readOrRecoverReleaseAction(config: FleetAgentConfig, planId: string): Promise<ReleaseActionRecord | null> {
+  assertReleaseReadyConfig(config)
+  return withProfileLock(config, async () => {
+    const record = await readReleaseAction(config, planId)
+    if (record === null || ['succeeded', 'rolled-back', 'manual-intervention'].includes(record.state)) return record
+    const plan = await readJson<FleetReleasePlan>(releasePlanPath(config, planId))
+    if (plan === null) throw new AgentRuntimeError('plan-not-found', 'approved release plan was not found')
+    validateFleetReleasePlan(plan)
+    return recoverReleaseInterrupted(config, plan, record)
   })
 }
 

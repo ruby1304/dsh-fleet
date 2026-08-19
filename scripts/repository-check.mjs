@@ -95,6 +95,8 @@ for (const dependency of Object.keys(pkg.dependencies ?? {})) {
 
 const agentMode = (await stat(join(root, 'agent.mjs'))).mode
 if ((agentMode & 0o111) === 0) fail('agent.mjs must remain executable')
+const bootstrapMode = (await stat(join(root, 'bootstrap.mjs'))).mode
+if ((bootstrapMode & 0o111) === 0) fail('bootstrap.mjs must remain executable')
 
 for (const workflow of ['.github/workflows/ci.yml', '.github/workflows/codeql.yml', '.github/workflows/publish.yml']) {
   const source = await readFile(join(root, workflow), 'utf8')
@@ -123,7 +125,8 @@ try {
     if (!targetsStable) continue
     const immutableNpm = plugin.source === 'npm' && /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(plugin.revision ?? '')
     const immutableGitHub = plugin.source?.startsWith('github:') === true && /^[0-9a-f]{40}$/.test(plugin.revision ?? '')
-    if (!immutableNpm && !immutableGitHub) fail(`stable example plugin is mutable: ${plugin.id}`)
+    const immutableArtifact = plugin.source === 'artifact' && /^[0-9a-f]{64}$/.test(plugin.artifactDigest ?? '')
+    if (!immutableNpm && !immutableGitHub && !immutableArtifact) fail(`stable example plugin is mutable: ${plugin.id}`)
   }
 } catch (error) {
   fail(`examples do not satisfy the public schemas: ${error instanceof Error ? error.message : String(error)}`)

@@ -98,12 +98,37 @@ function targetReport(candidates: Array<Record<string, unknown>>) {
   }
 }
 
+function releaseTargetReport() {
+  return {
+    enabled: true,
+    targets: [{
+      deviceId: 'worker',
+      transport: 'ssh',
+      online: true,
+      mode: 'profile-release',
+      inspection: {
+        protocolVersion: 1,
+        kind: 'profile-release',
+        deviceId: 'worker',
+        profile: 'web',
+        dshVersion: '0.1.0-rc.7',
+        manifestDigest: 'b'.repeat(64),
+        profileHash: 'c'.repeat(64),
+        currentRelease: null,
+        assignedRelease: { releaseId: 'stable-web', releaseVersion: '3.0.0', releaseDigest: 'd'.repeat(64) },
+        changes: [],
+        tasks: { enabled: true, workspaceIds: ['fleet-repo'], profiles: ['headless'] },
+      },
+    }],
+  }
+}
+
 describe('dsh-fleet client slots', () => {
-  it('uses the sidebar footer action instead of a fixed shell overlay', () => {
+  it('registers Fleet as a first-class Settings section and leaves the sidebar footer untouched', () => {
     let setup: (() => unknown) | undefined
     const register = vi.fn((_descriptor: Record<string, unknown>, _component: unknown) => () => {})
     const inject = vi.fn((name: string, callback: () => unknown) => {
-      expect(name).toBe('sidebar.footer.action')
+      expect(name).toBe('settings.section')
       setup = callback
       return () => {}
     })
@@ -119,36 +144,44 @@ describe('dsh-fleet client slots', () => {
     setup?.()
     expect(register).toHaveBeenCalledOnce()
     expect(register.mock.calls[0]?.[0]).toMatchObject({
-      name: 'sidebar.footer.action',
+      name: 'settings.section',
       id: 'dsh-fleet',
-      order: 110,
+      order: 65,
+      label: 'Fleet',
     })
   })
 
-  it('renders as an in-flow wide row or compact rail action', async () => {
+  it('renders as an in-flow Settings page without fixed-position collision geometry', async () => {
     vi.stubGlobal('window', { setInterval: vi.fn(() => 1), clearInterval: vi.fn() })
     vi.stubGlobal('document', { hidden: false })
     const ctx = { connection: { rpc: { call: vi.fn().mockResolvedValue({ ok: true, value: status }) } }, slots: {} } as never
     let component: TestRenderer.ReactTestRenderer | undefined
     try {
       await act(async () => {
-        component = TestRenderer.create(<FleetCard ctx={ctx} wide />)
+        component = TestRenderer.create(<FleetCard ctx={ctx} />)
         await Promise.resolve()
       })
-      const wideRoot = component!.root.findByProps({ 'data-dsh-fleet-action': true })
-      expect(wideRoot.props.style).toMatchObject({ position: 'relative', width: '100%', height: 42 })
-      expect(wideRoot.props.style.position).not.toBe('fixed')
-
-      await act(async () => { component!.update(<FleetCard ctx={ctx} wide={false} />) })
-      const railRoot = component!.root.findByProps({ 'data-dsh-fleet-action': true })
-      expect(railRoot.props.style).toMatchObject({ width: 36, height: 36 })
+      const root = component!.root.findByProps({ 'data-dsh-fleet-settings': true })
+      expect(root.props.style).toMatchObject({
+        width: '100%', height: '100%', maxWidth: 960, minHeight: 0,
+        display: 'flex', boxSizing: 'border-box', overflow: 'hidden',
+      })
+      expect(root.props.style.position).not.toBe('fixed')
+      expect(root.props.style.background).toBeTruthy()
+      expect(component!.root.findByProps({ 'data-dsh-fleet-panel': true }).props.style).toMatchObject({
+        height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden',
+      })
+      expect(component!.root.findByProps({ 'data-dsh-fleet-scroll': true }).props.style).toMatchObject({
+        flex: 1, minHeight: 0, overflowY: 'auto', overscrollBehavior: 'contain',
+      })
+      expect(component!.root.findAllByProps({ 'data-dsh-fleet-action': true })).toHaveLength(0)
     } finally {
       await act(async () => { component?.unmount() })
       vi.unstubAllGlobals()
     }
   })
 
-  it('loads status initially, expands the card, shows device and summary fields, and refreshes', async () => {
+  it('loads status in the Settings page, shows device and summary fields, and refreshes', async () => {
     const interval = vi.fn(() => 1)
     const clearInterval = vi.fn()
     vi.stubGlobal('window', { setInterval: interval, clearInterval })
@@ -167,11 +200,6 @@ describe('dsh-fleet client slots', () => {
       expect(call).toHaveBeenCalledWith('/dsh-fleet', 'status', null)
       expect(interval).toHaveBeenCalledOnce()
 
-      const closedButton = component!.root.findAllByType('button').find(button =>
-        button.findAllByType('strong').some(strong => strong.children.includes('Fleet')),
-      )
-      expect(closedButton).toBeDefined()
-      await act(async () => { closedButton!.props.onClick() })
       expect(component!.root.findAllByType('strong').some(strong => strong.children.includes('DSH Fleet'))).toBe(true)
       const text = renderedText(component!.toJSON())
       expect(text).toContain('device-01')
@@ -210,8 +238,6 @@ describe('dsh-fleet client slots', () => {
       })
       expect(call.mock.calls.filter(([, endpoint]) => endpoint === 'updates')).toHaveLength(0)
 
-      const toggle = component!.root.findAllByType('button').find(button => button.props['aria-expanded'] === false)
-      await act(async () => { toggle!.props.onClick() })
       const updateTab = component!.root.findAllByType('button').find(button => button.props.role === 'tab' && renderedText(button.props.children).startsWith('更新'))
       await act(async () => {
         updateTab!.props.onClick()
@@ -254,12 +280,8 @@ describe('dsh-fleet client slots', () => {
         component = TestRenderer.create(<FleetCard ctx={ctx} />)
         await Promise.resolve()
       })
-      expect(renderedText(component!.toJSON())).toContain('状态获取失败')
-      expect(renderedText(component!.toJSON())).not.toContain('载入中…')
-
-      const toggle = component!.root.findAllByType('button').find(button => button.props['aria-expanded'] === false)
-      await act(async () => { toggle!.props.onClick() })
       expect(renderedText(component!.toJSON())).toContain('initial status unavailable')
+      expect(renderedText(component!.toJSON())).not.toContain('载入中…')
     } finally {
       await act(async () => { component?.unmount() })
       vi.unstubAllGlobals()
@@ -279,8 +301,6 @@ describe('dsh-fleet client slots', () => {
         component = TestRenderer.create(<FleetCard ctx={ctx} />)
         await Promise.resolve()
       })
-      const toggle = component!.root.findAllByType('button').find(button => button.props['aria-expanded'] === false)
-      await act(async () => { toggle!.props.onClick() })
       const updateTab = component!.root.findAllByType('button').find(button => button.props.role === 'tab' && renderedText(button.props.children).startsWith('更新'))
       await act(async () => {
         updateTab!.props.onClick()
@@ -345,11 +365,8 @@ describe('dsh-fleet client slots', () => {
         component = TestRenderer.create(<FleetCard ctx={ctx} />)
         await Promise.resolve()
       })
-      const toggle = component!.root.findAllByType('button').find(button => button.props['aria-expanded'] === false)
-      await act(async () => { toggle!.props.onClick() })
-
       const operationsTab = component!.root.findAllByType('button').find(button =>
-        button.props.role === 'tab' && renderedText(button.props.children) === '操作',
+        button.props.role === 'tab' && renderedText(button.props.children) === '发布',
       )
       await act(async () => {
         operationsTab!.props.onClick()
@@ -403,6 +420,78 @@ describe('dsh-fleet client slots', () => {
       expect(recoveredText).toContain('该设备已经一致')
       expect(recoveredText).not.toContain('待批准计划')
       expect(recoveredText).not.toContain('connection lost after approval')
+    } finally {
+      await act(async () => { component?.unmount() })
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('submits only fixed workspace/profile task ids and renders recoverable A2A task status', async () => {
+    vi.stubGlobal('window', { setInterval: vi.fn(() => 1), clearInterval: vi.fn() })
+    vi.stubGlobal('document', { hidden: false })
+    const taskId = 'task:11111111-1111-4111-8111-111111111111'
+    const call = vi.fn(async (channel: string, endpoint: string, payload: unknown) => {
+      if (channel === '/dsh-fleet' && endpoint === 'status') return { ok: true, value: status }
+      if (channel === '/dsh-fleet-agent' && endpoint === 'targets') return { ok: true, value: releaseTargetReport() }
+      if (channel === '/dsh-fleet-agent' && endpoint === 'task-submit') {
+        expect(payload).toEqual({
+          targetDeviceId: 'worker', workspaceId: 'fleet-repo', profile: 'headless', prompt: 'run remote checks',
+        })
+        return {
+          ok: true,
+          value: { taskId, response: { kind: 'task.progress', payload: { taskId, state: 'accepted', updatedAt: '2026-01-01T00:00:00.000Z' } } },
+        }
+      }
+      if (channel === '/dsh-fleet-agent' && endpoint === 'task-status') {
+        expect(payload).toEqual({ targetDeviceId: 'worker', taskId })
+        return {
+          ok: true,
+          value: {
+            taskId,
+            response: {
+              kind: 'task.result',
+              payload: {
+                taskId, state: 'succeeded', updatedAt: '2026-01-01T00:01:00.000Z',
+                result: 'all checks passed', truncated: false, errorCode: null,
+              },
+            },
+          },
+        }
+      }
+      return { ok: false, error: { message: `unexpected RPC ${channel} ${endpoint}` } }
+    })
+    const ctx = { connection: { rpc: { call } }, slots: {} } as never
+    let component: TestRenderer.ReactTestRenderer | undefined
+    try {
+      await act(async () => {
+        component = TestRenderer.create(<FleetCard ctx={ctx} />)
+        await Promise.resolve()
+      })
+      const tasksTab = component!.root.findAllByType('button').find(button =>
+        button.props.role === 'tab' && renderedText(button.props.children) === '任务',
+      )
+      await act(async () => {
+        tasksTab!.props.onClick()
+        for (let index = 0; index < 5; index += 1) await Promise.resolve()
+      })
+      expect(renderedText(component!.toJSON())).toContain('fleet-repo')
+      const textarea = component!.root.findByType('textarea')
+      await act(async () => { textarea.props.onChange({ currentTarget: { value: 'run remote checks' } }) })
+      const submit = component!.root.findAllByType('button').find(button => button.props.children === '签名并提交任务')
+      expect(submit?.props.disabled).toBe(false)
+      await act(async () => {
+        submit!.props.onClick()
+        for (let index = 0; index < 5; index += 1) await Promise.resolve()
+      })
+      expect(renderedText(component!.toJSON())).toContain('accepted')
+      const refresh = component!.root.findAllByType('button').find(button => button.props.children === '刷新状态')
+      await act(async () => {
+        refresh!.props.onClick()
+        for (let index = 0; index < 5; index += 1) await Promise.resolve()
+      })
+      const text = renderedText(component!.toJSON())
+      expect(text).toContain('succeeded')
+      expect(text).toContain('all checks passed')
     } finally {
       await act(async () => { component?.unmount() })
       vi.unstubAllGlobals()

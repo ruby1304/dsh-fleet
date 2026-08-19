@@ -16,6 +16,11 @@ export default defineConfig([
     deps: { alwaysBundle: ['semver', 'yaml'], onlyBundle: ['semver', 'yaml'] },
   },
   {
+    name: 'dsh-fleet/bootstrap', entry: { bootstrap: 'src/bootstrap/cli.ts' }, outDir: 'dist-bootstrap',
+    format: 'esm', platform: 'node', target: 'es2023', fixedExtension: false, dts: false, clean: false,
+    deps: { alwaysBundle: ['semver', 'yaml'], onlyBundle: ['semver', 'yaml'] },
+  },
+  {
     name: 'dsh-fleet/client', entry: { client: 'src/client/index.tsx' }, outDir: 'dist-client',
     format: 'cjs', platform: 'browser', target: 'es2022', fixedExtension: false, dts: false, sourcemap: true, clean: false,
     deps: { neverBundle: clientExternals, alwaysBundle: (id: string) => !clientExternals.includes(id) },

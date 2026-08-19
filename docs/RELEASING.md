@@ -46,10 +46,15 @@ Verify:
 - inventory, drift, unmanaged bundles, and update checks work without credentials;
 - the Fleet UI has no Loader, RPC, console, or request errors;
 - a fixed local or SSH Agent target returns `inspect` without mutation;
-- plan review and explicit approval show the exact immutable source;
-- a known-good mutation restarts DSH and reaches aligned/zero-failed health;
-- a forced health failure rolls back the profile and dependency tree;
-- cancellation and transport loss recover through `action-status` without a second concurrent mutation;
+- schema-v2 `release-inspect` shows the complete public/private release without leaking artifact contents;
+- plan review and explicit approval show every exact immutable source in the atomic release;
+- a known-good atomic release swaps the profile, restarts DSH, and reaches aligned/zero-failed health;
+- a forced post-swap health failure restores the exact previous profile directory;
+- A2A rejects wrong team/recipient/capability, tampering, expiry and replay conflicts;
+- one harmless fixed-policy task survives Web reconnect, returns a signed result and can be cancelled;
+- accepted-task and stale-lock recovery work without blindly replaying a lost running task;
+- cancellation and transport loss recover through release/task status without a second concurrent mutation;
+- bootstrap identity and render refuse unsafe key permissions and existing outputs;
 - existing DSH sessions and attachments remain intact;
 - stopping DSH leaves no Agent-owned or restart-owned orphan that the deployment claims to manage.
 

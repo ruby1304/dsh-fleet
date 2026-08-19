@@ -1,9 +1,9 @@
 import { execFileSync, spawn } from "node:child_process";
-import { createHash } from "node:crypto";
-import { existsSync } from "node:fs";
-import { readFile, stat } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { constants, existsSync } from "node:fs";
+import { lstat, open, readFile, realpath, stat } from "node:fs/promises";
 import { arch, homedir, hostname, platform } from "node:os";
-import { basename, isAbsolute, join, normalize, resolve } from "node:path";
+import { basename, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
 import { gt, valid, validRange } from "semver";
 import { parse } from "yaml";
 //#endregion
@@ -33,7 +33,7 @@ var AgentClientError = class extends Error {
 	}
 };
 function isMutationCommand(command) {
-	return command === "apply" || command === "status";
+	return command === "apply" || command === "status" || command === "release-apply" || command === "release-status" || command === "a2a-receive" || command === "tasks-resume";
 }
 function agentTerminationGraceMs(command) {
 	return isMutationCommand(command) ? MUTATION_TERMINATION_GRACE_MS : NON_MUTATION_TERMINATION_GRACE_MS;
@@ -279,6 +279,57 @@ function createAgentClient(config) {
 	};
 }
 //#endregion
+//#region src/host/artifacts.ts
+function contained(root, candidate) {
+	const path = relative(root, candidate);
+	return path === "" || !path.startsWith(".." + sep) && path !== ".." && !isAbsolute(path);
+}
+function dependencyArtifactPath(profileDir, spec) {
+	if (!spec.startsWith("file:")) return null;
+	const encoded = spec.slice(5);
+	if (encoded.length === 0 || encoded.startsWith("//") || /[?#\0]/.test(encoded)) return null;
+	let decoded;
+	try {
+		decoded = decodeURIComponent(encoded);
+	} catch {
+		return null;
+	}
+	if (decoded.length === 0 || decoded.includes("\0")) return null;
+	const candidate = isAbsolute(decoded) ? resolve(decoded) : resolve(profileDir, decoded);
+	return candidate.endsWith(".tgz") ? candidate : null;
+}
+async function digestInstalledArtifact(profileDir, artifactStore, spec) {
+	const candidate = dependencyArtifactPath(profileDir, spec);
+	if (candidate === null) return void 0;
+	try {
+		const [storePath, candidatePath, originalInfo] = await Promise.all([
+			realpath(artifactStore),
+			realpath(candidate),
+			lstat(candidate)
+		]);
+		if (originalInfo.isSymbolicLink() || !originalInfo.isFile() || !contained(storePath, candidatePath)) return void 0;
+		const handle = await open(candidatePath, constants.O_RDONLY | constants.O_NOFOLLOW);
+		try {
+			const openedInfo = await handle.stat();
+			if (!openedInfo.isFile() || openedInfo.dev !== originalInfo.dev || openedInfo.ino !== originalInfo.ino) return void 0;
+			const hash = createHash("sha256");
+			const buffer = Buffer.allocUnsafe(65536);
+			let position = 0;
+			for (;;) {
+				const { bytesRead } = await handle.read(buffer, 0, buffer.length, position);
+				if (bytesRead === 0) break;
+				hash.update(buffer.subarray(0, bytesRead));
+				position += bytesRead;
+			}
+			return hash.digest("hex");
+		} finally {
+			await handle.close();
+		}
+	} catch {
+		return;
+	}
+}
+//#endregion
 //#region src/host/core.ts
 function isRecord(value) {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -291,6 +342,30 @@ function strings(value, field) {
 function nonEmpty(value, field) {
 	if (typeof value !== "string" || value.trim().length === 0) throw new TypeError(field + " must be a non-empty string");
 	return value.trim();
+}
+function exactKeys(value, allowed, field) {
+	const extras = Object.keys(value).filter((key) => !allowed.includes(key));
+	if (extras.length > 0) throw new TypeError(field + " contains unsupported fields: " + extras.sort().join(", "));
+}
+function safeIdentifier(value, field) {
+	const id = nonEmpty(value, field);
+	if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(id)) throw new TypeError(field + " must be 1 to 64 ASCII letters, digits, dots, underscores or hyphens");
+	return id;
+}
+function safePackageName(value, field) {
+	const id = nonEmpty(value, field);
+	if (id.length > 214 || id !== id.toLowerCase() || !/^(?:@[a-z0-9][a-z0-9._~-]*\/)?[a-z0-9][a-z0-9._~-]*$/.test(id)) throw new TypeError(field + " must be one literal lowercase npm package name");
+	return id;
+}
+function exactSemver(value, field) {
+	const version = nonEmpty(value, field);
+	if (valid(version) !== version) throw new TypeError(field + " must be an exact semantic version");
+	return version;
+}
+function sha256Digest(value, field) {
+	const digest = nonEmpty(value, field);
+	if (!/^[0-9a-f]{64}$/.test(digest)) throw new TypeError(field + " must be a lowercase SHA-256 digest");
+	return digest;
 }
 function parseDevice(value, field) {
 	if (!isRecord(value)) throw new TypeError(field + " must be an object");
@@ -351,19 +426,200 @@ function parsePlugin(value, index) {
 		...target === void 0 ? {} : { target }
 	};
 }
+function parseReleaseSource(value, field, visibility) {
+	if (!isRecord(value)) throw new TypeError(field + " must be an object");
+	const kind = nonEmpty(value.kind, field + ".kind");
+	if (kind === "npm") {
+		exactKeys(value, [
+			"kind",
+			"version",
+			"integrity"
+		], field);
+		if (visibility !== "public") throw new TypeError(field + " private plugins must use content-addressed artifact sources");
+		const integrity = value.integrity === void 0 ? void 0 : nonEmpty(value.integrity, field + ".integrity");
+		if (integrity !== void 0 && !/^sha512-[A-Za-z0-9+/]+={0,2}$/.test(integrity)) throw new TypeError(field + ".integrity must be one SHA-512 Subresource Integrity value");
+		return {
+			kind: "npm",
+			version: exactSemver(value.version, field + ".version"),
+			...integrity === void 0 ? {} : { integrity }
+		};
+	}
+	if (kind === "github") {
+		exactKeys(value, [
+			"kind",
+			"repository",
+			"revision"
+		], field);
+		if (visibility !== "public") throw new TypeError(field + " private plugins must use content-addressed artifact sources");
+		const repository = nonEmpty(value.repository, field + ".repository");
+		if (!/^[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?\/[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/.test(repository)) throw new TypeError(field + ".repository must be owner/repository without a URL or revision");
+		const revision = nonEmpty(value.revision, field + ".revision");
+		if (!/^[0-9a-f]{40}$/.test(revision)) throw new TypeError(field + ".revision must be a lowercase 40-character commit SHA");
+		return {
+			kind: "github",
+			repository,
+			revision
+		};
+	}
+	if (kind === "artifact") {
+		exactKeys(value, [
+			"kind",
+			"digest",
+			"version"
+		], field);
+		if (visibility !== "private") throw new TypeError(field + " artifact sources must be declared private");
+		return {
+			kind: "artifact",
+			digest: sha256Digest(value.digest, field + ".digest"),
+			version: exactSemver(value.version, field + ".version")
+		};
+	}
+	throw new TypeError(field + ".kind must be npm, github or artifact");
+}
+function parseReleasePlugin(value, field) {
+	if (!isRecord(value)) throw new TypeError(field + " must be an object");
+	exactKeys(value, [
+		"id",
+		"visibility",
+		"source",
+		"runtimeModules"
+	], field);
+	if (value.visibility !== "public" && value.visibility !== "private") throw new TypeError(field + ".visibility must be public or private");
+	const runtimeModules = strings(value.runtimeModules, field + ".runtimeModules");
+	return {
+		id: safePackageName(value.id, field + ".id"),
+		visibility: value.visibility,
+		source: parseReleaseSource(value.source, field + ".source", value.visibility),
+		...runtimeModules === void 0 ? {} : { runtimeModules }
+	};
+}
+function parseProfileRelease(id, value, field) {
+	if (!isRecord(value)) throw new TypeError(field + " must be an object");
+	exactKeys(value, [
+		"id",
+		"version",
+		"profile",
+		"dshRange",
+		"plugins"
+	], field);
+	if (value.id !== void 0 && safeIdentifier(value.id, field + ".id") !== id) throw new TypeError(field + ".id must match its profileReleases key");
+	const dshRange = nonEmpty(value.dshRange, field + ".dshRange");
+	if (validRange(dshRange) === null) throw new TypeError(field + ".dshRange must be a valid semantic-version range");
+	if (!Array.isArray(value.plugins) || value.plugins.length === 0) throw new TypeError(field + ".plugins must be a non-empty array");
+	const plugins = value.plugins.map((plugin, index) => parseReleasePlugin(plugin, `${field}.plugins[${index}]`));
+	const seen = /* @__PURE__ */ new Set();
+	for (const plugin of plugins) {
+		if (seen.has(plugin.id)) throw new TypeError(field + " contains duplicate plugin id " + JSON.stringify(plugin.id));
+		seen.add(plugin.id);
+	}
+	return {
+		id,
+		version: exactSemver(value.version, field + ".version"),
+		profile: safeIdentifier(value.profile, field + ".profile"),
+		dshRange,
+		plugins
+	};
+}
+function releasePluginSpec(plugin) {
+	if (plugin.source.kind === "npm") return {
+		spec: plugin.source.version,
+		source: "npm",
+		revision: plugin.source.version
+	};
+	if (plugin.source.kind === "github") {
+		const source = "github:" + plugin.source.repository;
+		return {
+			spec: source + "#" + plugin.source.revision,
+			source,
+			revision: plugin.source.revision
+		};
+	}
+	return {
+		spec: "artifact:sha256:" + plugin.source.digest,
+		source: "artifact",
+		revision: plugin.source.version,
+		artifactDigest: plugin.source.digest
+	};
+}
+function parseManifestV2(raw, team, devices) {
+	exactKeys(raw, [
+		"schemaVersion",
+		"team",
+		"devices",
+		"profileReleases",
+		"assignments"
+	], "fleet manifest");
+	if (!isRecord(raw.profileReleases)) throw new TypeError("profileReleases must be an object");
+	const profileReleases = {};
+	for (const [rawId, value] of Object.entries(raw.profileReleases)) {
+		const id = safeIdentifier(rawId, "profile release id");
+		profileReleases[id] = parseProfileRelease(id, value, "profileReleases." + id);
+	}
+	if (Object.keys(profileReleases).length === 0) throw new TypeError("profileReleases must not be empty");
+	if (!isRecord(raw.assignments)) throw new TypeError("assignments must be an object");
+	const assignments = {};
+	const plugins = [];
+	for (const [rawDeviceId, value] of Object.entries(raw.assignments)) {
+		const deviceId = normalizeDeviceId(rawDeviceId, "assignment device id");
+		if (devices[deviceId] === void 0) throw new TypeError("assignments." + deviceId + " references an unknown device");
+		if (!isRecord(value) || Object.keys(value).length === 0) throw new TypeError("assignments." + deviceId + " must be a non-empty profile-to-release object");
+		const deviceAssignments = {};
+		for (const [rawProfile, rawReleaseId] of Object.entries(value)) {
+			const profile = safeIdentifier(rawProfile, `assignments.${deviceId} profile`);
+			const releaseId = safeIdentifier(rawReleaseId, `assignments.${deviceId}.${profile}`);
+			const release = profileReleases[releaseId];
+			if (release === void 0) throw new TypeError(`assignments.${deviceId}.${profile} references unknown release ${JSON.stringify(releaseId)}`);
+			if (release.profile !== profile) throw new TypeError(`assignments.${deviceId}.${profile} references release for profile ${JSON.stringify(release.profile)}`);
+			deviceAssignments[profile] = releaseId;
+			for (const plugin of release.plugins) plugins.push({
+				id: plugin.id,
+				...releasePluginSpec(plugin),
+				visibility: plugin.visibility,
+				releaseId,
+				releaseVersion: release.version,
+				profiles: [profile],
+				...plugin.runtimeModules === void 0 ? {} : { runtimeModules: plugin.runtimeModules },
+				target: { devices: [deviceId] }
+			});
+		}
+		assignments[deviceId] = deviceAssignments;
+	}
+	return {
+		schemaVersion: 2,
+		team,
+		devices,
+		plugins,
+		v2: {
+			profileReleases,
+			assignments
+		}
+	};
+}
 function parseFleetManifest(source) {
 	const raw = parse(source);
 	if (!isRecord(raw)) throw new TypeError("fleet manifest must be an object");
-	if (raw.schemaVersion !== 1) throw new TypeError("schemaVersion must equal 1");
+	if (raw.schemaVersion !== 1 && raw.schemaVersion !== 2) throw new TypeError("schemaVersion must equal 1 or 2");
 	if (!isRecord(raw.team)) throw new TypeError("team must be an object");
+	if (raw.schemaVersion === 2) exactKeys(raw.team, ["id", "name"], "team");
 	const teamId = nonEmpty(raw.team.id, "team.id");
 	const teamName = raw.team.name === void 0 ? void 0 : nonEmpty(raw.team.name, "team.name");
 	if (!isRecord(raw.devices)) throw new TypeError("devices must be an object");
 	const devices = {};
 	for (const [id, value] of Object.entries(raw.devices)) {
 		const deviceId = normalizeDeviceId(id, "device id");
+		if (raw.schemaVersion === 2 && isRecord(value)) exactKeys(value, [
+			"assignedTo",
+			"class",
+			"channel",
+			"labels"
+		], "devices." + deviceId);
 		devices[deviceId] = parseDevice(value, "devices." + deviceId);
 	}
+	const team = {
+		id: teamId,
+		...teamName === void 0 ? {} : { name: teamName }
+	};
+	if (raw.schemaVersion === 2) return parseManifestV2(raw, team, devices);
 	if (!Array.isArray(raw.plugins)) throw new TypeError("plugins must be an array");
 	const plugins = raw.plugins.map(parsePlugin);
 	for (const plugin of plugins) if (Object.entries(devices).some(([id, device]) => device.channel === "stable" && targetsDevice(plugin, id, device))) {
@@ -380,10 +636,7 @@ function parseFleetManifest(source) {
 	}
 	return {
 		schemaVersion: 1,
-		team: {
-			id: teamId,
-			...teamName === void 0 ? {} : { name: teamName }
-		},
+		team,
 		devices,
 		plugins
 	};
@@ -410,17 +663,24 @@ function reconcileFleet(input) {
 	const desired = input.manifest.plugins.filter((plugin) => plugin.profiles === void 0 || plugin.profiles.includes(input.profile)).filter((plugin) => targetsDevice(plugin, input.deviceId, device)).sort((a, b) => a.id.localeCompare(b.id));
 	const plugins = desired.map((plugin) => {
 		const actualSpec = input.dependencies[plugin.id];
+		const actualArtifactDigest = input.artifactDigests?.[plugin.id];
 		const runtimeModules = plugin.runtimeModules ?? [plugin.id];
 		const runtimePhase = strongestPhase(input.runtime, runtimeModules);
 		let state;
 		if (actualSpec === void 0) state = "missing";
-		else if (actualSpec !== plugin.spec) state = "spec-drift";
+		else if (plugin.artifactDigest !== void 0 && actualArtifactDigest !== plugin.artifactDigest) state = "spec-drift";
+		else if (plugin.artifactDigest === void 0 && actualSpec !== plugin.spec) state = "spec-drift";
 		else if (runtimePhase === "failed") state = "runtime-failed";
 		else if (runtimePhase !== "active") state = "runtime-inactive";
 		else state = "aligned";
 		return {
 			id: plugin.id,
 			desiredSpec: plugin.spec,
+			...plugin.visibility === void 0 ? {} : { visibility: plugin.visibility },
+			...plugin.releaseId === void 0 ? {} : { releaseId: plugin.releaseId },
+			...plugin.releaseVersion === void 0 ? {} : { releaseVersion: plugin.releaseVersion },
+			...plugin.artifactDigest === void 0 ? {} : { desiredArtifactDigest: plugin.artifactDigest },
+			...actualArtifactDigest === void 0 ? {} : { actualArtifactDigest },
 			...plugin.source === void 0 ? {} : {
 				desiredSource: plugin.source,
 				...plugin.revision === void 0 ? {} : { desiredRevision: plugin.revision }
@@ -814,8 +1074,8 @@ function defaultDshBinary() {
 	const current = process.argv[1];
 	return [
 		...current !== void 0 && (basename(current) === "dsh" || current.includes("/@deepseek-ai/dsh/")) ? [current] : [],
-		join(homedir(), ".npm-global/bin/dsh"),
-		join(homedir(), ".local/bin/dsh")
+		join(homedir(), ".local/bin/dsh"),
+		join(homedir(), ".npm-global/bin/dsh")
 	].find((candidate) => existsSync(candidate)) ?? "dsh";
 }
 function resolveConfig(config) {
@@ -827,6 +1087,7 @@ function resolveConfig(config) {
 		profile: (config?.profile ?? process.env.DSH_FLEET_PROFILE ?? "web").trim(),
 		dshHome,
 		dshBinary: expandHome(config?.dshBinary ?? process.env.DSH_FLEET_DSH_BINARY ?? defaultDshBinary()),
+		artifactStore: expandHome(config?.artifactStore ?? process.env.DSH_FLEET_ARTIFACT_STORE ?? "~/.dsh/fleet/artifacts"),
 		updateCheck: config?.updateCheck !== false,
 		updateCacheMs: boundedNumber(config?.updateCacheMs, 216e5, 6e4, 864e5),
 		updateTimeoutMs: boundedNumber(config?.updateTimeoutMs, 5e3, 1e3, 15e3),
@@ -834,7 +1095,8 @@ function resolveConfig(config) {
 			enabled: config?.convergence?.enabled === true,
 			principalId: (config?.convergence?.principalId ?? process.env.USER ?? "local-owner").trim(),
 			timeoutMs: boundedNumber(config?.convergence?.timeoutMs, 18e4, 5e3, 6e5),
-			targets: config?.convergence?.targets ?? []
+			targets: config?.convergence?.targets ?? [],
+			signerDeviceId: config?.convergence?.signerDeviceId === void 0 ? void 0 : normalizeDeviceId(config.convergence.signerDeviceId, "convergence.signerDeviceId")
 		}
 	};
 }
@@ -907,6 +1169,17 @@ async function collectFleetStatus(ctx, configInput) {
 		deviceId: config.deviceId,
 		profile: config.profile,
 		dependencies,
+		artifactDigests: Object.fromEntries((await Promise.all(reconcileFleet({
+			manifest,
+			deviceId: config.deviceId,
+			profile: config.profile,
+			dependencies,
+			bundles,
+			runtime: []
+		}).plugins.filter((plugin) => plugin.desiredArtifactDigest !== void 0).map(async (plugin) => {
+			const digest = await digestInstalledArtifact(join(config.dshHome, "profiles", config.profile), config.artifactStore, dependencies[plugin.id] ?? "");
+			return digest === void 0 ? null : [plugin.id, digest];
+		}))).filter((entry) => entry !== null)),
 		bundles,
 		runtime
 	});
@@ -969,6 +1242,13 @@ function requiredString(value, field) {
 async function digestManifest(path) {
 	return createHash("sha256").update(await readFile(path, "utf8"), "utf8").digest("hex");
 }
+async function loadManifestBinding(path) {
+	const source = await readFile(path, "utf8");
+	return {
+		manifest: parseFleetManifest(source),
+		digest: createHash("sha256").update(source, "utf8").digest("hex")
+	};
+}
 function assertAgentConfiguration(expected, response) {
 	assertAgentIdentity(expected.deviceId, response);
 	if (response.profile !== expected.profile) throw new AgentClientError("agent-profile-mismatch", "fleet agent profile does not match the configured Host profile");
@@ -988,6 +1268,22 @@ function apply(ctx, config) {
 		dshVersion: readDshVersion(resolved.dshBinary)
 	});
 	const agents = createAgentClient(resolved.convergence);
+	const signedTaskCall = async (targetDeviceId, kind, taskPayload, signal) => {
+		const signerDeviceId = resolved.convergence.signerDeviceId;
+		if (signerDeviceId === void 0) throw new AgentClientError("a2a-signer-missing", "a fixed local A2A signer is not configured");
+		const signer = resolved.convergence.targets.find((target) => target.deviceId === signerDeviceId);
+		if (signer === void 0 || signer.transport !== "local") throw new AgentClientError("a2a-signer-invalid", "A2A signer must be a configured local Agent target");
+		const envelope = await agents.call(signerDeviceId, "a2a-sign", {
+			recipientDeviceId: targetDeviceId,
+			kind,
+			payload: taskPayload
+		}, signal);
+		const receipt = await agents.call(targetDeviceId, "a2a-receive", { envelope }, signal);
+		if (receipt.requestMessageId !== envelope.messageId || typeof receipt.response !== "object" || receipt.response === null) throw new AgentClientError("a2a-receipt-invalid", "target returned an invalid A2A receipt");
+		const verified = await agents.call(signerDeviceId, "a2a-verify", { envelope: receipt.response }, signal);
+		if (verified.sender.deviceId !== targetDeviceId || verified.payload.taskId !== taskPayload.taskId || verified.kind !== "task.progress" && verified.kind !== "task.result") throw new AgentClientError("a2a-response-mismatch", "signed task response does not match the requested target and task");
+		return verified;
+	};
 	host.connection.rpc.handle(RPC_CHANNEL, async (endpoint, payload) => {
 		try {
 			if (endpoint === "status") return ok(await collectFleetStatus(host, config));
@@ -1014,18 +1310,20 @@ function apply(ctx, config) {
 					enabled: false,
 					targets: []
 				});
-				const manifestDigest = await digestManifest(resolved.manifestPath);
+				const binding = await loadManifestBinding(resolved.manifestPath);
 				const targets = await Promise.all(agents.targets.map(async (target) => {
 					try {
-						const inspection = await agents.call(target.deviceId, "inspect", null, signal);
+						const releaseMode = binding.manifest.schemaVersion === 2;
+						const inspection = releaseMode ? await agents.call(target.deviceId, "release-inspect", null, signal) : await agents.call(target.deviceId, "inspect", null, signal);
 						assertAgentConfiguration({
 							deviceId: target.deviceId,
 							profile: resolved.profile,
-							manifestDigest
+							manifestDigest: binding.digest
 						}, inspection);
 						return {
 							...target,
 							online: true,
+							mode: releaseMode ? "profile-release" : "single-plugin",
 							inspection
 						};
 					} catch (error) {
@@ -1047,6 +1345,16 @@ function apply(ctx, config) {
 				const deviceId = requiredString(body.deviceId, "deviceId");
 				const pluginId = requiredString(body.pluginId, "pluginId");
 				const plan = await agents.call(deviceId, "plan", { pluginId }, signal);
+				assertAgentConfiguration({
+					deviceId,
+					profile: resolved.profile,
+					manifestDigest: await digestManifest(resolved.manifestPath)
+				}, plan);
+				return ok(plan);
+			}
+			if (endpoint === "release-plan") {
+				const deviceId = requiredString(closedPayload(payload, ["deviceId"], "release plan payload").deviceId, "deviceId");
+				const plan = await agents.call(deviceId, "release-plan", null, signal);
 				assertAgentConfiguration({
 					deviceId,
 					profile: resolved.profile,
@@ -1080,11 +1388,78 @@ function apply(ctx, config) {
 				};
 				return ok(await agents.call(deviceId, "apply", { approval }, signal));
 			}
+			if (endpoint === "release-approve") {
+				const body = closedPayload(payload, [
+					"approvalId",
+					"deviceId",
+					"planDigest",
+					"planExpiresAt",
+					"planId",
+					"profile"
+				], "release approve payload");
+				const deviceId = requiredString(body.deviceId, "deviceId");
+				const approvedAt = /* @__PURE__ */ new Date();
+				const planExpiresAt = new Date(requiredString(body.planExpiresAt, "planExpiresAt"));
+				if (!Number.isFinite(planExpiresAt.getTime()) || planExpiresAt <= approvedAt) throw new TypeError("planExpiresAt must be in the future");
+				const approval = {
+					protocolVersion: 1,
+					kind: "profile-release",
+					approvalId: requiredString(body.approvalId, "approvalId"),
+					principalId: resolved.convergence.principalId,
+					planId: requiredString(body.planId, "planId"),
+					planDigest: requiredString(body.planDigest, "planDigest"),
+					deviceId,
+					profile: requiredString(body.profile, "profile"),
+					approvedAt: approvedAt.toISOString(),
+					expiresAt: new Date(Math.min(planExpiresAt.getTime(), approvedAt.getTime() + 12e4)).toISOString()
+				};
+				return ok(await agents.call(deviceId, "release-apply", { approval }, signal));
+			}
 			if (endpoint === "action-status") {
 				const body = closedPayload(payload, ["deviceId", "planId"], "status payload");
 				const deviceId = requiredString(body.deviceId, "deviceId");
 				const planId = requiredString(body.planId, "planId");
 				return ok(await agents.call(deviceId, "status", { planId }, signal));
+			}
+			if (endpoint === "release-action-status") {
+				const body = closedPayload(payload, ["deviceId", "planId"], "release status payload");
+				const deviceId = requiredString(body.deviceId, "deviceId");
+				const planId = requiredString(body.planId, "planId");
+				return ok(await agents.call(deviceId, "release-status", { planId }, signal));
+			}
+			if (endpoint === "task-submit") {
+				const body = closedPayload(payload, [
+					"profile",
+					"prompt",
+					"targetDeviceId",
+					"workspaceId"
+				], "task submit payload");
+				const targetDeviceId = normalizeDeviceId(requiredString(body.targetDeviceId, "targetDeviceId"));
+				const taskId = "task:" + randomUUID();
+				const response = await signedTaskCall(targetDeviceId, "task.submit", {
+					taskId,
+					workspaceId: requiredString(body.workspaceId, "workspaceId"),
+					profile: requiredString(body.profile, "profile"),
+					prompt: requiredString(body.prompt, "prompt")
+				}, signal);
+				return ok({
+					taskId,
+					response
+				});
+			}
+			if (endpoint === "task-status" || endpoint === "task-cancel") {
+				const body = closedPayload(payload, ["targetDeviceId", "taskId"], "task control payload");
+				const targetDeviceId = normalizeDeviceId(requiredString(body.targetDeviceId, "targetDeviceId"));
+				const taskId = requiredString(body.taskId, "taskId");
+				const response = await signedTaskCall(targetDeviceId, endpoint === "task-status" ? "task.status" : "task.cancel", { taskId }, signal);
+				return ok({
+					taskId,
+					response
+				});
+			}
+			if (endpoint === "tasks-resume") {
+				const targetDeviceId = normalizeDeviceId(requiredString(closedPayload(payload, ["targetDeviceId"], "tasks resume payload").targetDeviceId, "targetDeviceId"));
+				return ok(await agents.call(targetDeviceId, "tasks-resume", null, signal));
 			}
 			return fail("unknown agent endpoint: " + endpoint);
 		} catch (error) {

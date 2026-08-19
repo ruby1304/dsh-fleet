@@ -1,0 +1,21 @@
+# Safe to publish after replacing the illustrative plugin coordinates.
+schemaVersion: 1
+pack:
+  id: example-engineering
+  version: 1.0.0
+profile:
+  id: web
+  dshRange: ">=0.1.0-rc.7 <0.2.0"
+publicPlugins:
+  - id: dsh-example-public
+    source:
+      kind: npm
+      version: 1.0.0
+      integrity: sha512-QUJDRA==
+taskPolicy:
+  # Task execution profiles are independent from the managed Web profile.
+  profiles: [headless]
+  workspaceIds: [project]
+# Public anchors can grant handoff/approval/receipt only. They cannot grant
+# task.submit, task.status or task.cancel.
+trustAnchors: []

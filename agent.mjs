@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 import { createRequire } from "node:module";
-import { dirname, isAbsolute, join, normalize } from "node:path";
-import { link, lstat, mkdir, open, readFile, rename, rm } from "node:fs/promises";
+import { dirname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
+import { access, link, lstat, mkdir, open, readFile, readdir, realpath, rename, rm } from "node:fs/promises";
 import { spawn } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
-import { constants } from "node:fs";
+import { createHash, createPrivateKey, createPublicKey, randomUUID, sign, verify } from "node:crypto";
+import { constants, existsSync } from "node:fs";
 //#region \0rolldown/runtime.js
 var __commonJSMin = (cb, mod) => () => (mod || (cb((mod = { exports: {} }).exports, mod), cb = null), mod.exports);
 var __require = /* #__PURE__ */ (() => createRequire(import.meta.url))();
@@ -19,7 +19,7 @@ function normalizeDeviceId(value, field = "deviceId") {
 }
 //#endregion
 //#region src/agent/config.ts
-function isRecord$4(value) {
+function isRecord$6(value) {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function nonEmpty$1(value, field) {
@@ -36,19 +36,19 @@ function boundedInt(value, field, fallback, min, max) {
 	if (typeof value !== "number" || !Number.isSafeInteger(value) || value < min || value > max) throw new TypeError(`${field} must be an integer from ${min} to ${max}`);
 	return value;
 }
-function exactKeys(value, allowed, field) {
+function exactKeys$3(value, allowed, field) {
 	const extra = Object.keys(value).filter((key) => !allowed.includes(key));
 	if (extra.length > 0) throw new TypeError(field + " contains unsupported fields: " + extra.sort().join(", "));
 }
 function parseRestart(value) {
-	if (!isRecord$4(value)) throw new TypeError("restart must be an object");
+	if (!isRecord$6(value)) throw new TypeError("restart must be an object");
 	const kind = nonEmpty$1(value.kind, "restart.kind");
 	if (kind === "none") {
-		exactKeys(value, ["kind"], "restart");
+		exactKeys$3(value, ["kind"], "restart");
 		return { kind: "none" };
 	}
-	if (kind !== "screen") throw new TypeError("restart.kind must be none or screen");
-	exactKeys(value, [
+	if (kind !== "screen" && kind !== "launchd") throw new TypeError("restart.kind must be none, screen or launchd");
+	exactKeys$3(value, kind === "screen" ? [
 		"kind",
 		"screenBinary",
 		"lsofBinary",
@@ -56,22 +56,50 @@ function parseRestart(value) {
 		"ownerMarkers",
 		"sessionName",
 		"host",
-		"port"
+		"port",
+		"managedPorts"
+	] : [
+		"kind",
+		"launchctlBinary",
+		"lsofBinary",
+		"psBinary",
+		"ownerMarkers",
+		"serviceTarget",
+		"host",
+		"port",
+		"managedPorts"
 	], "restart");
-	const sessionName = nonEmpty$1(value.sessionName, "restart.sessionName");
-	if (!/^[A-Za-z0-9._-]+$/.test(sessionName)) throw new TypeError("restart.sessionName contains unsupported characters");
 	const host = nonEmpty$1(value.host, "restart.host");
 	if (host !== "127.0.0.1" && host !== "localhost" && host !== "::1") throw new TypeError("restart.host must be loopback");
 	if (!Array.isArray(value.ownerMarkers) || value.ownerMarkers.length === 0 || value.ownerMarkers.length > 8 || value.ownerMarkers.some((marker) => typeof marker !== "string" || marker.trim() !== marker || marker.length === 0 || marker.length > 240 || /[\r\n\0]/.test(marker))) throw new TypeError("restart.ownerMarkers must contain 1 to 8 fixed command fragments");
-	return {
-		kind: "screen",
-		screenBinary: absolutePath(value.screenBinary, "restart.screenBinary"),
+	const port = boundedInt(value.port, "restart.port", 0, 1024, 65535);
+	const rawManagedPorts = value.managedPorts ?? [port];
+	if (!Array.isArray(rawManagedPorts) || rawManagedPorts.length === 0 || rawManagedPorts.length > 16 || rawManagedPorts.some((item) => typeof item !== "number" || !Number.isSafeInteger(item) || item < 1024 || item > 65535) || new Set(rawManagedPorts).size !== rawManagedPorts.length || !rawManagedPorts.includes(port)) throw new TypeError("restart.managedPorts must be 1 to 16 unique ports including restart.port");
+	const common = {
 		lsofBinary: absolutePath(value.lsofBinary, "restart.lsofBinary"),
 		psBinary: absolutePath(value.psBinary, "restart.psBinary"),
 		ownerMarkers: value.ownerMarkers,
-		sessionName,
 		host,
-		port: boundedInt(value.port, "restart.port", 0, 1024, 65535)
+		port,
+		managedPorts: rawManagedPorts
+	};
+	if (kind === "screen") {
+		const sessionName = nonEmpty$1(value.sessionName, "restart.sessionName");
+		if (!/^[A-Za-z0-9._-]+$/.test(sessionName)) throw new TypeError("restart.sessionName contains unsupported characters");
+		return {
+			kind: "screen",
+			screenBinary: absolutePath(value.screenBinary, "restart.screenBinary"),
+			sessionName,
+			...common
+		};
+	}
+	const serviceTarget = nonEmpty$1(value.serviceTarget, "restart.serviceTarget");
+	if (!/^(?:gui|user)\/[1-9][0-9]*\/[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(serviceTarget)) throw new TypeError("restart.serviceTarget must be a fixed gui/UID/label or user/UID/label target");
+	return {
+		kind: "launchd",
+		launchctlBinary: absolutePath(value.launchctlBinary, "restart.launchctlBinary"),
+		serviceTarget,
+		...common
 	};
 }
 function parseHealth(value) {
@@ -79,8 +107,8 @@ function parseHealth(value) {
 		timeoutMs: 45e3,
 		requireFleetRpc: false
 	};
-	if (!isRecord$4(value)) throw new TypeError("health must be an object");
-	exactKeys(value, [
+	if (!isRecord$6(value)) throw new TypeError("health must be an object");
+	exactKeys$3(value, [
 		"url",
 		"timeoutMs",
 		"requireFleetRpc"
@@ -101,9 +129,61 @@ function parseHealth(value) {
 		requireFleetRpc
 	};
 }
+function safeIdentifier$1(value, field) {
+	const id = nonEmpty$1(value, field);
+	if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(id)) throw new TypeError(field + " contains unsupported characters");
+	return id;
+}
+function parseA2A(value) {
+	if (value === void 0) return void 0;
+	if (!isRecord$6(value)) throw new TypeError("a2a must be an object");
+	exactKeys$3(value, [
+		"teamId",
+		"principalId",
+		"privateKeyPath",
+		"trustStorePath",
+		"maxMessageTtlMs"
+	], "a2a");
+	return {
+		teamId: safeIdentifier$1(value.teamId, "a2a.teamId"),
+		principalId: safeIdentifier$1(value.principalId, "a2a.principalId"),
+		privateKeyPath: absolutePath(value.privateKeyPath, "a2a.privateKeyPath"),
+		trustStorePath: absolutePath(value.trustStorePath, "a2a.trustStorePath"),
+		maxMessageTtlMs: boundedInt(value.maxMessageTtlMs, "a2a.maxMessageTtlMs", 9e5, 6e4, 864e5)
+	};
+}
+function parseTasks(value) {
+	if (value === void 0) return void 0;
+	if (!isRecord$6(value)) throw new TypeError("tasks must be an object");
+	exactKeys$3(value, [
+		"enabled",
+		"workspaces",
+		"profiles",
+		"timeoutMs",
+		"maxOutputBytes",
+		"maxConcurrent"
+	], "tasks");
+	if (typeof value.enabled !== "boolean") throw new TypeError("tasks.enabled must be boolean");
+	if (!isRecord$6(value.workspaces)) throw new TypeError("tasks.workspaces must be an object");
+	const workspaces = {};
+	for (const [rawId, path] of Object.entries(value.workspaces)) {
+		const id = safeIdentifier$1(rawId, "tasks workspace id");
+		workspaces[id] = absolutePath(path, "tasks.workspaces." + id);
+	}
+	if (value.enabled && Object.keys(workspaces).length === 0) throw new TypeError("enabled tasks require at least one workspace");
+	if (!Array.isArray(value.profiles) || value.profiles.length === 0 || value.profiles.length > 16 || value.profiles.some((profile) => typeof profile !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(profile)) || new Set(value.profiles).size !== value.profiles.length) throw new TypeError("tasks.profiles must contain 1 to 16 unique safe profile ids");
+	return {
+		enabled: value.enabled,
+		workspaces,
+		profiles: value.profiles,
+		timeoutMs: boundedInt(value.timeoutMs, "tasks.timeoutMs", 36e5, 6e4, 216e5),
+		maxOutputBytes: boundedInt(value.maxOutputBytes, "tasks.maxOutputBytes", 1048576, 4096, 1048576),
+		maxConcurrent: boundedInt(value.maxConcurrent, "tasks.maxConcurrent", 1, 1, 4)
+	};
+}
 function parseAgentConfig(value) {
-	if (!isRecord$4(value)) throw new TypeError("agent config must be an object");
-	exactKeys(value, [
+	if (!isRecord$6(value)) throw new TypeError("agent config must be an object");
+	exactKeys$3(value, [
 		"schemaVersion",
 		"deviceId",
 		"manifestPath",
@@ -114,13 +194,23 @@ function parseAgentConfig(value) {
 		"stateDir",
 		"planTtlMs",
 		"restart",
-		"health"
+		"health",
+		"artifactStore",
+		"tarBinary",
+		"a2a",
+		"tasks"
 	], "agent config");
-	if (value.schemaVersion !== 1) throw new TypeError("agent config schemaVersion must equal 1");
+	if (value.schemaVersion !== 1 && value.schemaVersion !== 2) throw new TypeError("agent config schemaVersion must equal 1 or 2");
 	const profile = nonEmpty$1(value.profile, "profile");
 	if (!/^[A-Za-z0-9._-]+$/.test(profile)) throw new TypeError("profile contains unsupported characters");
+	const artifactStore = value.artifactStore === void 0 ? void 0 : absolutePath(value.artifactStore, "artifactStore");
+	const tarBinary = value.tarBinary === void 0 ? void 0 : absolutePath(value.tarBinary, "tarBinary");
+	if (value.schemaVersion === 2 && (artifactStore === void 0 || tarBinary === void 0)) throw new TypeError("schemaVersion 2 requires artifactStore and tarBinary");
+	const a2a = parseA2A(value.a2a);
+	const tasks = parseTasks(value.tasks);
+	if (tasks?.enabled === true && a2a === void 0) throw new TypeError("enabled tasks require a2a identity and trust configuration");
 	return {
-		schemaVersion: 1,
+		schemaVersion: value.schemaVersion,
 		deviceId: normalizeDeviceId(value.deviceId),
 		manifestPath: absolutePath(value.manifestPath, "manifestPath"),
 		dshHome: absolutePath(value.dshHome, "dshHome"),
@@ -130,8 +220,19 @@ function parseAgentConfig(value) {
 		stateDir: absolutePath(value.stateDir, "stateDir"),
 		planTtlMs: boundedInt(value.planTtlMs, "planTtlMs", 6e5, 6e4, 36e5),
 		restart: parseRestart(value.restart),
-		health: parseHealth(value.health)
+		health: parseHealth(value.health),
+		...artifactStore === void 0 ? {} : { artifactStore },
+		...tarBinary === void 0 ? {} : { tarBinary },
+		...a2a === void 0 ? {} : { a2a },
+		...tasks === void 0 ? {} : { tasks }
 	};
+}
+function assertReleaseReadyConfig(config) {
+	assertMutationReadyConfig(config);
+	if (config.schemaVersion !== 2 || config.artifactStore === void 0 || config.tarBinary === void 0) throw mutationConfigError("atomic profile releases require schemaVersion 2 with artifactStore and tarBinary");
+}
+function assertA2AReadyConfig(config) {
+	if (config.schemaVersion !== 2 || config.a2a === void 0 || config.tasks === void 0) throw mutationConfigError("A2A requires schemaVersion 2 with identity, trust and task policy");
 }
 function mutationConfigError(message) {
 	return Object.assign(new TypeError(message), { code: "unsafe-mutation-config" });
@@ -6756,7 +6857,7 @@ var require_public_api = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.stringify = stringify;
 }));
 //#endregion
-//#region src/host/core.ts
+//#region src/host/artifacts.ts
 var import_dist = (/* @__PURE__ */ __commonJSMin(((exports) => {
 	var composer = require_composer();
 	var Document = require_Document();
@@ -6803,121 +6904,54 @@ var import_dist = (/* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.visit = visit.visit;
 	exports.visitAsync = visit.visitAsync;
 })))();
-function isRecord$3(value) {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
+function contained(root, candidate) {
+	const path = relative(root, candidate);
+	return path === "" || !path.startsWith(".." + sep) && path !== ".." && !isAbsolute(path);
 }
-function strings(value, field) {
-	if (value === void 0) return void 0;
-	if (!Array.isArray(value) || value.some((item) => typeof item !== "string" || item.trim().length === 0)) throw new TypeError(field + " must be an array of non-empty strings");
-	return value.map((item) => item.trim());
-}
-function nonEmpty(value, field) {
-	if (typeof value !== "string" || value.trim().length === 0) throw new TypeError(field + " must be a non-empty string");
-	return value.trim();
-}
-function parseDevice(value, field) {
-	if (!isRecord$3(value)) throw new TypeError(field + " must be an object");
-	const assignedTo = value.assignedTo === void 0 ? void 0 : nonEmpty(value.assignedTo, field + ".assignedTo");
-	const labels = strings(value.labels, field + ".labels");
-	return {
-		...assignedTo === void 0 ? {} : { assignedTo },
-		class: nonEmpty(value.class, field + ".class"),
-		channel: nonEmpty(value.channel, field + ".channel"),
-		...labels === void 0 ? {} : { labels }
-	};
-}
-function dependencySpec(source, revision, field) {
-	if (source.includes("#")) throw new TypeError(field + " must not contain # when revision is separate");
-	if (source === "link:" || source.startsWith("link:")) {
-		if (revision !== void 0) throw new TypeError(field + ".revision is not allowed for link sources");
-		return source;
+function dependencyArtifactPath(profileDir, spec) {
+	if (!spec.startsWith("file:")) return null;
+	const encoded = spec.slice(5);
+	if (encoded.length === 0 || encoded.startsWith("//") || /[?#\0]/.test(encoded)) return null;
+	let decoded;
+	try {
+		decoded = decodeURIComponent(encoded);
+	} catch {
+		return null;
 	}
-	if (source === "npm") {
-		if (revision === void 0) throw new TypeError(field + ".revision is required for npm source");
-		return revision;
-	}
-	return revision === void 0 ? source : source + "#" + revision;
+	if (decoded.length === 0 || decoded.includes("\0")) return null;
+	const candidate = isAbsolute(decoded) ? resolve(decoded) : resolve(profileDir, decoded);
+	return candidate.endsWith(".tgz") ? candidate : null;
 }
-function parsePlugin(value, index) {
-	const field = "plugins[" + index + "]";
-	if (!isRecord$3(value)) throw new TypeError(field + " must be an object");
-	const profiles = strings(value.profiles, field + ".profiles");
-	const runtimeModules = strings(value.runtimeModules, field + ".runtimeModules");
-	let target;
-	if (value.target !== void 0) {
-		if (!isRecord$3(value.target)) throw new TypeError(field + ".target must be an object");
-		const devices = strings(value.target.devices, field + ".target.devices")?.map((id, targetIndex) => normalizeDeviceId(id, `${field}.target.devices[${targetIndex}]`));
-		const classes = strings(value.target.classes, field + ".target.classes");
-		const channels = strings(value.target.channels, field + ".target.channels");
-		target = {
-			...devices === void 0 ? {} : { devices },
-			...classes === void 0 ? {} : { classes },
-			...channels === void 0 ? {} : { channels }
-		};
+async function digestInstalledArtifact(profileDir, artifactStore, spec) {
+	const candidate = dependencyArtifactPath(profileDir, spec);
+	if (candidate === null) return void 0;
+	try {
+		const [storePath, candidatePath, originalInfo] = await Promise.all([
+			realpath(artifactStore),
+			realpath(candidate),
+			lstat(candidate)
+		]);
+		if (originalInfo.isSymbolicLink() || !originalInfo.isFile() || !contained(storePath, candidatePath)) return void 0;
+		const handle = await open(candidatePath, constants.O_RDONLY | constants.O_NOFOLLOW);
+		try {
+			const openedInfo = await handle.stat();
+			if (!openedInfo.isFile() || openedInfo.dev !== originalInfo.dev || openedInfo.ino !== originalInfo.ino) return void 0;
+			const hash = createHash("sha256");
+			const buffer = Buffer.allocUnsafe(65536);
+			let position = 0;
+			for (;;) {
+				const { bytesRead } = await handle.read(buffer, 0, buffer.length, position);
+				if (bytesRead === 0) break;
+				hash.update(buffer.subarray(0, bytesRead));
+				position += bytesRead;
+			}
+			return hash.digest("hex");
+		} finally {
+			await handle.close();
+		}
+	} catch {
+		return;
 	}
-	const id = nonEmpty(value.id, field + ".id");
-	const hasSpec = value.spec !== void 0;
-	const hasSource = value.source !== void 0 || value.revision !== void 0;
-	if (hasSpec === hasSource) throw new TypeError(field + " must specify exactly one of spec or source");
-	const spec = hasSpec ? nonEmpty(value.spec, field + ".spec") : void 0;
-	const source = hasSource ? nonEmpty(value.source, field + ".source") : void 0;
-	const revision = value.revision === void 0 ? void 0 : nonEmpty(value.revision, field + ".revision");
-	return {
-		id,
-		spec: spec ?? dependencySpec(source, revision, field),
-		...source === void 0 ? {} : {
-			source,
-			...revision === void 0 ? {} : { revision }
-		},
-		...profiles === void 0 ? {} : { profiles },
-		...runtimeModules === void 0 ? {} : { runtimeModules },
-		...target === void 0 ? {} : { target }
-	};
-}
-function parseFleetManifest(source) {
-	const raw = (0, import_dist.parse)(source);
-	if (!isRecord$3(raw)) throw new TypeError("fleet manifest must be an object");
-	if (raw.schemaVersion !== 1) throw new TypeError("schemaVersion must equal 1");
-	if (!isRecord$3(raw.team)) throw new TypeError("team must be an object");
-	const teamId = nonEmpty(raw.team.id, "team.id");
-	const teamName = raw.team.name === void 0 ? void 0 : nonEmpty(raw.team.name, "team.name");
-	if (!isRecord$3(raw.devices)) throw new TypeError("devices must be an object");
-	const devices = {};
-	for (const [id, value] of Object.entries(raw.devices)) {
-		const deviceId = normalizeDeviceId(id, "device id");
-		devices[deviceId] = parseDevice(value, "devices." + deviceId);
-	}
-	if (!Array.isArray(raw.plugins)) throw new TypeError("plugins must be an array");
-	const plugins = raw.plugins.map(parsePlugin);
-	for (const plugin of plugins) if (Object.entries(devices).some(([id, device]) => device.channel === "stable" && targetsDevice$1(plugin, id, device))) {
-		if (plugin.source?.startsWith("link:") || plugin.spec.startsWith("link:")) throw new TypeError("stable plugin " + JSON.stringify(plugin.id) + " must not use a link source");
-		const exactSemver = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.test(plugin.spec);
-		const exactSha = plugin.source !== "npm" && !plugin.source?.startsWith("link:") && (/^[0-9a-fA-F]{40}$/.test(plugin.revision ?? "") || /#[0-9a-fA-F]{40}$/.test(plugin.spec));
-		if (!exactSemver && !exactSha) throw new TypeError("stable plugin " + JSON.stringify(plugin.id) + " must use immutable exact semver or commit SHA");
-	}
-	for (let i = 0; i < plugins.length; i++) for (let j = i + 1; j < plugins.length; j++) {
-		if (plugins[i]?.id !== plugins[j]?.id) continue;
-		const a = plugins[i];
-		const b = plugins[j];
-		if (Object.keys(devices).some((id) => targetsDevice$1(a, id, devices[id]) && targetsDevice$1(b, id, devices[id])) && (a.profiles === void 0 || b.profiles === void 0 || a.profiles.some((profile) => b.profiles?.includes(profile)))) throw new TypeError("duplicate plugin id " + JSON.stringify(a.id));
-	}
-	return {
-		schemaVersion: 1,
-		team: {
-			id: teamId,
-			...teamName === void 0 ? {} : { name: teamName }
-		},
-		devices,
-		plugins
-	};
-}
-function targetsDevice$1(plugin, deviceId, device) {
-	const target = plugin.target;
-	if (target === void 0) return true;
-	if (target.devices !== void 0 && !target.devices.includes(deviceId)) return false;
-	if (target.classes !== void 0 && (device === void 0 || !target.classes.includes(device.class))) return false;
-	if (target.channels !== void 0 && (device === void 0 || !target.channels.includes(device.channel))) return false;
-	return true;
 }
 //#endregion
 //#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/internal/constants.js
@@ -6926,7 +6960,7 @@ var require_constants = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 		MAX_LENGTH: 256,
 		MAX_SAFE_COMPONENT_LENGTH: 16,
 		MAX_SAFE_BUILD_LENGTH: 250,
-		MAX_SAFE_INTEGER: Number.MAX_SAFE_INTEGER || 
+		MAX_SAFE_INTEGER: Number.MAX_SAFE_INTEGER ||
 		/* istanbul ignore next */ 9007199254740991,
 		RELEASE_TYPES: [
 			"major",
@@ -8262,7 +8296,7 @@ var require_subset = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 	module.exports = subset;
 }));
 //#endregion
-//#region src/agent/protocol.ts
+//#region src/host/core.ts
 var import_semver = (/* @__PURE__ */ __commonJSMin(((exports, module) => {
 	const internalRe = require_re();
 	const constants = require_constants();
@@ -8317,6 +8351,324 @@ var import_semver = (/* @__PURE__ */ __commonJSMin(((exports, module) => {
 		rcompareIdentifiers: identifiers.rcompareIdentifiers
 	};
 })))();
+function isRecord$5(value) {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function strings(value, field) {
+	if (value === void 0) return void 0;
+	if (!Array.isArray(value) || value.some((item) => typeof item !== "string" || item.trim().length === 0)) throw new TypeError(field + " must be an array of non-empty strings");
+	return value.map((item) => item.trim());
+}
+function nonEmpty(value, field) {
+	if (typeof value !== "string" || value.trim().length === 0) throw new TypeError(field + " must be a non-empty string");
+	return value.trim();
+}
+function exactKeys$2(value, allowed, field) {
+	const extras = Object.keys(value).filter((key) => !allowed.includes(key));
+	if (extras.length > 0) throw new TypeError(field + " contains unsupported fields: " + extras.sort().join(", "));
+}
+function safeIdentifier(value, field) {
+	const id = nonEmpty(value, field);
+	if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(id)) throw new TypeError(field + " must be 1 to 64 ASCII letters, digits, dots, underscores or hyphens");
+	return id;
+}
+function safePackageName(value, field) {
+	const id = nonEmpty(value, field);
+	if (id.length > 214 || id !== id.toLowerCase() || !/^(?:@[a-z0-9][a-z0-9._~-]*\/)?[a-z0-9][a-z0-9._~-]*$/.test(id)) throw new TypeError(field + " must be one literal lowercase npm package name");
+	return id;
+}
+function exactSemver(value, field) {
+	const version = nonEmpty(value, field);
+	if ((0, import_semver.valid)(version) !== version) throw new TypeError(field + " must be an exact semantic version");
+	return version;
+}
+function sha256Digest(value, field) {
+	const digest = nonEmpty(value, field);
+	if (!/^[0-9a-f]{64}$/.test(digest)) throw new TypeError(field + " must be a lowercase SHA-256 digest");
+	return digest;
+}
+function parseDevice(value, field) {
+	if (!isRecord$5(value)) throw new TypeError(field + " must be an object");
+	const assignedTo = value.assignedTo === void 0 ? void 0 : nonEmpty(value.assignedTo, field + ".assignedTo");
+	const labels = strings(value.labels, field + ".labels");
+	return {
+		...assignedTo === void 0 ? {} : { assignedTo },
+		class: nonEmpty(value.class, field + ".class"),
+		channel: nonEmpty(value.channel, field + ".channel"),
+		...labels === void 0 ? {} : { labels }
+	};
+}
+function dependencySpec(source, revision, field) {
+	if (source.includes("#")) throw new TypeError(field + " must not contain # when revision is separate");
+	if (source === "link:" || source.startsWith("link:")) {
+		if (revision !== void 0) throw new TypeError(field + ".revision is not allowed for link sources");
+		return source;
+	}
+	if (source === "npm") {
+		if (revision === void 0) throw new TypeError(field + ".revision is required for npm source");
+		return revision;
+	}
+	return revision === void 0 ? source : source + "#" + revision;
+}
+function parsePlugin(value, index) {
+	const field = "plugins[" + index + "]";
+	if (!isRecord$5(value)) throw new TypeError(field + " must be an object");
+	const profiles = strings(value.profiles, field + ".profiles");
+	const runtimeModules = strings(value.runtimeModules, field + ".runtimeModules");
+	let target;
+	if (value.target !== void 0) {
+		if (!isRecord$5(value.target)) throw new TypeError(field + ".target must be an object");
+		const devices = strings(value.target.devices, field + ".target.devices")?.map((id, targetIndex) => normalizeDeviceId(id, `${field}.target.devices[${targetIndex}]`));
+		const classes = strings(value.target.classes, field + ".target.classes");
+		const channels = strings(value.target.channels, field + ".target.channels");
+		target = {
+			...devices === void 0 ? {} : { devices },
+			...classes === void 0 ? {} : { classes },
+			...channels === void 0 ? {} : { channels }
+		};
+	}
+	const id = nonEmpty(value.id, field + ".id");
+	const hasSpec = value.spec !== void 0;
+	const hasSource = value.source !== void 0 || value.revision !== void 0;
+	if (hasSpec === hasSource) throw new TypeError(field + " must specify exactly one of spec or source");
+	const spec = hasSpec ? nonEmpty(value.spec, field + ".spec") : void 0;
+	const source = hasSource ? nonEmpty(value.source, field + ".source") : void 0;
+	const revision = value.revision === void 0 ? void 0 : nonEmpty(value.revision, field + ".revision");
+	return {
+		id,
+		spec: spec ?? dependencySpec(source, revision, field),
+		...source === void 0 ? {} : {
+			source,
+			...revision === void 0 ? {} : { revision }
+		},
+		...profiles === void 0 ? {} : { profiles },
+		...runtimeModules === void 0 ? {} : { runtimeModules },
+		...target === void 0 ? {} : { target }
+	};
+}
+function parseReleaseSource(value, field, visibility) {
+	if (!isRecord$5(value)) throw new TypeError(field + " must be an object");
+	const kind = nonEmpty(value.kind, field + ".kind");
+	if (kind === "npm") {
+		exactKeys$2(value, [
+			"kind",
+			"version",
+			"integrity"
+		], field);
+		if (visibility !== "public") throw new TypeError(field + " private plugins must use content-addressed artifact sources");
+		const integrity = value.integrity === void 0 ? void 0 : nonEmpty(value.integrity, field + ".integrity");
+		if (integrity !== void 0 && !/^sha512-[A-Za-z0-9+/]+={0,2}$/.test(integrity)) throw new TypeError(field + ".integrity must be one SHA-512 Subresource Integrity value");
+		return {
+			kind: "npm",
+			version: exactSemver(value.version, field + ".version"),
+			...integrity === void 0 ? {} : { integrity }
+		};
+	}
+	if (kind === "github") {
+		exactKeys$2(value, [
+			"kind",
+			"repository",
+			"revision"
+		], field);
+		if (visibility !== "public") throw new TypeError(field + " private plugins must use content-addressed artifact sources");
+		const repository = nonEmpty(value.repository, field + ".repository");
+		if (!/^[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?\/[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/.test(repository)) throw new TypeError(field + ".repository must be owner/repository without a URL or revision");
+		const revision = nonEmpty(value.revision, field + ".revision");
+		if (!/^[0-9a-f]{40}$/.test(revision)) throw new TypeError(field + ".revision must be a lowercase 40-character commit SHA");
+		return {
+			kind: "github",
+			repository,
+			revision
+		};
+	}
+	if (kind === "artifact") {
+		exactKeys$2(value, [
+			"kind",
+			"digest",
+			"version"
+		], field);
+		if (visibility !== "private") throw new TypeError(field + " artifact sources must be declared private");
+		return {
+			kind: "artifact",
+			digest: sha256Digest(value.digest, field + ".digest"),
+			version: exactSemver(value.version, field + ".version")
+		};
+	}
+	throw new TypeError(field + ".kind must be npm, github or artifact");
+}
+function parseReleasePlugin(value, field) {
+	if (!isRecord$5(value)) throw new TypeError(field + " must be an object");
+	exactKeys$2(value, [
+		"id",
+		"visibility",
+		"source",
+		"runtimeModules"
+	], field);
+	if (value.visibility !== "public" && value.visibility !== "private") throw new TypeError(field + ".visibility must be public or private");
+	const runtimeModules = strings(value.runtimeModules, field + ".runtimeModules");
+	return {
+		id: safePackageName(value.id, field + ".id"),
+		visibility: value.visibility,
+		source: parseReleaseSource(value.source, field + ".source", value.visibility),
+		...runtimeModules === void 0 ? {} : { runtimeModules }
+	};
+}
+function parseProfileRelease(id, value, field) {
+	if (!isRecord$5(value)) throw new TypeError(field + " must be an object");
+	exactKeys$2(value, [
+		"id",
+		"version",
+		"profile",
+		"dshRange",
+		"plugins"
+	], field);
+	if (value.id !== void 0 && safeIdentifier(value.id, field + ".id") !== id) throw new TypeError(field + ".id must match its profileReleases key");
+	const dshRange = nonEmpty(value.dshRange, field + ".dshRange");
+	if ((0, import_semver.validRange)(dshRange) === null) throw new TypeError(field + ".dshRange must be a valid semantic-version range");
+	if (!Array.isArray(value.plugins) || value.plugins.length === 0) throw new TypeError(field + ".plugins must be a non-empty array");
+	const plugins = value.plugins.map((plugin, index) => parseReleasePlugin(plugin, `${field}.plugins[${index}]`));
+	const seen = /* @__PURE__ */ new Set();
+	for (const plugin of plugins) {
+		if (seen.has(plugin.id)) throw new TypeError(field + " contains duplicate plugin id " + JSON.stringify(plugin.id));
+		seen.add(plugin.id);
+	}
+	return {
+		id,
+		version: exactSemver(value.version, field + ".version"),
+		profile: safeIdentifier(value.profile, field + ".profile"),
+		dshRange,
+		plugins
+	};
+}
+function releasePluginSpec(plugin) {
+	if (plugin.source.kind === "npm") return {
+		spec: plugin.source.version,
+		source: "npm",
+		revision: plugin.source.version
+	};
+	if (plugin.source.kind === "github") {
+		const source = "github:" + plugin.source.repository;
+		return {
+			spec: source + "#" + plugin.source.revision,
+			source,
+			revision: plugin.source.revision
+		};
+	}
+	return {
+		spec: "artifact:sha256:" + plugin.source.digest,
+		source: "artifact",
+		revision: plugin.source.version,
+		artifactDigest: plugin.source.digest
+	};
+}
+function parseManifestV2(raw, team, devices) {
+	exactKeys$2(raw, [
+		"schemaVersion",
+		"team",
+		"devices",
+		"profileReleases",
+		"assignments"
+	], "fleet manifest");
+	if (!isRecord$5(raw.profileReleases)) throw new TypeError("profileReleases must be an object");
+	const profileReleases = {};
+	for (const [rawId, value] of Object.entries(raw.profileReleases)) {
+		const id = safeIdentifier(rawId, "profile release id");
+		profileReleases[id] = parseProfileRelease(id, value, "profileReleases." + id);
+	}
+	if (Object.keys(profileReleases).length === 0) throw new TypeError("profileReleases must not be empty");
+	if (!isRecord$5(raw.assignments)) throw new TypeError("assignments must be an object");
+	const assignments = {};
+	const plugins = [];
+	for (const [rawDeviceId, value] of Object.entries(raw.assignments)) {
+		const deviceId = normalizeDeviceId(rawDeviceId, "assignment device id");
+		if (devices[deviceId] === void 0) throw new TypeError("assignments." + deviceId + " references an unknown device");
+		if (!isRecord$5(value) || Object.keys(value).length === 0) throw new TypeError("assignments." + deviceId + " must be a non-empty profile-to-release object");
+		const deviceAssignments = {};
+		for (const [rawProfile, rawReleaseId] of Object.entries(value)) {
+			const profile = safeIdentifier(rawProfile, `assignments.${deviceId} profile`);
+			const releaseId = safeIdentifier(rawReleaseId, `assignments.${deviceId}.${profile}`);
+			const release = profileReleases[releaseId];
+			if (release === void 0) throw new TypeError(`assignments.${deviceId}.${profile} references unknown release ${JSON.stringify(releaseId)}`);
+			if (release.profile !== profile) throw new TypeError(`assignments.${deviceId}.${profile} references release for profile ${JSON.stringify(release.profile)}`);
+			deviceAssignments[profile] = releaseId;
+			for (const plugin of release.plugins) plugins.push({
+				id: plugin.id,
+				...releasePluginSpec(plugin),
+				visibility: plugin.visibility,
+				releaseId,
+				releaseVersion: release.version,
+				profiles: [profile],
+				...plugin.runtimeModules === void 0 ? {} : { runtimeModules: plugin.runtimeModules },
+				target: { devices: [deviceId] }
+			});
+		}
+		assignments[deviceId] = deviceAssignments;
+	}
+	return {
+		schemaVersion: 2,
+		team,
+		devices,
+		plugins,
+		v2: {
+			profileReleases,
+			assignments
+		}
+	};
+}
+function parseFleetManifest(source) {
+	const raw = (0, import_dist.parse)(source);
+	if (!isRecord$5(raw)) throw new TypeError("fleet manifest must be an object");
+	if (raw.schemaVersion !== 1 && raw.schemaVersion !== 2) throw new TypeError("schemaVersion must equal 1 or 2");
+	if (!isRecord$5(raw.team)) throw new TypeError("team must be an object");
+	if (raw.schemaVersion === 2) exactKeys$2(raw.team, ["id", "name"], "team");
+	const teamId = nonEmpty(raw.team.id, "team.id");
+	const teamName = raw.team.name === void 0 ? void 0 : nonEmpty(raw.team.name, "team.name");
+	if (!isRecord$5(raw.devices)) throw new TypeError("devices must be an object");
+	const devices = {};
+	for (const [id, value] of Object.entries(raw.devices)) {
+		const deviceId = normalizeDeviceId(id, "device id");
+		if (raw.schemaVersion === 2 && isRecord$5(value)) exactKeys$2(value, [
+			"assignedTo",
+			"class",
+			"channel",
+			"labels"
+		], "devices." + deviceId);
+		devices[deviceId] = parseDevice(value, "devices." + deviceId);
+	}
+	const team = {
+		id: teamId,
+		...teamName === void 0 ? {} : { name: teamName }
+	};
+	if (raw.schemaVersion === 2) return parseManifestV2(raw, team, devices);
+	if (!Array.isArray(raw.plugins)) throw new TypeError("plugins must be an array");
+	const plugins = raw.plugins.map(parsePlugin);
+	for (const plugin of plugins) if (Object.entries(devices).some(([id, device]) => device.channel === "stable" && targetsDevice$1(plugin, id, device))) {
+		if (plugin.source?.startsWith("link:") || plugin.spec.startsWith("link:")) throw new TypeError("stable plugin " + JSON.stringify(plugin.id) + " must not use a link source");
+		const exactSemver = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.test(plugin.spec);
+		const exactSha = plugin.source !== "npm" && !plugin.source?.startsWith("link:") && (/^[0-9a-fA-F]{40}$/.test(plugin.revision ?? "") || /#[0-9a-fA-F]{40}$/.test(plugin.spec));
+		if (!exactSemver && !exactSha) throw new TypeError("stable plugin " + JSON.stringify(plugin.id) + " must use immutable exact semver or commit SHA");
+	}
+	for (let i = 0; i < plugins.length; i++) for (let j = i + 1; j < plugins.length; j++) {
+		if (plugins[i]?.id !== plugins[j]?.id) continue;
+		const a = plugins[i];
+		const b = plugins[j];
+		if (Object.keys(devices).some((id) => targetsDevice$1(a, id, devices[id]) && targetsDevice$1(b, id, devices[id])) && (a.profiles === void 0 || b.profiles === void 0 || a.profiles.some((profile) => b.profiles?.includes(profile)))) throw new TypeError("duplicate plugin id " + JSON.stringify(a.id));
+	}
+	return {
+		schemaVersion: 1,
+		team,
+		devices,
+		plugins
+	};
+}
+function targetsDevice$1(plugin, deviceId, device) {
+	const target = plugin.target;
+	if (target === void 0) return true;
+	if (target.devices !== void 0 && !target.devices.includes(deviceId)) return false;
+	if (target.classes !== void 0 && (device === void 0 || !target.classes.includes(device.class))) return false;
+	if (target.channels !== void 0 && (device === void 0 || !target.channels.includes(device.channel))) return false;
+	return true;
+}
 var FleetProtocolError = class extends Error {
 	code;
 	constructor(code, message) {
@@ -8325,7 +8677,7 @@ var FleetProtocolError = class extends Error {
 		this.code = code;
 	}
 };
-const PLAN_BODY_KEYS = [
+const PLAN_BODY_KEYS$1 = [
 	"protocolVersion",
 	"deviceId",
 	"profile",
@@ -8341,12 +8693,12 @@ const PLAN_BODY_KEYS = [
 	"createdAt",
 	"expiresAt"
 ];
-const PLAN_KEYS = [
-	...PLAN_BODY_KEYS,
+const PLAN_KEYS$1 = [
+	...PLAN_BODY_KEYS$1,
 	"planId",
 	"digest"
 ];
-const APPROVAL_KEYS = [
+const APPROVAL_KEYS$1 = [
 	"protocolVersion",
 	"approvalId",
 	"principalId",
@@ -8357,11 +8709,11 @@ const APPROVAL_KEYS = [
 	"approvedAt",
 	"expiresAt"
 ];
-function isRecord$2(value) {
+function isRecord$4(value) {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-function assertExactKeys(value, keys, label) {
-	if (!isRecord$2(value)) throw new FleetProtocolError("invalid-payload", label + " must be an object");
+function assertExactKeys$1(value, keys, label) {
+	if (!isRecord$4(value)) throw new FleetProtocolError("invalid-payload", label + " must be an object");
 	const expected = new Set(keys);
 	for (const key of Object.keys(value)) if (!expected.has(key)) throw new FleetProtocolError("invalid-payload", label + " contains unsupported field " + JSON.stringify(key));
 	for (const key of keys) if (!Object.hasOwn(value, key)) throw new FleetProtocolError("invalid-payload", label + " is missing field " + JSON.stringify(key));
@@ -8369,7 +8721,7 @@ function assertExactKeys(value, keys, label) {
 function assertNonEmpty(value, field) {
 	if (typeof value !== "string" || value.trim().length === 0 || value !== value.trim()) throw new FleetProtocolError("invalid-payload", field + " must be a trimmed non-empty string");
 }
-function assertDigest(value, field) {
+function assertDigest$1(value, field) {
 	if (typeof value !== "string" || !/^[0-9a-f]{64}$/.test(value)) throw new FleetProtocolError("invalid-digest", field + " must be a lowercase SHA-256 digest");
 }
 function parseCanonicalTime(value, field) {
@@ -8396,13 +8748,13 @@ function exactSourceKind(value) {
 function isSupportedDshVersion(value) {
 	return (0, import_semver.valid)(value) === value && (0, import_semver.satisfies)(value, ">=0.1.0-rc.7 <0.2.0", { includePrerelease: true });
 }
-function validatePlanBody(value) {
-	assertExactKeys(value, PLAN_BODY_KEYS, "plan body");
+function validatePlanBody$1(value) {
+	assertExactKeys$1(value, PLAN_BODY_KEYS$1, "plan body");
 	if (value.protocolVersion !== 1) throw new FleetProtocolError("invalid-protocol", "unsupported fleet agent protocol version");
 	assertNonEmpty(value.deviceId, "deviceId");
 	assertNonEmpty(value.profile, "profile");
-	assertDigest(value.manifestDigest, "manifestDigest");
-	assertDigest(value.profileHash, "profileHash");
+	assertDigest$1(value.manifestDigest, "manifestDigest");
+	assertDigest$1(value.profileHash, "profileHash");
 	assertNonEmpty(value.observedDshVersion, "observedDshVersion");
 	if (!isSupportedDshVersion(value.observedDshVersion)) throw new FleetProtocolError("unsupported-dsh-version", "DSH version is outside >=0.1.0-rc.7 <0.2.0");
 	assertNonEmpty(value.pluginId, "pluginId");
@@ -8433,7 +8785,7 @@ function canonicalize(value, seen) {
 		seen.delete(value);
 		return encoded;
 	}
-	if (isRecord$2(value)) {
+	if (isRecord$4(value)) {
 		const prototype = Object.getPrototypeOf(value);
 		if (prototype !== Object.prototype && prototype !== null) throw new FleetProtocolError("invalid-payload", "canonical JSON accepts only plain objects");
 		if (seen.has(value)) throw new FleetProtocolError("invalid-payload", "canonical JSON rejects cycles");
@@ -8455,7 +8807,7 @@ function sha256Canonical(value) {
 	return createHash("sha256").update(canonicalJson(value), "utf8").digest("hex");
 }
 function createFleetPlan(body) {
-	validatePlanBody(body);
+	validatePlanBody$1(body);
 	const digest = sha256Canonical(body);
 	return Object.freeze({
 		...body,
@@ -8464,7 +8816,7 @@ function createFleetPlan(body) {
 	});
 }
 function validateFleetPlan(value) {
-	assertExactKeys(value, PLAN_KEYS, "plan");
+	assertExactKeys$1(value, PLAN_KEYS$1, "plan");
 	const body = {
 		protocolVersion: value.protocolVersion,
 		deviceId: value.deviceId,
@@ -8481,8 +8833,8 @@ function validateFleetPlan(value) {
 		createdAt: value.createdAt,
 		expiresAt: value.expiresAt
 	};
-	validatePlanBody(body);
-	assertDigest(value.digest, "digest");
+	validatePlanBody$1(body);
+	assertDigest$1(value.digest, "digest");
 	const digest = sha256Canonical(body);
 	if (value.digest !== digest || value.planId !== "plan:" + digest) throw new FleetProtocolError("plan-integrity-failed", "plan id or digest does not match its canonical body");
 }
@@ -8496,12 +8848,12 @@ function asTimestamp(value, field) {
 }
 function validateFleetPlanApproval(plan, approval, now) {
 	validateFleetPlan(plan);
-	assertExactKeys(approval, APPROVAL_KEYS, "approval");
+	assertExactKeys$1(approval, APPROVAL_KEYS$1, "approval");
 	if (approval.protocolVersion !== 1) throw new FleetProtocolError("invalid-protocol", "unsupported approval protocol version");
 	assertNonEmpty(approval.approvalId, "approvalId");
 	assertNonEmpty(approval.principalId, "approval.principalId");
 	assertNonEmpty(approval.planId, "approval.planId");
-	assertDigest(approval.planDigest, "approval.planDigest");
+	assertDigest$1(approval.planDigest, "approval.planDigest");
 	assertNonEmpty(approval.deviceId, "approval.deviceId");
 	assertNonEmpty(approval.profile, "approval.profile");
 	const approvedAt = parseCanonicalTime(approval.approvedAt, "approvedAt");
@@ -8549,7 +8901,7 @@ const DEVICE_KEYS = [
 	"channel",
 	"labels"
 ];
-const PLUGIN_KEYS = [
+const PLUGIN_KEYS$1 = [
 	"id",
 	"spec",
 	"source",
@@ -8563,19 +8915,19 @@ const TARGET_KEYS = [
 	"classes",
 	"channels"
 ];
-function isRecord$1(value) {
+function isRecord$3(value) {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function rejectUnknownKeys(value, keys, label) {
-	if (!isRecord$1(value)) throw new FleetPlannerError("invalid-input", label + " must be an object");
+	if (!isRecord$3(value)) throw new FleetPlannerError("invalid-input", label + " must be an object");
 	const allowed = new Set(keys);
 	for (const key of Object.keys(value)) if (!allowed.has(key)) throw new FleetPlannerError("invalid-input", label + " contains unsupported field " + JSON.stringify(key));
 }
-function trimmed(value, field) {
+function trimmed$1(value, field) {
 	if (typeof value !== "string" || value.trim().length === 0) throw new FleetPlannerError("invalid-input", field + " must be a non-empty string");
 	return value.trim();
 }
-function canonicalNow(value) {
+function canonicalNow$1(value) {
 	const date = value instanceof Date ? new Date(value.getTime()) : new Date(value);
 	if (!Number.isFinite(date.getTime())) throw new FleetPlannerError("invalid-input", "now must be a valid timestamp");
 	return date.toISOString();
@@ -8590,8 +8942,8 @@ function targetsDevice(plugin, deviceId, device) {
 	return true;
 }
 function desiredExactSource(plugin) {
-	rejectUnknownKeys(plugin, PLUGIN_KEYS, "plugin");
-	const spec = trimmed(plugin.spec, "plugin.spec");
+	rejectUnknownKeys(plugin, PLUGIN_KEYS$1, "plugin");
+	const spec = trimmed$1(plugin.spec, "plugin.spec");
 	if (plugin.source === void 0) {
 		const sourceKind = exactSourceKind(spec);
 		if (sourceKind === null) throw new FleetPlannerError("unsupported-source", "stable plans require exact npm semver or github:owner/repo#40sha");
@@ -8600,9 +8952,9 @@ function desiredExactSource(plugin) {
 			exactToSpec: spec
 		};
 	}
-	const source = trimmed(plugin.source, "plugin.source");
+	const source = trimmed$1(plugin.source, "plugin.source");
 	if (source === "npm") {
-		const revision = trimmed(plugin.revision, "plugin.revision");
+		const revision = trimmed$1(plugin.revision, "plugin.revision");
 		if (spec !== revision || exactSourceKind(revision) !== "npm") throw new FleetPlannerError("unsupported-source", "npm plans require one exact semver revision");
 		return {
 			sourceKind: "npm",
@@ -8610,7 +8962,7 @@ function desiredExactSource(plugin) {
 		};
 	}
 	if (/^github:[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?\/[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/.test(source)) {
-		const revision = trimmed(plugin.revision, "plugin.revision");
+		const revision = trimmed$1(plugin.revision, "plugin.revision");
 		if (!/^[0-9a-fA-F]{40}$/.test(revision)) throw new FleetPlannerError("unsupported-source", "GitHub plans require a 40-hex commit revision");
 		const exactToSpec = source + "#" + revision.toLowerCase();
 		if (spec.toLowerCase() !== exactToSpec.toLowerCase()) throw new FleetPlannerError("unsupported-source", "plugin.spec must match its exact GitHub source and revision");
@@ -8631,13 +8983,13 @@ function createAgentPlan(input) {
 	rejectUnknownKeys(input, INPUT_KEYS, "planner input");
 	rejectUnknownKeys(input.manifest, MANIFEST_KEYS, "manifest");
 	rejectUnknownKeys(input.manifest.team, TEAM_KEYS, "manifest.team");
-	if (input.manifest.schemaVersion !== 1 || !Array.isArray(input.manifest.plugins) || !isRecord$1(input.manifest.devices)) throw new FleetPlannerError("invalid-input", "planner requires a parsed schemaVersion 1 manifest");
-	if (!isRecord$1(input.dependencies)) throw new FleetPlannerError("invalid-input", "dependencies must be an object");
-	const deviceId = trimmed(input.deviceId, "deviceId");
-	const profile = trimmed(input.profile, "profile");
-	const pluginId = trimmed(input.pluginId, "pluginId");
+	if (input.manifest.schemaVersion !== 1 || !Array.isArray(input.manifest.plugins) || !isRecord$3(input.manifest.devices)) throw new FleetPlannerError("invalid-input", "planner requires a parsed schemaVersion 1 manifest");
+	if (!isRecord$3(input.dependencies)) throw new FleetPlannerError("invalid-input", "dependencies must be an object");
+	const deviceId = trimmed$1(input.deviceId, "deviceId");
+	const profile = trimmed$1(input.profile, "profile");
+	const pluginId = trimmed$1(input.pluginId, "pluginId");
 	if (!isSafeNpmPackageName(pluginId)) throw new FleetPlannerError("invalid-input", "pluginId must be one literal lowercase npm package name");
-	const observedDshVersion = trimmed(input.observedDshVersion, "observedDshVersion");
+	const observedDshVersion = trimmed$1(input.observedDshVersion, "observedDshVersion");
 	if (!isSupportedDshVersion(observedDshVersion)) throw new FleetPlannerError("unsupported-dsh-version", "DSH version is outside the supported agent range");
 	const device = input.manifest.devices[deviceId];
 	if (device === void 0) throw new FleetPlannerError("unknown-device", "device is not registered in the manifest");
@@ -8647,7 +8999,7 @@ function createAgentPlan(input) {
 	const actualSpec = input.dependencies[pluginId];
 	if (actualSpec === exactToSpec) throw new FleetPlannerError("already-aligned", "plugin is already aligned; no plan is created");
 	if (actualSpec !== void 0 && (typeof actualSpec !== "string" || actualSpec.trim().length === 0)) throw new FleetPlannerError("invalid-input", "installed dependency spec must be a non-empty string");
-	const createdAt = canonicalNow(input.now);
+	const createdAt = canonicalNow$1(input.now);
 	const planTtlMs = input.planTtlMs ?? 3e5;
 	if (!Number.isSafeInteger(planTtlMs) || planTtlMs < 6e4 || planTtlMs > 36e5) throw new FleetPlannerError("invalid-input", "planTtlMs must be an integer from 60000 to 3600000");
 	const expiresAt = new Date(Date.parse(createdAt) + planTtlMs).toISOString();
@@ -8656,8 +9008,8 @@ function createAgentPlan(input) {
 			protocolVersion: 1,
 			deviceId,
 			profile,
-			manifestDigest: trimmed(input.manifestDigest, "manifestDigest").toLowerCase(),
-			profileHash: trimmed(input.profileHash, "profileHash").toLowerCase(),
+			manifestDigest: trimmed$1(input.manifestDigest, "manifestDigest").toLowerCase(),
+			profileHash: trimmed$1(input.profileHash, "profileHash").toLowerCase(),
 			observedDshVersion,
 			pluginId,
 			action: actualSpec === void 0 ? "install" : "update",
@@ -8671,6 +9023,390 @@ function createAgentPlan(input) {
 	} catch (error) {
 		if (error instanceof FleetProtocolError) throw error;
 		throw new FleetPlannerError("invalid-input", error instanceof Error ? error.message : String(error));
+	}
+}
+const PLAN_BODY_KEYS = [
+	"protocolVersion",
+	"kind",
+	"deviceId",
+	"profile",
+	"manifestDigest",
+	"profileHash",
+	"observedDshVersion",
+	"releaseId",
+	"releaseVersion",
+	"releaseDigest",
+	"plugins",
+	"changes",
+	"restartRequired",
+	"createdAt",
+	"expiresAt"
+];
+const PLAN_KEYS = [
+	...PLAN_BODY_KEYS,
+	"planId",
+	"digest"
+];
+const PLUGIN_KEYS = [
+	"pluginId",
+	"visibility",
+	"sourceKind",
+	"exactSpec",
+	"artifactDigest",
+	"packageVersion",
+	"integrity",
+	"runtimeModules"
+];
+const CHANGE_KEYS = [
+	"pluginId",
+	"visibility",
+	"sourceKind",
+	"action",
+	"fromSpecDigest",
+	"exactToSpec",
+	"artifactDigest"
+];
+const APPROVAL_KEYS = [
+	"protocolVersion",
+	"kind",
+	"approvalId",
+	"principalId",
+	"planId",
+	"planDigest",
+	"deviceId",
+	"profile",
+	"approvedAt",
+	"expiresAt"
+];
+const APPLIED_KEYS = [
+	"schemaVersion",
+	"deviceId",
+	"profile",
+	"releaseId",
+	"releaseVersion",
+	"releaseDigest",
+	"plugins",
+	"appliedAt"
+];
+function isRecord$2(value) {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function assertExactKeys(value, keys, label) {
+	if (!isRecord$2(value)) throw new FleetProtocolError("invalid-payload", label + " must be an object");
+	const expected = new Set(keys);
+	for (const key of Object.keys(value)) if (!expected.has(key)) throw new FleetProtocolError("invalid-payload", label + " contains unsupported field " + JSON.stringify(key));
+	for (const key of keys) if (!Object.hasOwn(value, key)) throw new FleetProtocolError("invalid-payload", label + " is missing field " + JSON.stringify(key));
+}
+function assertString(value, field) {
+	if (typeof value !== "string" || value.length === 0 || value !== value.trim()) throw new FleetProtocolError("invalid-payload", field + " must be a trimmed non-empty string");
+}
+function assertIdentifier(value, field) {
+	assertString(value, field);
+	if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(value)) throw new FleetProtocolError("invalid-payload", field + " contains unsupported characters");
+}
+function assertDigest(value, field) {
+	if (typeof value !== "string" || !/^[0-9a-f]{64}$/.test(value)) throw new FleetProtocolError("invalid-digest", field + " must be a lowercase SHA-256 digest");
+}
+function parseTime(value, field) {
+	if (typeof value !== "string") throw new FleetProtocolError("invalid-time", field + " must be a canonical ISO timestamp");
+	const timestamp = Date.parse(value);
+	if (!Number.isFinite(timestamp) || new Date(timestamp).toISOString() !== value) throw new FleetProtocolError("invalid-time", field + " must be a canonical ISO timestamp");
+	return timestamp;
+}
+function assertVisibility(value, field) {
+	if (value !== "public" && value !== "private") throw new FleetProtocolError("invalid-payload", field + " must be public or private");
+}
+function assertSourceKind(value, field) {
+	if (value !== "npm" && value !== "github" && value !== "artifact") throw new FleetProtocolError("unsupported-source", field + " must be npm, github or artifact");
+}
+function validateExactSource(sourceKind, exactSpec, artifactDigest, visibility) {
+	if (sourceKind === "npm") {
+		if (visibility !== "public" || (0, import_semver.valid)(exactSpec) !== exactSpec || artifactDigest !== null) throw new FleetProtocolError("unsupported-source", "npm bindings require a public exact semantic version");
+		return;
+	}
+	if (sourceKind === "github") {
+		if (visibility !== "public" || !/^github:[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?\/[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?#[0-9a-f]{40}$/.test(exactSpec) || artifactDigest !== null) throw new FleetProtocolError("unsupported-source", "GitHub bindings require a public repository and exact lowercase commit SHA");
+		return;
+	}
+	if (visibility !== "private" || artifactDigest === null) throw new FleetProtocolError("unsupported-source", "artifact bindings must be private and content addressed");
+	assertDigest(artifactDigest, "artifactDigest");
+	if (exactSpec !== "artifact:sha256:" + artifactDigest) throw new FleetProtocolError("unsupported-source", "artifact exactSpec must bind its SHA-256 digest");
+}
+function validatePlugin(value, index) {
+	const field = `plugins[${index}]`;
+	assertExactKeys(value, PLUGIN_KEYS, field);
+	assertString(value.pluginId, field + ".pluginId");
+	if (!isSafeNpmPackageName(value.pluginId)) throw new FleetProtocolError("invalid-payload", field + ".pluginId is invalid");
+	assertVisibility(value.visibility, field + ".visibility");
+	assertSourceKind(value.sourceKind, field + ".sourceKind");
+	assertString(value.exactSpec, field + ".exactSpec");
+	if (value.artifactDigest !== null) assertDigest(value.artifactDigest, field + ".artifactDigest");
+	if (value.packageVersion !== null && (0, import_semver.valid)(value.packageVersion) !== value.packageVersion) throw new FleetProtocolError("invalid-payload", field + ".packageVersion must be an exact semantic version or null");
+	if (value.integrity !== null && !/^sha512-[A-Za-z0-9+/]+={0,2}$/.test(value.integrity)) throw new FleetProtocolError("invalid-payload", field + ".integrity must be one SHA-512 SRI value or null");
+	if (!Array.isArray(value.runtimeModules) || value.runtimeModules.length === 0 || value.runtimeModules.some((module) => typeof module !== "string" || module.length === 0 || module !== module.trim())) throw new FleetProtocolError("invalid-payload", field + ".runtimeModules must contain trimmed non-empty strings");
+	validateExactSource(value.sourceKind, value.exactSpec, value.artifactDigest, value.visibility);
+	if (value.sourceKind === "npm" && (value.packageVersion !== value.exactSpec || value.integrity === null)) throw new FleetProtocolError("unsupported-source", "npm release bindings require version and integrity locks");
+	if (value.sourceKind === "github" && (value.packageVersion !== null || value.integrity !== null)) throw new FleetProtocolError("unsupported-source", "GitHub release bindings do not accept packageVersion or integrity");
+	if (value.sourceKind === "artifact" && (value.packageVersion === null || value.integrity !== null)) throw new FleetProtocolError("unsupported-source", "artifact release bindings require packageVersion and use digest instead of SRI");
+}
+function validateChange(value, index) {
+	const field = `changes[${index}]`;
+	assertExactKeys(value, CHANGE_KEYS, field);
+	assertString(value.pluginId, field + ".pluginId");
+	if (!isSafeNpmPackageName(value.pluginId)) throw new FleetProtocolError("invalid-payload", field + ".pluginId is invalid");
+	assertVisibility(value.visibility, field + ".visibility");
+	assertSourceKind(value.sourceKind, field + ".sourceKind");
+	if (value.action !== "install" && value.action !== "update" && value.action !== "remove") throw new FleetProtocolError("invalid-action", field + ".action must be install, update or remove");
+	if (value.action === "install" ? value.fromSpecDigest !== null : value.fromSpecDigest === null) throw new FleetProtocolError("invalid-action", field + ".fromSpecDigest does not match its action");
+	if (value.fromSpecDigest !== null) assertDigest(value.fromSpecDigest, field + ".fromSpecDigest");
+	if (value.action === "remove") {
+		if (value.exactToSpec !== null || value.artifactDigest !== null) throw new FleetProtocolError("invalid-action", "remove changes must not contain a target spec or artifact digest");
+	} else {
+		assertString(value.exactToSpec, field + ".exactToSpec");
+		if (value.artifactDigest !== null) assertDigest(value.artifactDigest, field + ".artifactDigest");
+		validateExactSource(value.sourceKind, value.exactToSpec, value.artifactDigest, value.visibility);
+	}
+}
+function validatePlanBody(value) {
+	assertExactKeys(value, PLAN_BODY_KEYS, "release plan body");
+	if (value.protocolVersion !== 1 || value.kind !== "profile-release") throw new FleetProtocolError("invalid-protocol", "unsupported release protocol");
+	assertIdentifier(value.deviceId, "deviceId");
+	assertIdentifier(value.profile, "profile");
+	assertDigest(value.manifestDigest, "manifestDigest");
+	assertDigest(value.profileHash, "profileHash");
+	assertString(value.observedDshVersion, "observedDshVersion");
+	if (!isSupportedDshVersion(value.observedDshVersion)) throw new FleetProtocolError("unsupported-dsh-version", "DSH version is outside the supported Agent range");
+	assertIdentifier(value.releaseId, "releaseId");
+	assertString(value.releaseVersion, "releaseVersion");
+	if ((0, import_semver.valid)(value.releaseVersion) !== value.releaseVersion) throw new FleetProtocolError("invalid-payload", "releaseVersion must be an exact semantic version");
+	assertDigest(value.releaseDigest, "releaseDigest");
+	if (!Array.isArray(value.plugins) || value.plugins.length === 0) throw new FleetProtocolError("invalid-payload", "plugins must not be empty");
+	value.plugins.forEach(validatePlugin);
+	if (!Array.isArray(value.changes)) throw new FleetProtocolError("invalid-payload", "changes must be an array");
+	value.changes.forEach(validateChange);
+	const pluginIds = value.plugins.map((plugin) => plugin.pluginId);
+	const changeIds = value.changes.map((change) => change.pluginId);
+	if (new Set(pluginIds).size !== pluginIds.length || new Set(changeIds).size !== changeIds.length) throw new FleetProtocolError("invalid-payload", "plugin and change ids must be unique");
+	if (pluginIds.some((id, index) => index > 0 && id <= pluginIds[index - 1]) || changeIds.some((id, index) => index > 0 && id <= changeIds[index - 1])) throw new FleetProtocolError("invalid-payload", "plugins and changes must be sorted by pluginId");
+	const finalIds = new Set(pluginIds);
+	for (const change of value.changes) if (change.action === "remove" ? finalIds.has(change.pluginId) : !finalIds.has(change.pluginId)) throw new FleetProtocolError("invalid-action", "change set does not match the final plugin set");
+	if (value.restartRequired !== value.changes.length > 0) throw new FleetProtocolError("invalid-payload", "restartRequired must reflect whether the release changes the profile");
+	const expectedReleaseDigest = sha256Canonical({
+		releaseId: value.releaseId,
+		releaseVersion: value.releaseVersion,
+		profile: value.profile,
+		plugins: value.plugins
+	});
+	if (value.releaseDigest !== expectedReleaseDigest) throw new FleetProtocolError("plan-integrity-failed", "releaseDigest does not match the final release");
+	const createdAt = parseTime(value.createdAt, "createdAt");
+	if (parseTime(value.expiresAt, "expiresAt") <= createdAt) throw new FleetProtocolError("invalid-time", "expiresAt must be after createdAt");
+}
+function createFleetReleasePlan(body) {
+	validatePlanBody(body);
+	const digest = sha256Canonical(body);
+	return Object.freeze({
+		...body,
+		planId: "release-plan:" + digest,
+		digest
+	});
+}
+function validateFleetReleasePlan(value) {
+	assertExactKeys(value, PLAN_KEYS, "release plan");
+	const body = Object.fromEntries(PLAN_BODY_KEYS.map((key) => [key, value[key]]));
+	validatePlanBody(body);
+	assertDigest(value.digest, "digest");
+	const digest = sha256Canonical(body);
+	if (value.digest !== digest || value.planId !== "release-plan:" + digest) throw new FleetProtocolError("plan-integrity-failed", "release plan id or digest does not match its canonical body");
+}
+function validateFleetReleaseApproval(plan, approval, now) {
+	validateFleetReleasePlan(plan);
+	assertExactKeys(approval, APPROVAL_KEYS, "release approval");
+	if (approval.protocolVersion !== 1 || approval.kind !== "profile-release") throw new FleetProtocolError("invalid-protocol", "unsupported release approval protocol");
+	for (const [field, value] of Object.entries({
+		approvalId: approval.approvalId,
+		principalId: approval.principalId,
+		planId: approval.planId,
+		deviceId: approval.deviceId,
+		profile: approval.profile
+	})) assertString(value, field);
+	assertDigest(approval.planDigest, "planDigest");
+	const approvedAt = parseTime(approval.approvedAt, "approvedAt");
+	const expiresAt = parseTime(approval.expiresAt, "approval.expiresAt");
+	const nowAt = now instanceof Date ? now.getTime() : parseTime(now, "now");
+	if (!Number.isFinite(nowAt)) throw new FleetProtocolError("invalid-time", "now is invalid");
+	if (expiresAt <= approvedAt || approvedAt < Date.parse(plan.createdAt) || approvedAt >= Date.parse(plan.expiresAt)) throw new FleetProtocolError("approval-mismatch", "approval time is outside the release plan validity window");
+	if (nowAt >= Date.parse(plan.expiresAt)) throw new FleetProtocolError("plan-expired", "release plan has expired");
+	if (nowAt >= expiresAt) throw new FleetProtocolError("approval-expired", "release approval has expired");
+	if (approval.planId !== plan.planId || approval.planDigest !== plan.digest || approval.deviceId !== plan.deviceId || approval.profile !== plan.profile) throw new FleetProtocolError("approval-mismatch", "release approval does not match its plan");
+	return { idempotencyKey: sha256Canonical({
+		planDigest: plan.digest,
+		approval: JSON.parse(canonicalJson(approval))
+	}) };
+}
+function validateFleetAppliedRelease(value) {
+	assertExactKeys(value, APPLIED_KEYS, "applied release");
+	if (value.schemaVersion !== 1) throw new FleetProtocolError("invalid-protocol", "unsupported applied release schema");
+	assertIdentifier(value.deviceId, "deviceId");
+	assertIdentifier(value.profile, "profile");
+	assertIdentifier(value.releaseId, "releaseId");
+	assertString(value.releaseVersion, "releaseVersion");
+	if ((0, import_semver.valid)(value.releaseVersion) !== value.releaseVersion) throw new FleetProtocolError("invalid-payload", "releaseVersion must be exact");
+	assertDigest(value.releaseDigest, "releaseDigest");
+	if (!Array.isArray(value.plugins) || value.plugins.length === 0) throw new FleetProtocolError("invalid-payload", "plugins must not be empty");
+	value.plugins.forEach(validatePlugin);
+	const ids = value.plugins.map((plugin) => plugin.pluginId);
+	if (new Set(ids).size !== ids.length || ids.some((id, index) => index > 0 && id <= ids[index - 1])) throw new FleetProtocolError("invalid-payload", "applied release plugins must be unique and sorted");
+	parseTime(value.appliedAt, "appliedAt");
+	if (sha256Canonical({
+		releaseId: value.releaseId,
+		releaseVersion: value.releaseVersion,
+		profile: value.profile,
+		plugins: value.plugins
+	}) !== value.releaseDigest) throw new FleetProtocolError("plan-integrity-failed", "applied release digest is invalid");
+}
+var FleetReleasePlannerError = class extends Error {
+	code;
+	constructor(code, message) {
+		super(message);
+		this.name = "FleetReleasePlannerError";
+		this.code = code;
+	}
+};
+function trimmed(value, field) {
+	if (typeof value !== "string" || value.length === 0 || value !== value.trim()) throw new FleetReleasePlannerError("invalid-input", field + " must be a trimmed non-empty string");
+	return value;
+}
+function digest$1(value) {
+	return createHash("sha256").update(value, "utf8").digest("hex");
+}
+function binding(plugin) {
+	const runtimeModules = [...plugin.runtimeModules ?? [plugin.id]].sort();
+	if (plugin.source.kind === "npm") {
+		if (plugin.source.integrity === void 0) throw new FleetReleasePlannerError("invalid-input", "atomic npm releases require a SHA-512 integrity lock for " + plugin.id);
+		return {
+			pluginId: plugin.id,
+			visibility: plugin.visibility,
+			sourceKind: "npm",
+			exactSpec: plugin.source.version,
+			artifactDigest: null,
+			packageVersion: plugin.source.version,
+			integrity: plugin.source.integrity,
+			runtimeModules
+		};
+	}
+	if (plugin.source.kind === "github") return {
+		pluginId: plugin.id,
+		visibility: plugin.visibility,
+		sourceKind: "github",
+		exactSpec: "github:" + plugin.source.repository + "#" + plugin.source.revision,
+		artifactDigest: null,
+		packageVersion: null,
+		integrity: null,
+		runtimeModules
+	};
+	return {
+		pluginId: plugin.id,
+		visibility: plugin.visibility,
+		sourceKind: "artifact",
+		exactSpec: "artifact:sha256:" + plugin.source.digest,
+		artifactDigest: plugin.source.digest,
+		packageVersion: plugin.source.version,
+		integrity: null,
+		runtimeModules
+	};
+}
+function assignedRelease(input) {
+	if (input.manifest.schemaVersion !== 2 || input.manifest.v2 === void 0) throw new FleetReleasePlannerError("invalid-input", "atomic release planning requires a parsed schemaVersion 2 manifest");
+	const device = input.manifest.devices[input.deviceId];
+	if (device === void 0) throw new FleetReleasePlannerError("unknown-device", "device is not registered in the manifest");
+	if (device.channel !== "stable") throw new FleetReleasePlannerError("device-not-stable", "atomic release planning is enabled only for stable devices");
+	const releaseId = input.manifest.v2.assignments[input.deviceId]?.[input.profile];
+	if (releaseId === void 0) throw new FleetReleasePlannerError("release-not-assigned", "no profile release is assigned to this device and profile");
+	const release = input.manifest.v2.profileReleases[releaseId];
+	if (release === void 0 || release.profile !== input.profile) throw new FleetReleasePlannerError("invalid-input", "assigned release is missing or targets a different profile");
+	return release;
+}
+function currentMatches(binding, actualSpec, artifactDigests) {
+	if (actualSpec === void 0) return false;
+	return binding.sourceKind === "artifact" ? artifactDigests[binding.pluginId] === binding.artifactDigest : actualSpec === binding.exactSpec;
+}
+function buildChanges(plugins, dependencies, artifactDigests, previous) {
+	const finalIds = new Set(plugins.map((plugin) => plugin.pluginId));
+	const changes = [];
+	for (const plugin of plugins) {
+		const actualSpec = dependencies[plugin.pluginId];
+		if (currentMatches(plugin, actualSpec, artifactDigests)) continue;
+		changes.push({
+			pluginId: plugin.pluginId,
+			visibility: plugin.visibility,
+			sourceKind: plugin.sourceKind,
+			action: actualSpec === void 0 ? "install" : "update",
+			fromSpecDigest: actualSpec === void 0 ? null : digest$1(actualSpec),
+			exactToSpec: plugin.exactSpec,
+			artifactDigest: plugin.artifactDigest
+		});
+	}
+	for (const plugin of previous?.plugins ?? []) {
+		if (finalIds.has(plugin.pluginId)) continue;
+		const actualSpec = dependencies[plugin.pluginId];
+		if (actualSpec === void 0) continue;
+		changes.push({
+			pluginId: plugin.pluginId,
+			visibility: plugin.visibility,
+			sourceKind: plugin.sourceKind,
+			action: "remove",
+			fromSpecDigest: digest$1(actualSpec),
+			exactToSpec: null,
+			artifactDigest: null
+		});
+	}
+	return changes.sort((a, b) => a.pluginId.localeCompare(b.pluginId));
+}
+function canonicalNow(value) {
+	const date = value instanceof Date ? new Date(value.getTime()) : new Date(value);
+	if (!Number.isFinite(date.getTime())) throw new FleetReleasePlannerError("invalid-input", "now must be a valid timestamp");
+	return date.toISOString();
+}
+function createReleasePlan(input) {
+	const deviceId = trimmed(input.deviceId, "deviceId");
+	const profile = trimmed(input.profile, "profile");
+	if (deviceId !== input.deviceId || profile !== input.profile) throw new FleetReleasePlannerError("invalid-input", "identity fields must be canonical");
+	const observedDshVersion = trimmed(input.observedDshVersion, "observedDshVersion");
+	if (!isSupportedDshVersion(observedDshVersion)) throw new FleetReleasePlannerError("unsupported-dsh-version", "DSH version is outside the supported Agent range");
+	const release = assignedRelease(input);
+	if (!(0, import_semver.satisfies)(observedDshVersion, release.dshRange, { includePrerelease: true })) throw new FleetReleasePlannerError("release-incompatible", "assigned release does not support the observed DSH version");
+	const plugins = release.plugins.map(binding).sort((a, b) => a.pluginId.localeCompare(b.pluginId));
+	const changes = buildChanges(plugins, input.dependencies, input.artifactDigests ?? {}, input.appliedRelease);
+	const createdAt = canonicalNow(input.now);
+	const planTtlMs = input.planTtlMs ?? 6e5;
+	if (!Number.isSafeInteger(planTtlMs) || planTtlMs < 6e4 || planTtlMs > 36e5) throw new FleetReleasePlannerError("invalid-input", "planTtlMs must be an integer from 60000 to 3600000");
+	const releaseDigest = sha256Canonical({
+		releaseId: release.id,
+		releaseVersion: release.version,
+		profile,
+		plugins
+	});
+	try {
+		return createFleetReleasePlan({
+			protocolVersion: 1,
+			kind: "profile-release",
+			deviceId,
+			profile,
+			manifestDigest: trimmed(input.manifestDigest, "manifestDigest").toLowerCase(),
+			profileHash: trimmed(input.profileHash, "profileHash").toLowerCase(),
+			observedDshVersion,
+			releaseId: release.id,
+			releaseVersion: release.version,
+			releaseDigest,
+			plugins,
+			changes,
+			restartRequired: changes.length > 0,
+			createdAt,
+			expiresAt: new Date(Date.parse(createdAt) + planTtlMs).toISOString()
+		});
+	} catch (error) {
+		if (error instanceof FleetProtocolError) throw error;
+		throw new FleetReleasePlannerError("invalid-input", error instanceof Error ? error.message : String(error));
 	}
 }
 //#endregion
@@ -8937,7 +9673,7 @@ function actionPath(config, planId) {
 	if (!/^plan:[0-9a-f]{64}$/.test(planId)) throw new AgentRuntimeError("invalid-plan-id", "plan id is invalid");
 	return join(config.stateDir, "actions", planId.slice(5) + ".json");
 }
-async function atomicJson(path, value) {
+async function atomicJson$1(path, value) {
 	const directory = dirname(path);
 	await ensureDurableDirectory(directory);
 	const temporary = path + "." + randomUUID() + ".tmp";
@@ -9100,7 +9836,7 @@ async function saveAction(config, record, state, fields = {}) {
 		state,
 		updatedAt: (/* @__PURE__ */ new Date()).toISOString()
 	};
-	await atomicJson(actionPath(config, record.planId), next);
+	await atomicJson$1(actionPath(config, record.planId), next);
 	return next;
 }
 function transitionAction(record, state, fields = {}) {
@@ -9114,7 +9850,7 @@ function transitionAction(record, state, fields = {}) {
 async function saveActionBestEffort(config, record, state, fields = {}) {
 	const next = transitionAction(record, state, fields);
 	try {
-		await atomicJson(actionPath(config, record.planId), next);
+		await atomicJson$1(actionPath(config, record.planId), next);
 		return {
 			record: next,
 			failed: false
@@ -9151,7 +9887,7 @@ async function snapshotProfile(config, plan, profile) {
 		} else present[name] = false;
 	}
 	if (profile.directoryPresent && (present["package.json"] !== true || present["pnpm-lock.yaml"] !== true)) throw new AgentRuntimeError("profile-not-snapshotable", "an existing profile requires package.json and pnpm-lock.yaml for rollback");
-	await atomicJson(join(destination, "snapshot.json"), {
+	await atomicJson$1(join(destination, "snapshot.json"), {
 		planId: plan.planId,
 		digest: plan.digest,
 		manifestDigest: plan.manifestDigest,
@@ -9219,11 +9955,55 @@ async function restoreProfile(config, plan) {
 	});
 	if (await computeProfileHash(config) !== plan.profileHash) throw new AgentRuntimeError("rollback-profile-mismatch", "restored profile does not match the approved snapshot");
 }
-async function restartDsh(config, signal) {
+async function listenerPids(config, port, signal) {
+	if (config.restart.kind === "none") return [];
+	const listeners = await runFile(config.restart.lsofBinary, [
+		"-nP",
+		"-t",
+		"-iTCP:" + String(port),
+		"-sTCP:LISTEN"
+	], {
+		env: controlledEnv(config),
+		timeoutMs: 1e4,
+		allowFailure: true,
+		signal
+	});
+	const pids = listeners.stdout.trim() === "" ? [] : listeners.stdout.trim().split(/\s+/).map((value) => Number(value));
+	if (pids.some((pid) => !Number.isSafeInteger(pid) || pid <= 0) || pids.length > 1) throw new AgentRuntimeError("restart-owner-ambiguous", "DSH restart found an ambiguous listener owner");
+	return pids;
+}
+async function verifyListenerOwner(config, pid, port, signal) {
+	if (config.restart.kind === "none") throw new AgentRuntimeError("unsafe-mutation-config", "restart owner is not configured");
+	const command = (await runFile(config.restart.psBinary, [
+		"-p",
+		String(pid),
+		"-o",
+		"command="
+	], {
+		env: controlledEnv(config),
+		timeoutMs: 1e4,
+		signal
+	})).stdout.trim();
+	const hasOwnerMarker = config.restart.ownerMarkers.some((marker) => command.includes(marker));
+	const isMainPort = port === config.restart.port;
+	const hasWebToken = /(?:^|\s)web(?:\s|$)/.test(command);
+	const hasPort = command.includes("--port " + String(config.restart.port));
+	if (!hasOwnerMarker || isMainPort && (!hasWebToken || !hasPort)) throw new AgentRuntimeError("restart-owner-mismatch", "configured port is not owned by a recognizable DSH process");
+}
+async function stopDsh(config, signal) {
 	assertMutationReadyConfig(config);
 	throwIfAborted(signal);
 	const env = controlledEnv(config);
-	await runFile(config.restart.screenBinary, [
+	const ports = config.restart.managedPorts ?? [config.restart.port];
+	const owners = /* @__PURE__ */ new Map();
+	for (const port of ports) {
+		const pid = (await listenerPids(config, port, signal))[0];
+		if (pid !== void 0) {
+			await verifyListenerOwner(config, pid, port, signal);
+			owners.set(port, pid);
+		}
+	}
+	if (config.restart.kind === "screen") await runFile(config.restart.screenBinary, [
 		"-S",
 		config.restart.sessionName,
 		"-X",
@@ -9234,69 +10014,73 @@ async function restartDsh(config, signal) {
 		allowFailure: true,
 		signal
 	});
-	const listeners = await runFile(config.restart.lsofBinary, [
-		"-nP",
-		"-t",
-		"-iTCP:" + String(config.restart.port),
-		"-sTCP:LISTEN"
+	else await runFile(config.restart.launchctlBinary, [
+		"kill",
+		"SIGTERM",
+		config.restart.serviceTarget
 	], {
 		env,
 		timeoutMs: 1e4,
-		allowFailure: true,
+		allowFailure: owners.size === 0,
 		signal
 	});
-	const pids = listeners.stdout.trim() === "" ? [] : listeners.stdout.trim().split(/\s+/).map((value) => Number(value));
-	if (pids.some((pid) => !Number.isSafeInteger(pid) || pid <= 0) || pids.length > 1) throw new AgentRuntimeError("restart-owner-ambiguous", "DSH restart found an ambiguous listener owner");
-	const listenerPid = pids[0];
-	if (listenerPid !== void 0) {
-		const command = (await runFile(config.restart.psBinary, [
-			"-p",
-			String(listenerPid),
-			"-o",
-			"command="
+	const deadline = Date.now() + 5e3;
+	while (Date.now() < deadline) {
+		throwIfAborted(signal);
+		if ((await Promise.all(ports.map((port) => listenerPids(config, port, signal)))).flat().length === 0) return;
+		await new Promise((resolve) => setTimeout(resolve, 100));
+	}
+	if (config.restart.kind === "screen") {
+		for (const pid of new Set(owners.values())) try {
+			process.kill(pid, "SIGTERM");
+		} catch (error) {
+			if (error.code !== "ESRCH") throw error;
+		}
+		await new Promise((resolve) => setTimeout(resolve, 500));
+		for (const pid of new Set(owners.values())) if (await processIsAlive(pid)) try {
+			process.kill(pid, "SIGKILL");
+		} catch (error) {
+			if (error.code !== "ESRCH") throw error;
+		}
+		if ((await Promise.all(ports.map((port) => listenerPids(config, port, signal)))).flat().length === 0) return;
+	}
+	throw new AgentRuntimeError("restart-cleanup-failed", "managed DSH listeners did not exit cleanly");
+}
+async function startDsh(config, signal) {
+	assertMutationReadyConfig(config);
+	throwIfAborted(signal);
+	const env = controlledEnv(config);
+	if (config.restart.kind === "screen") {
+		if ((await runFile(config.restart.screenBinary, [
+			"-dmS",
+			config.restart.sessionName,
+			"/usr/bin/env",
+			"DSH_HOME=" + config.dshHome,
+			"PATH=" + env.PATH,
+			config.dshBinary,
+			"web",
+			"--host",
+			config.restart.host,
+			"--port",
+			String(config.restart.port)
 		], {
 			env,
 			timeoutMs: 1e4,
+			allowFailure: true,
+			ignoreOutput: true,
 			signal
-		})).stdout.trim();
-		const hasWebToken = /(?:^|\s)web(?:\s|$)/.test(command);
-		const hasPort = command.includes("--port " + String(config.restart.port));
-		if (!config.restart.ownerMarkers.some((marker) => command.includes(marker)) || !hasWebToken || !hasPort) throw new AgentRuntimeError("restart-owner-mismatch", "configured port is not owned by a recognizable DSH Web process");
-		try {
-			process.kill(listenerPid, "SIGTERM");
-		} catch (error) {
-			if (error.code !== "ESRCH") throw error;
-		}
-		const deadline = Date.now() + 5e3;
-		while (Date.now() < deadline && await processIsAlive(listenerPid)) {
-			throwIfAborted(signal);
-			await new Promise((resolve) => setTimeout(resolve, 100));
-		}
-		if (await processIsAlive(listenerPid)) try {
-			process.kill(listenerPid, "SIGKILL");
-		} catch (error) {
-			if (error.code !== "ESRCH") throw error;
-		}
+		})).code !== 0) throw new AgentRuntimeError("restart-failed", "DSH restart failed");
+		return;
 	}
-	if ((await runFile(config.restart.screenBinary, [
-		"-dmS",
-		config.restart.sessionName,
-		"/usr/bin/env",
-		"DSH_HOME=" + config.dshHome,
-		"PATH=" + env.PATH,
-		config.dshBinary,
-		"web",
-		"--host",
-		config.restart.host,
-		"--port",
-		String(config.restart.port)
-	], {
+	await runFile(config.restart.launchctlBinary, ["kickstart", config.restart.serviceTarget], {
 		env,
 		timeoutMs: 1e4,
-		allowFailure: true,
-		ignoreOutput: true,
 		signal
-	})).code !== 0) throw new AgentRuntimeError("restart-failed", "DSH restart failed");
+	});
+}
+async function restartDsh(config, signal) {
+	await stopDsh(config, signal);
+	await startDsh(config, signal);
 }
 async function waitForHttp(url, timeoutMs, signal) {
 	const deadline = Date.now() + timeoutMs;
@@ -9315,7 +10099,7 @@ async function waitForHttp(url, timeoutMs, signal) {
 	}
 	throw new AgentRuntimeError("health-timeout", "DSH health endpoint did not recover before timeout");
 }
-async function verifyHealth(config, plan, signal) {
+async function verifyHealth(config, plan, signal, expectedPluginIds = []) {
 	assertMutationReadyConfig(config);
 	await runFile(config.dshBinary, [
 		"--profile",
@@ -9334,7 +10118,8 @@ async function verifyHealth(config, plan, signal) {
 	await waitForHttp(config.health.url, config.health.timeoutMs, signal);
 	const endpoint = new URL("/dsh-fleet/status", config.health.url);
 	const deadline = Date.now() + config.health.timeoutMs;
-	let targetPending = plan !== void 0;
+	const targetIds = plan === void 0 ? [...expectedPluginIds] : [plan.pluginId];
+	let targetPending = targetIds.length > 0;
 	let runtimeFailed = false;
 	while (Date.now() < deadline) {
 		throwIfAborted(signal);
@@ -9358,8 +10143,8 @@ async function verifyHealth(config, plan, signal) {
 				const failedModules = body.result?.value?.runtime?.failedModules;
 				runtimeFailed = Array.isArray(failedModules) && failedModules.length > 0;
 				const fleetHealthy = body.rpcId === rpcId && body.result?.ok === true && body.result.value?.summary?.failed === 0 && Array.isArray(failedModules) && failedModules.length === 0;
-				const target = plan === void 0 ? void 0 : body.result?.value?.plugins?.find((item) => item.id === plan.pluginId);
-				targetPending = plan !== void 0 && target?.state !== "aligned";
+				const plugins = body.result?.value?.plugins ?? [];
+				targetPending = targetIds.some((id) => plugins.find((item) => item.id === id)?.state !== "aligned");
 				if (fleetHealthy && !targetPending) return;
 			}
 		} catch {
@@ -9446,7 +10231,7 @@ async function createStoredPlan(config, pluginId, now = /* @__PURE__ */ new Date
 		profile: config.profile,
 		planTtlMs: config.planTtlMs
 	});
-	await atomicJson(planPath(config, plan.planId), plan);
+	await atomicJson$1(planPath(config, plan.planId), plan);
 	await audit(config, {
 		type: "plan/created",
 		planId: plan.planId,
@@ -9635,6 +10420,572 @@ async function readOrRecoverAction(config, planId) {
 		return recoverInterrupted(config, plan, record);
 	});
 }
+function releasePlanPath(config, planId) {
+	if (!/^release-plan:[0-9a-f]{64}$/.test(planId)) throw new AgentRuntimeError("invalid-plan-id", "release plan id is invalid");
+	return join(config.stateDir, "release-plans", planId.slice(13) + ".json");
+}
+function releaseActionPath(config, planId) {
+	if (!/^release-plan:[0-9a-f]{64}$/.test(planId)) throw new AgentRuntimeError("invalid-plan-id", "release plan id is invalid");
+	return join(config.stateDir, "release-actions", planId.slice(13) + ".json");
+}
+function appliedReleasePath(config) {
+	return join(config.stateDir, "releases", config.profile + ".json");
+}
+function releaseProfileNames(plan) {
+	const suffix = plan.digest.slice(0, 24);
+	return {
+		stageProfile: "fleet-stage-" + suffix,
+		backupProfile: "fleet-backup-" + suffix,
+		failedProfile: "fleet-failed-" + suffix
+	};
+}
+async function regularDirectoryExists(path) {
+	try {
+		const info = await lstat(path);
+		if (info.isSymbolicLink() || !info.isDirectory()) throw new AgentRuntimeError("unsafe-profile-directory", "release swap paths must be regular directories");
+		return true;
+	} catch (error) {
+		if (error.code === "ENOENT") return false;
+		throw error;
+	}
+}
+async function readAppliedRelease(config) {
+	const value = await readJson(appliedReleasePath(config));
+	if (value === null) return null;
+	validateFleetAppliedRelease(value);
+	if (value.deviceId !== config.deviceId || value.profile !== config.profile) throw new AgentRuntimeError("applied-release-mismatch", "applied release identity does not match this Agent");
+	return value;
+}
+async function currentArtifactDigests(config, state) {
+	const releaseId = state.manifest.v2?.assignments[config.deviceId]?.[config.profile];
+	const release = releaseId === void 0 ? void 0 : state.manifest.v2?.profileReleases[releaseId];
+	const entries = await Promise.all((release?.plugins ?? []).filter((plugin) => plugin.source.kind === "artifact").map(async (plugin) => {
+		const actualSpec = state.dependencies[plugin.id];
+		if (actualSpec === void 0) return null;
+		const digest = await digestInstalledArtifact(profileDir(config), config.artifactStore, actualSpec);
+		return digest === void 0 ? null : [plugin.id, digest];
+	}));
+	return Object.fromEntries(entries.filter((entry) => entry !== null));
+}
+async function buildReleasePlan(config, now, signal) {
+	const state = await loadState(config, signal);
+	const appliedRelease = await readAppliedRelease(config);
+	return {
+		plan: createReleasePlan({
+			manifest: state.manifest,
+			manifestDigest: state.manifestDigest,
+			dependencies: state.dependencies,
+			artifactDigests: await currentArtifactDigests(config, state),
+			appliedRelease,
+			profileHash: state.profileHash,
+			observedDshVersion: state.dshVersion,
+			now,
+			deviceId: config.deviceId,
+			profile: config.profile,
+			planTtlMs: config.planTtlMs
+		}),
+		state,
+		appliedRelease
+	};
+}
+async function inspectReleaseAgent(config, now = /* @__PURE__ */ new Date(), signal) {
+	assertReleaseReadyConfig(config);
+	const { plan, appliedRelease } = await buildReleasePlan(config, now, signal);
+	return {
+		protocolVersion: 1,
+		kind: "profile-release",
+		deviceId: plan.deviceId,
+		profile: plan.profile,
+		dshVersion: plan.observedDshVersion,
+		manifestDigest: plan.manifestDigest,
+		profileHash: plan.profileHash,
+		currentRelease: appliedRelease === null ? null : {
+			releaseId: appliedRelease.releaseId,
+			releaseVersion: appliedRelease.releaseVersion,
+			releaseDigest: appliedRelease.releaseDigest
+		},
+		assignedRelease: {
+			releaseId: plan.releaseId,
+			releaseVersion: plan.releaseVersion,
+			releaseDigest: plan.releaseDigest
+		},
+		changes: plan.changes,
+		tasks: {
+			enabled: config.tasks?.enabled === true && config.a2a !== void 0,
+			workspaceIds: Object.keys(config.tasks?.workspaces ?? {}).sort(),
+			profiles: [...config.tasks?.profiles ?? []].sort()
+		}
+	};
+}
+async function verifyReleaseAgentHealth(config, signal) {
+	assertReleaseReadyConfig(config);
+	await verifyHealth(config, void 0, signal);
+}
+async function createStoredReleasePlan(config, now = /* @__PURE__ */ new Date(), signal) {
+	assertReleaseReadyConfig(config);
+	const { plan } = await buildReleasePlan(config, now, signal);
+	await atomicJson$1(releasePlanPath(config, plan.planId), plan);
+	await audit(config, {
+		type: "profile-release/plan-created",
+		planId: plan.planId,
+		releaseId: plan.releaseId,
+		releaseVersion: plan.releaseVersion,
+		changes: plan.changes.map((change) => ({
+			pluginId: change.pluginId,
+			action: change.action
+		}))
+	});
+	return plan;
+}
+async function readReleaseAction(config, planId) {
+	return readJson(releaseActionPath(config, planId));
+}
+async function saveReleaseAction(config, record, state, fields = {}) {
+	const next = {
+		...record,
+		...fields,
+		state,
+		updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+	};
+	await atomicJson$1(releaseActionPath(config, record.planId), next);
+	return next;
+}
+async function saveReleaseActionBestEffort(config, record, state, fields = {}) {
+	const next = {
+		...record,
+		...fields,
+		state,
+		updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+	};
+	try {
+		await atomicJson$1(releaseActionPath(config, record.planId), next);
+		return {
+			record: next,
+			failed: false
+		};
+	} catch {
+		return {
+			record: next,
+			failed: true
+		};
+	}
+}
+function configForProfile(config, profile) {
+	return {
+		...config,
+		profile
+	};
+}
+async function resolveReleaseArtifact(config, plugin, signal) {
+	if (plugin.sourceKind !== "artifact" || plugin.artifactDigest === null || plugin.packageVersion === null) throw new AgentRuntimeError("artifact-binding-invalid", "private artifact binding is incomplete");
+	const path = join(config.artifactStore, plugin.artifactDigest + ".tgz");
+	if (await digestInstalledArtifact(profileDir(config), config.artifactStore, "file:" + path) !== plugin.artifactDigest) throw new AgentRuntimeError("artifact-digest-mismatch", "private artifact is missing or does not match its approved digest");
+	const extracted = await runFile(config.tarBinary, [
+		"-xOf",
+		path,
+		"package/package.json"
+	], {
+		env: controlledEnv(config),
+		timeoutMs: 2e4,
+		signal
+	});
+	let manifest;
+	try {
+		manifest = JSON.parse(extracted.stdout);
+	} catch {
+		throw new AgentRuntimeError("artifact-manifest-invalid", "private artifact package manifest is invalid");
+	}
+	if (manifest.name !== plugin.pluginId || manifest.version !== plugin.packageVersion || typeof manifest.dsh?.bundle?.patch !== "string") throw new AgentRuntimeError("artifact-identity-mismatch", "private artifact package identity, version or DSH bundle metadata does not match the release");
+	return path;
+}
+async function releaseInstallArgument(config, plugin, signal) {
+	if (plugin.sourceKind === "artifact") return resolveReleaseArtifact(config, plugin, signal);
+	return plugin.pluginId + "@" + plugin.exactSpec;
+}
+function objectValue(value) {
+	return typeof value === "object" && value !== null && !Array.isArray(value) ? value : null;
+}
+function npmLockBindsIntegrity(lockSource, plugin) {
+	if (plugin.sourceKind !== "npm" || plugin.integrity === null || plugin.packageVersion === null) return false;
+	let lock;
+	try {
+		lock = objectValue((0, import_dist.parse)(lockSource));
+	} catch {
+		return false;
+	}
+	const rootImporter = objectValue(objectValue(lock?.importers)?.["."]);
+	const dependencyGroups = [
+		"dependencies",
+		"optionalDependencies",
+		"devDependencies"
+	];
+	let dependency = null;
+	for (const group of dependencyGroups) {
+		const candidate = objectValue(objectValue(rootImporter?.[group])?.[plugin.pluginId]);
+		if (candidate !== null) {
+			dependency = candidate;
+			break;
+		}
+	}
+	if (dependency?.specifier !== plugin.exactSpec || typeof dependency.version !== "string") return false;
+	const lockedVersion = dependency.version;
+	if (lockedVersion !== plugin.packageVersion && !lockedVersion.startsWith(plugin.packageVersion + "(")) return false;
+	const packages = objectValue(lock?.packages);
+	if (packages === null) return false;
+	const expectedKey = plugin.pluginId + "@" + lockedVersion;
+	for (const [rawKey, value] of Object.entries(packages)) {
+		if ((rawKey.startsWith("/") ? rawKey.slice(1) : rawKey) !== expectedKey) continue;
+		return objectValue(objectValue(value)?.resolution)?.integrity === plugin.integrity;
+	}
+	return false;
+}
+async function verifyReleaseProfileFiles(config, plan, profile) {
+	const targetConfig = configForProfile(config, profile);
+	const source = await readRegularOptional(join(profileDir(targetConfig), "package.json"));
+	if (source === null) throw new AgentRuntimeError("profile-missing", "staged release profile is missing");
+	const parsed = JSON.parse(source);
+	const dependencies = parsed.dependencies ?? {};
+	const bundles = parsed.dsh?.profile?.bundles ?? [];
+	const lockSource = await readRegularOptional(join(profileDir(targetConfig), "pnpm-lock.yaml"));
+	if (lockSource === null) throw new AgentRuntimeError("profile-lock-missing", "release profile lockfile is missing");
+	for (const plugin of plan.plugins) {
+		const actualSpec = dependencies[plugin.pluginId];
+		if (actualSpec === void 0 || !bundles.includes(plugin.pluginId)) throw new AgentRuntimeError("release-profile-mismatch", "release plugin is missing from dependencies or DSH bundles");
+		if (plugin.sourceKind === "artifact") {
+			if (await digestInstalledArtifact(profileDir(targetConfig), config.artifactStore, actualSpec) !== plugin.artifactDigest) throw new AgentRuntimeError("artifact-digest-mismatch", "materialized private artifact digest does not match the release");
+		} else if (actualSpec !== plugin.exactSpec) throw new AgentRuntimeError("release-profile-mismatch", "materialized public plugin spec does not match the release");
+		if (plugin.sourceKind === "npm" && !npmLockBindsIntegrity(lockSource, plugin)) throw new AgentRuntimeError("npm-integrity-mismatch", "pnpm lockfile does not contain the approved npm integrity");
+	}
+	for (const change of plan.changes.filter((change) => change.action === "remove")) if (dependencies[change.pluginId] !== void 0 || bundles.includes(change.pluginId)) throw new AgentRuntimeError("release-profile-mismatch", "retired release plugin remains in the staged profile");
+	await runFile(config.dshBinary, [
+		"--profile",
+		profile,
+		"--dump-config"
+	], {
+		env: controlledEnv(config),
+		timeoutMs: 2e4
+	});
+}
+async function stageRelease(config, plan, snapshot, signal) {
+	if (!snapshot.directoryPresent || snapshot.files["package.json"] === null || snapshot.files["pnpm-lock.yaml"] === null) throw new AgentRuntimeError("profile-not-stageable", "atomic release requires an existing profile with package.json and pnpm-lock.yaml");
+	const { stageProfile } = releaseProfileNames(plan);
+	const stageConfig = configForProfile(config, stageProfile);
+	const stageDir = profileDir(stageConfig);
+	await rm(stageDir, {
+		recursive: true,
+		force: true
+	});
+	await ensureDurableDirectory(stageDir);
+	for (const name of SNAPSHOT_FILES) {
+		const source = snapshot.files[name];
+		if (source !== null) await durableWriteFile(join(stageDir, name), source);
+	}
+	if (await computeProfileHash(stageConfig) !== plan.profileHash) throw new AgentRuntimeError("profile-stage-mismatch", "staged profile does not match the approved source profile");
+	await runFile(config.pnpmBinary, ["--version"], {
+		env: controlledEnv(config),
+		timeoutMs: 1e4,
+		signal
+	});
+	const bindings = new Map(plan.plugins.map((plugin) => [plugin.pluginId, plugin]));
+	for (const change of plan.changes) {
+		throwIfAborted(signal);
+		if (change.action === "remove") {
+			await runFile(config.dshBinary, [
+				"plugin",
+				"--profile",
+				stageProfile,
+				"remove",
+				change.pluginId,
+				"--ignore-scripts"
+			], {
+				env: controlledEnv(config),
+				timeoutMs: 12e4,
+				signal
+			});
+			continue;
+		}
+		const plugin = bindings.get(change.pluginId);
+		if (plugin === void 0) throw new AgentRuntimeError("release-plan-invalid", "release change has no final plugin binding");
+		const argument = await releaseInstallArgument(config, plugin, signal);
+		await runFile(config.dshBinary, [
+			"plugin",
+			"--profile",
+			stageProfile,
+			"add",
+			argument,
+			"--save-exact",
+			"--ignore-scripts"
+		], {
+			env: controlledEnv(config),
+			timeoutMs: 12e4,
+			signal
+		});
+	}
+	await verifyReleaseProfileFiles(config, plan, stageProfile);
+}
+async function ensureServiceStarted(config) {
+	if (!((await listenerPids(config, config.restart.port))[0] !== void 0)) await startDsh(config);
+}
+async function swapStagedRelease(config, plan, signal) {
+	const names = releaseProfileNames(plan);
+	const profilesRoot = dirname(profileDir(config));
+	const liveDir = profileDir(config);
+	const stageDir = join(profilesRoot, names.stageProfile);
+	const backupDir = join(profilesRoot, names.backupProfile);
+	if (!await regularDirectoryExists(stageDir)) throw new AgentRuntimeError("release-stage-missing", "staged release directory is missing");
+	await rm(backupDir, {
+		recursive: true,
+		force: true
+	});
+	await stopDsh(config, signal);
+	throwIfAborted(signal);
+	await rename(liveDir, backupDir);
+	await syncDirectory(profilesRoot);
+	try {
+		await rename(stageDir, liveDir);
+		await syncDirectory(profilesRoot);
+	} catch (error) {
+		await rename(backupDir, liveDir);
+		await syncDirectory(profilesRoot);
+		await startDsh(config);
+		throw error;
+	}
+}
+async function persistAppliedRelease(config, plan) {
+	const applied = {
+		schemaVersion: 1,
+		deviceId: plan.deviceId,
+		profile: plan.profile,
+		releaseId: plan.releaseId,
+		releaseVersion: plan.releaseVersion,
+		releaseDigest: plan.releaseDigest,
+		plugins: plan.plugins,
+		appliedAt: (/* @__PURE__ */ new Date()).toISOString()
+	};
+	validateFleetAppliedRelease(applied);
+	await atomicJson$1(appliedReleasePath(config), applied);
+	return applied;
+}
+async function rollbackRelease(config, plan, record, errorCode) {
+	const names = releaseProfileNames(plan);
+	const profilesRoot = dirname(profileDir(config));
+	const liveDir = profileDir(config);
+	const stageDir = join(profilesRoot, names.stageProfile);
+	const backupDir = join(profilesRoot, names.backupProfile);
+	const failedDir = join(profilesRoot, names.failedProfile);
+	let current = (await saveReleaseActionBestEffort(config, record, "rollback", { errorCode })).record;
+	try {
+		if (await regularDirectoryExists(backupDir)) {
+			try {
+				await stopDsh(config);
+			} catch {
+				if ((await listenerPids(config, config.restart.port))[0] !== void 0) throw new AgentRuntimeError("restart-cleanup-failed", "cannot stop the failed release for rollback");
+			}
+			await rm(failedDir, {
+				recursive: true,
+				force: true
+			});
+			if (await regularDirectoryExists(liveDir)) await rename(liveDir, failedDir);
+			await rename(backupDir, liveDir);
+			await syncDirectory(profilesRoot);
+		}
+		await rm(stageDir, {
+			recursive: true,
+			force: true
+		});
+		current = await saveReleaseAction(config, current, "rollback-restarting");
+		await ensureServiceStarted(config);
+		current = await saveReleaseAction(config, current, "rollback-verifying");
+		await verifyHealth(config);
+		await rm(failedDir, {
+			recursive: true,
+			force: true
+		});
+		await auditBestEffort(config, {
+			type: "profile-release/rolled-back",
+			planId: plan.planId,
+			releaseId: plan.releaseId,
+			result: errorCode
+		});
+		return saveReleaseAction(config, current, "rolled-back", {
+			result: "rolled-back",
+			errorCode
+		});
+	} catch {
+		await auditBestEffort(config, {
+			type: "profile-release/manual-intervention",
+			planId: plan.planId,
+			releaseId: plan.releaseId,
+			result: errorCode
+		});
+		return (await saveReleaseActionBestEffort(config, current, "manual-intervention", {
+			result: "manual-intervention",
+			errorCode: "rollback-failed"
+		})).record;
+	}
+}
+async function recoverReleaseInterrupted(config, plan, record) {
+	if ((await readAppliedRelease(config))?.releaseDigest === plan.releaseDigest) try {
+		await verifyReleaseProfileFiles(config, plan, config.profile);
+		await ensureServiceStarted(config);
+		await verifyHealth(config, void 0, void 0, plan.plugins.map((plugin) => plugin.pluginId));
+		const names = releaseProfileNames(plan);
+		const profilesRoot = dirname(profileDir(config));
+		await Promise.all([
+			rm(join(profilesRoot, names.stageProfile), {
+				recursive: true,
+				force: true
+			}),
+			rm(join(profilesRoot, names.backupProfile), {
+				recursive: true,
+				force: true
+			}),
+			rm(join(profilesRoot, names.failedProfile), {
+				recursive: true,
+				force: true
+			})
+		]);
+		return saveReleaseAction(config, record, "succeeded", { result: "success" });
+	} catch {}
+	return rollbackRelease(config, plan, record, "interrupted-action");
+}
+async function applyStoredReleasePlanLocked(config, approval, now, signal) {
+	const plan = await readJson(releasePlanPath(config, approval.planId));
+	if (plan === null) throw new AgentRuntimeError("plan-not-found", "approved release plan was not found");
+	validateFleetReleasePlan(plan);
+	const existing = await readReleaseAction(config, plan.planId);
+	let validation;
+	try {
+		validation = validateFleetReleaseApproval(plan, approval, now);
+	} catch (error) {
+		if (existing !== null && ![
+			"succeeded",
+			"rolled-back",
+			"manual-intervention"
+		].includes(existing.state)) return recoverReleaseInterrupted(config, plan, existing);
+		throw error;
+	}
+	if (existing !== null) {
+		if (existing.idempotencyKey !== validation.idempotencyKey) {
+			if (![
+				"succeeded",
+				"rolled-back",
+				"manual-intervention"
+			].includes(existing.state)) return recoverReleaseInterrupted(config, plan, existing);
+			throw new AgentRuntimeError("idempotency-conflict", "release plan already has a different approval");
+		}
+		if ([
+			"succeeded",
+			"rolled-back",
+			"manual-intervention"
+		].includes(existing.state)) return existing;
+		return recoverReleaseInterrupted(config, plan, existing);
+	}
+	const current = await loadState(config, signal);
+	if (current.manifestDigest !== plan.manifestDigest || current.profileHash !== plan.profileHash || current.dshVersion !== plan.observedDshVersion) throw new FleetProtocolError("approval-mismatch", "manifest, profile or DSH version changed after the release plan was created");
+	await verifyHealth(config, void 0, signal);
+	const names = releaseProfileNames(plan);
+	let record = {
+		planId: plan.planId,
+		planDigest: plan.digest,
+		approvalId: approval.approvalId,
+		principalId: approval.principalId,
+		idempotencyKey: validation.idempotencyKey,
+		deviceId: plan.deviceId,
+		profile: plan.profile,
+		releaseId: plan.releaseId,
+		releaseVersion: plan.releaseVersion,
+		releaseDigest: plan.releaseDigest,
+		stageProfile: names.stageProfile,
+		backupProfile: names.backupProfile,
+		state: "approved",
+		updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+	};
+	record = await saveReleaseAction(config, record, "approved");
+	await audit(config, {
+		type: "profile-release/approved",
+		planId: plan.planId,
+		releaseId: plan.releaseId,
+		approvalId: approval.approvalId,
+		principalId: approval.principalId
+	});
+	let releaseCommitted = false;
+	try {
+		if (plan.changes.length === 0) {
+			await verifyReleaseProfileFiles(config, plan, config.profile);
+			await verifyHealth(config, void 0, signal, plan.plugins.map((plugin) => plugin.pluginId));
+			await persistAppliedRelease(config, plan);
+			releaseCommitted = true;
+			record = await saveReleaseAction(config, record, "succeeded", { result: "success" });
+			await auditBestEffort(config, {
+				type: "profile-release/applied",
+				planId: plan.planId,
+				releaseId: plan.releaseId,
+				result: "adopted"
+			});
+			return record;
+		}
+		record = await saveReleaseAction(config, record, "staging");
+		await stageRelease(config, plan, current.profileSnapshot, signal);
+		throwIfAborted(signal);
+		if (await computeProfileHash(config) !== plan.profileHash) throw new FleetProtocolError("approval-mismatch", "live profile changed while the release was staged");
+		record = await saveReleaseAction(config, record, "staged");
+		record = await saveReleaseAction(config, record, "applying");
+		await swapStagedRelease(config, plan, signal);
+		throwIfAborted(signal);
+		record = await saveReleaseAction(config, record, "restarting");
+		await startDsh(config, signal);
+		throwIfAborted(signal);
+		record = await saveReleaseAction(config, record, "verifying");
+		await verifyReleaseProfileFiles(config, plan, config.profile);
+		await verifyHealth(config, void 0, signal, plan.plugins.map((plugin) => plugin.pluginId));
+		throwIfAborted(signal);
+		await persistAppliedRelease(config, plan);
+		releaseCommitted = true;
+		record = await saveReleaseAction(config, record, "succeeded", { result: "success" });
+		await auditBestEffort(config, {
+			type: "profile-release/applied",
+			planId: plan.planId,
+			releaseId: plan.releaseId,
+			result: "success"
+		});
+		const profilesRoot = dirname(profileDir(config));
+		await rm(join(profilesRoot, names.backupProfile), {
+			recursive: true,
+			force: true
+		}).catch(() => void 0);
+		return record;
+	} catch (error) {
+		if (releaseCommitted) return recoverReleaseInterrupted(config, plan, record);
+		const errorCode = typeof error.code === "string" ? error.code : "release-apply-failed";
+		await auditBestEffort(config, {
+			type: "profile-release/failed",
+			planId: plan.planId,
+			releaseId: plan.releaseId,
+			result: errorCode
+		});
+		return rollbackRelease(config, plan, record, errorCode);
+	}
+}
+async function applyStoredReleasePlan(config, approval, now = /* @__PURE__ */ new Date(), signal) {
+	assertReleaseReadyConfig(config);
+	return withProfileLock(config, () => applyStoredReleasePlanLocked(config, approval, now, signal));
+}
+async function readOrRecoverReleaseAction(config, planId) {
+	assertReleaseReadyConfig(config);
+	return withProfileLock(config, async () => {
+		const record = await readReleaseAction(config, planId);
+		if (record === null || [
+			"succeeded",
+			"rolled-back",
+			"manual-intervention"
+		].includes(record.state)) return record;
+		const plan = await readJson(releasePlanPath(config, planId));
+		if (plan === null) throw new AgentRuntimeError("plan-not-found", "approved release plan was not found");
+		validateFleetReleasePlan(plan);
+		return recoverReleaseInterrupted(config, plan, record);
+	});
+}
 function safeRuntimeError(error) {
 	const code = typeof error.code === "string" && /^[a-z0-9-]+$/.test(error.code) ? error.code : "internal";
 	return {
@@ -9659,6 +11010,1141 @@ function safeRuntimeError(error) {
 			"plugin-not-active": "plugin did not become active; profile was rolled back",
 			"runtime-modules-failed": "DSH runtime has failed modules; profile was rolled back"
 		}[code] ?? "fleet agent request failed"
+	};
+}
+const FLEET_A2A_KINDS = [
+	"task.submit",
+	"task.status",
+	"task.cancel",
+	"task.progress",
+	"task.result",
+	"approval.request",
+	"approval.decision",
+	"handoff",
+	"receipt"
+];
+var FleetA2AError = class extends Error {
+	code;
+	constructor(code, message) {
+		super(message);
+		this.name = "FleetA2AError";
+		this.code = code;
+	}
+};
+const BODY_KEYS = [
+	"schemaVersion",
+	"teamId",
+	"messageId",
+	"sender",
+	"recipient",
+	"kind",
+	"issuedAt",
+	"expiresAt",
+	"payloadDigest",
+	"payload"
+];
+const ENVELOPE_KEYS = [...BODY_KEYS, "signature"];
+const SENDER_KEYS = [
+	"principalId",
+	"deviceId",
+	"keyId"
+];
+const RECIPIENT_KEYS = ["deviceId"];
+const MAX_PAYLOAD_BYTES = 49152;
+const DEFAULT_TTL_MS = 3e5;
+const DEFAULT_MAX_TTL_MS = 9e5;
+function isRecord$1(value) {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function exactKeys$1(value, keys, field) {
+	if (!isRecord$1(value)) throw new FleetA2AError("invalid-envelope", field + " must be an object");
+	const actual = Object.keys(value).sort();
+	const expected = [...keys].sort();
+	if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) throw new FleetA2AError("invalid-envelope", field + " has unsupported or missing fields");
+}
+function text(value, field, maxLength = 128) {
+	if (typeof value !== "string" || value.length === 0 || value !== value.trim() || value.length > maxLength || /[\r\n\0]/.test(value)) throw new FleetA2AError("invalid-payload", field + " must be a bounded trimmed string");
+	return value;
+}
+function longText(value, field, maxLength) {
+	if (typeof value !== "string" || value.trim().length === 0 || value.length > maxLength || value.includes("\0")) throw new FleetA2AError("invalid-payload", field + " must be bounded non-empty text");
+	return value;
+}
+function identifier(value, field) {
+	const result = text(value, field, 64);
+	if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(result)) throw new FleetA2AError("invalid-payload", field + " is invalid");
+	return result;
+}
+function messageId(value, field, prefix) {
+	const result = text(value, field, 64);
+	if (!new RegExp("^" + prefix + ":[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$").test(result)) throw new FleetA2AError("invalid-payload", field + " must be a namespaced UUID");
+	return result;
+}
+function digest(value, field) {
+	if (typeof value !== "string" || !/^[0-9a-f]{64}$/.test(value)) throw new FleetA2AError("invalid-envelope", field + " must be a lowercase SHA-256 digest");
+	return value;
+}
+function canonicalTime(value, field) {
+	if (typeof value !== "string") throw new FleetA2AError("invalid-time", field + " must be a canonical ISO timestamp");
+	const timestamp = Date.parse(value);
+	if (!Number.isFinite(timestamp) || new Date(timestamp).toISOString() !== value) throw new FleetA2AError("invalid-time", field + " must be a canonical ISO timestamp");
+	return timestamp;
+}
+function boundedInteger(value, field, min, max) {
+	if (typeof value !== "number" || !Number.isSafeInteger(value) || value < min || value > max) throw new FleetA2AError("invalid-payload", `${field} must be an integer from ${min} to ${max}`);
+	return value;
+}
+function exactPayload(payload, keys, kind) {
+	const actual = Object.keys(payload).sort();
+	const expected = [...keys].sort();
+	if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) throw new FleetA2AError("invalid-payload", kind + " payload has unsupported or missing fields");
+}
+function taskId(value) {
+	return messageId(value, "payload.taskId", "task");
+}
+function validateA2APayload(kind, payload) {
+	if (!isRecord$1(payload)) throw new FleetA2AError("invalid-payload", kind + " payload must be an object");
+	if (Buffer.byteLength(canonicalJson(payload), "utf8") > MAX_PAYLOAD_BYTES) throw new FleetA2AError("invalid-payload", "A2A payload exceeds the size limit");
+	if (kind === "task.submit") {
+		exactPayload(payload, [
+			"taskId",
+			"workspaceId",
+			"profile",
+			"prompt"
+		], kind);
+		taskId(payload.taskId);
+		identifier(payload.workspaceId, "payload.workspaceId");
+		identifier(payload.profile, "payload.profile");
+		longText(payload.prompt, "payload.prompt", 32768);
+		return;
+	}
+	if (kind === "task.status" || kind === "task.cancel") {
+		exactPayload(payload, ["taskId"], kind);
+		taskId(payload.taskId);
+		return;
+	}
+	if (kind === "task.progress") {
+		exactPayload(payload, [
+			"taskId",
+			"state",
+			"updatedAt"
+		], kind);
+		taskId(payload.taskId);
+		if (![
+			"accepted",
+			"running",
+			"cancel-requested"
+		].includes(text(payload.state, "payload.state", 24))) throw new FleetA2AError("invalid-payload", "task progress state is invalid");
+		canonicalTime(payload.updatedAt, "payload.updatedAt");
+		return;
+	}
+	if (kind === "task.result") {
+		exactPayload(payload, [
+			"taskId",
+			"state",
+			"updatedAt",
+			"resultDigest",
+			"result",
+			"truncated",
+			"errorCode"
+		], kind);
+		taskId(payload.taskId);
+		if (![
+			"succeeded",
+			"failed",
+			"cancelled"
+		].includes(text(payload.state, "payload.state", 16))) throw new FleetA2AError("invalid-payload", "task result state is invalid");
+		canonicalTime(payload.updatedAt, "payload.updatedAt");
+		if (payload.resultDigest !== null) digest(payload.resultDigest, "payload.resultDigest");
+		if (payload.result !== null) longText(payload.result, "payload.result", 32768);
+		if (typeof payload.truncated !== "boolean") throw new FleetA2AError("invalid-payload", "payload.truncated must be boolean");
+		if (payload.errorCode !== null) identifier(payload.errorCode, "payload.errorCode");
+		return;
+	}
+	if (kind === "approval.request") {
+		exactPayload(payload, [
+			"approvalId",
+			"taskId",
+			"summary",
+			"expiresAt"
+		], kind);
+		messageId(payload.approvalId, "payload.approvalId", "approval");
+		taskId(payload.taskId);
+		longText(payload.summary, "payload.summary", 2048);
+		canonicalTime(payload.expiresAt, "payload.expiresAt");
+		return;
+	}
+	if (kind === "approval.decision") {
+		exactPayload(payload, [
+			"approvalId",
+			"taskId",
+			"decision"
+		], kind);
+		messageId(payload.approvalId, "payload.approvalId", "approval");
+		taskId(payload.taskId);
+		if (!["approved", "denied"].includes(text(payload.decision, "payload.decision", 16))) throw new FleetA2AError("invalid-payload", "approval decision is invalid");
+		return;
+	}
+	if (kind === "receipt") {
+		exactPayload(payload, ["requestMessageId", "status"], kind);
+		messageId(payload.requestMessageId, "payload.requestMessageId", "msg");
+		if (!["accepted", "stored"].includes(text(payload.status, "payload.status", 16))) throw new FleetA2AError("invalid-payload", "receipt status is invalid");
+		return;
+	}
+	exactPayload(payload, [
+		"handoffId",
+		"taskId",
+		"summary",
+		"artifactRefs"
+	], kind);
+	messageId(payload.handoffId, "payload.handoffId", "handoff");
+	if (payload.taskId !== null) taskId(payload.taskId);
+	longText(payload.summary, "payload.summary", 8192);
+	if (!Array.isArray(payload.artifactRefs) || payload.artifactRefs.length > 32 || payload.artifactRefs.some((ref) => {
+		try {
+			text(ref, "payload.artifactRefs[]", 512);
+			return false;
+		} catch {
+			return true;
+		}
+	})) throw new FleetA2AError("invalid-payload", "handoff artifactRefs are invalid");
+}
+function privateKey(value) {
+	const key = value instanceof Object && "type" in value ? value : createPrivateKey(value);
+	if (key.asymmetricKeyType !== "ed25519" || key.type !== "private") throw new FleetA2AError("invalid-envelope", "A2A private key must be Ed25519");
+	return key;
+}
+function publicKey(value) {
+	const key = createPublicKey(value);
+	if (key.asymmetricKeyType !== "ed25519" || key.type !== "public") throw new FleetA2AError("trust-denied", "trusted A2A key must be Ed25519");
+	return key;
+}
+function a2aKeyId(key) {
+	const publicObject = key instanceof Object && "type" in key ? key.type === "private" ? createPublicKey(key) : key : createPublicKey(key);
+	if (publicObject.asymmetricKeyType !== "ed25519") throw new FleetA2AError("invalid-envelope", "A2A key must be Ed25519");
+	const der = publicObject.export({
+		type: "spki",
+		format: "der"
+	});
+	return "ed25519:" + sha256Canonical({ der: Buffer.from(der).toString("base64") });
+}
+function nowIso(value) {
+	const date = value === void 0 ? /* @__PURE__ */ new Date() : value instanceof Date ? new Date(value.getTime()) : new Date(value);
+	if (!Number.isFinite(date.getTime())) throw new FleetA2AError("invalid-time", "now must be a valid timestamp");
+	return date.toISOString();
+}
+function createA2AEnvelope(input) {
+	if (!FLEET_A2A_KINDS.includes(input.kind)) throw new FleetA2AError("invalid-payload", "unsupported A2A kind");
+	validateA2APayload(input.kind, input.payload);
+	const key = privateKey(input.privateKey);
+	const issuedAt = nowIso(input.now);
+	const ttlMs = input.ttlMs ?? DEFAULT_TTL_MS;
+	boundedInteger(ttlMs, "ttlMs", 1e3, DEFAULT_MAX_TTL_MS);
+	const body = {
+		schemaVersion: 1,
+		teamId: identifier(input.teamId, "teamId"),
+		messageId: input.messageId === void 0 ? "msg:" + randomUUID() : messageId(input.messageId, "messageId", "msg"),
+		sender: {
+			principalId: identifier(input.sender.principalId, "sender.principalId"),
+			deviceId: normalizeDeviceId(input.sender.deviceId, "sender.deviceId"),
+			keyId: a2aKeyId(key)
+		},
+		recipient: { deviceId: normalizeDeviceId(input.recipient.deviceId, "recipient.deviceId") },
+		kind: input.kind,
+		issuedAt,
+		expiresAt: new Date(Date.parse(issuedAt) + ttlMs).toISOString(),
+		payloadDigest: sha256Canonical(input.payload),
+		payload: input.payload
+	};
+	const signature = sign(null, Buffer.from(canonicalJson(body), "utf8"), key).toString("base64url");
+	return {
+		...body,
+		signature
+	};
+}
+function trustEntry(trust, keyId) {
+	if (typeof trust.get === "function") return trust.get(keyId);
+	return trust[keyId];
+}
+function verifyA2AEnvelope(value, input) {
+	exactKeys$1(value, ENVELOPE_KEYS, "A2A envelope");
+	const envelope = value;
+	if (envelope.schemaVersion !== 1 || !FLEET_A2A_KINDS.includes(envelope.kind)) throw new FleetA2AError("invalid-envelope", "unsupported A2A envelope version or kind");
+	exactKeys$1(envelope.sender, SENDER_KEYS, "sender");
+	exactKeys$1(envelope.recipient, RECIPIENT_KEYS, "recipient");
+	identifier(envelope.teamId, "teamId");
+	messageId(envelope.messageId, "messageId", "msg");
+	identifier(envelope.sender.principalId, "sender.principalId");
+	normalizeDeviceId(envelope.sender.deviceId, "sender.deviceId");
+	normalizeDeviceId(envelope.recipient.deviceId, "recipient.deviceId");
+	if (!/^ed25519:[0-9a-f]{64}$/.test(envelope.sender.keyId)) throw new FleetA2AError("invalid-envelope", "sender.keyId is invalid");
+	digest(envelope.payloadDigest, "payloadDigest");
+	validateA2APayload(envelope.kind, envelope.payload);
+	if (sha256Canonical(envelope.payload) !== envelope.payloadDigest) throw new FleetA2AError("signature-invalid", "A2A payload digest does not match");
+	const issuedAt = canonicalTime(envelope.issuedAt, "issuedAt");
+	const expiresAt = canonicalTime(envelope.expiresAt, "expiresAt");
+	const now = Date.parse(nowIso(input.now));
+	const maxTtlMs = input.maxTtlMs ?? DEFAULT_MAX_TTL_MS;
+	boundedInteger(maxTtlMs, "maxTtlMs", 1e3, 864e5);
+	if (expiresAt <= issuedAt || expiresAt - issuedAt > maxTtlMs || issuedAt > now + 3e4) throw new FleetA2AError("invalid-time", "A2A envelope validity window is invalid");
+	if (now >= expiresAt) throw new FleetA2AError("message-expired", "A2A envelope has expired");
+	if (envelope.teamId !== input.expectedTeamId || envelope.recipient.deviceId !== input.expectedDeviceId) throw new FleetA2AError("recipient-mismatch", "A2A envelope targets a different team or device");
+	const trusted = trustEntry(input.trust, envelope.sender.keyId);
+	if (trusted === void 0 || trusted.principalId !== envelope.sender.principalId || trusted.deviceId !== envelope.sender.deviceId || !trusted.allowedKinds.includes(envelope.kind)) throw new FleetA2AError("trust-denied", "A2A sender is not trusted for this message kind");
+	if (a2aKeyId(trusted.publicKeyPem) !== trusted.keyId || trusted.keyId !== envelope.sender.keyId) throw new FleetA2AError("trust-denied", "A2A trust entry key identity is invalid");
+	if (typeof envelope.signature !== "string" || !/^[A-Za-z0-9_-]{86}$/.test(envelope.signature)) throw new FleetA2AError("signature-invalid", "A2A signature encoding is invalid");
+	const signature = Buffer.from(envelope.signature, "base64url");
+	const body = Object.fromEntries(BODY_KEYS.map((key) => [key, envelope[key]]));
+	if (!verify(null, Buffer.from(canonicalJson(body), "utf8"), publicKey(trusted.publicKeyPem), signature)) throw new FleetA2AError("signature-invalid", "A2A signature is invalid");
+	return envelope;
+}
+//#endregion
+//#region src/a2a/runtime.ts
+var FleetA2ARuntimeError = class extends Error {
+	code;
+	constructor(code, message) {
+		super(message);
+		this.name = "FleetA2ARuntimeError";
+		this.code = code;
+	}
+};
+function hash(value) {
+	return createHash("sha256").update(value, "utf8").digest("hex");
+}
+async function ensureDirectory(path) {
+	await mkdir(path, {
+		recursive: true,
+		mode: 448
+	});
+}
+async function atomicJson(path, value) {
+	await ensureDirectory(dirname(path));
+	const temporary = path + "." + randomUUID() + ".tmp";
+	let handle;
+	try {
+		handle = await open(temporary, "wx", 384);
+		await handle.writeFile(JSON.stringify(value, null, 2) + "\n");
+		await handle.sync();
+		await handle.close();
+		handle = void 0;
+		await rename(temporary, path);
+	} catch (error) {
+		await handle?.close();
+		await rm(temporary, { force: true });
+		throw error;
+	}
+}
+async function atomicText(path, value) {
+	await ensureDirectory(dirname(path));
+	const temporary = path + "." + randomUUID() + ".tmp";
+	let handle;
+	try {
+		handle = await open(temporary, "wx", 384);
+		await handle.writeFile(value);
+		await handle.sync();
+		await handle.close();
+		handle = void 0;
+		await rename(temporary, path);
+	} catch (error) {
+		await handle?.close();
+		await rm(temporary, { force: true });
+		throw error;
+	}
+}
+async function readRegularFile(path, privateFile = false) {
+	let handle;
+	try {
+		handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+		const info = await handle.stat();
+		if (!info.isFile()) throw new FleetA2ARuntimeError("unsafe-state-file", "A2A state accepts regular files only");
+		if (privateFile && (info.mode & 63) !== 0) throw new FleetA2ARuntimeError("unsafe-key-permissions", "A2A private key must not be accessible by group or others");
+		return await handle.readFile("utf8");
+	} catch (error) {
+		if (error.code === "ELOOP") throw new FleetA2ARuntimeError("unsafe-state-file", "A2A state accepts regular files only");
+		throw error;
+	} finally {
+		await handle?.close();
+	}
+}
+function exactKeys(value, keys, field) {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) throw new FleetA2ARuntimeError("invalid-config", field + " must be an object");
+	const actual = Object.keys(value).sort();
+	const expected = [...keys].sort();
+	if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) throw new FleetA2ARuntimeError("invalid-config", field + " has unsupported or missing fields");
+}
+async function readA2ATrustStore(config) {
+	const raw = JSON.parse(await readRegularFile(config.a2a.trustStorePath));
+	exactKeys(raw, [
+		"schemaVersion",
+		"teamId",
+		"entries"
+	], "trust store");
+	if (raw.schemaVersion !== 1 || raw.teamId !== config.a2a.teamId || !Array.isArray(raw.entries)) throw new FleetA2ARuntimeError("invalid-config", "trust store schema or team identity is invalid");
+	const trust = /* @__PURE__ */ new Map();
+	for (let index = 0; index < raw.entries.length; index += 1) {
+		const entry = raw.entries[index];
+		exactKeys(entry, [
+			"keyId",
+			"principalId",
+			"deviceId",
+			"publicKeyPem",
+			"allowedKinds"
+		], `trust store entries[${index}]`);
+		if (typeof entry.keyId !== "string" || typeof entry.principalId !== "string" || typeof entry.deviceId !== "string" || typeof entry.publicKeyPem !== "string" || !Array.isArray(entry.allowedKinds) || entry.allowedKinds.some((kind) => typeof kind !== "string" || !FLEET_A2A_KINDS.includes(kind))) throw new FleetA2ARuntimeError("invalid-config", "trust store entry is invalid");
+		if (!/^ed25519:[0-9a-f]{64}$/.test(entry.keyId) || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(entry.principalId) || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(entry.deviceId) || new Set(entry.allowedKinds).size !== entry.allowedKinds.length) throw new FleetA2ARuntimeError("invalid-config", "trust store entry identity or capabilities are invalid");
+		try {
+			if (a2aKeyId(entry.publicKeyPem) !== entry.keyId) throw new Error("key mismatch");
+		} catch {
+			throw new FleetA2ARuntimeError("invalid-config", "trust store entry key identity is invalid");
+		}
+		if (trust.has(entry.keyId)) throw new FleetA2ARuntimeError("invalid-config", "trust store key ids must be unique");
+		trust.set(entry.keyId, entry);
+	}
+	return trust;
+}
+async function privateKeyPem(config) {
+	return readRegularFile(config.a2a.privateKeyPath, true);
+}
+async function signA2AMessage(config, recipientDeviceId, kind, payload, now = /* @__PURE__ */ new Date()) {
+	assertA2AReadyConfig(config);
+	return createA2AEnvelope({
+		teamId: config.a2a.teamId,
+		sender: {
+			principalId: config.a2a.principalId,
+			deviceId: config.deviceId
+		},
+		recipient: { deviceId: recipientDeviceId },
+		kind,
+		payload,
+		privateKey: await privateKeyPem(config),
+		now,
+		ttlMs: Math.min(3e5, config.a2a.maxMessageTtlMs)
+	});
+}
+async function verifyA2AMessage(config, value, now = /* @__PURE__ */ new Date()) {
+	assertA2AReadyConfig(config);
+	return verifyA2AEnvelope(value, {
+		expectedTeamId: config.a2a.teamId,
+		expectedDeviceId: config.deviceId,
+		trust: await readA2ATrustStore(config),
+		now,
+		maxTtlMs: config.a2a.maxMessageTtlMs
+	});
+}
+function taskSegment(taskId) {
+	const match = /^task:([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/.exec(taskId);
+	if (match?.[1] === void 0) throw new FleetA2ARuntimeError("invalid-task-id", "task id is invalid");
+	return match[1];
+}
+function taskDirectory(config, taskId) {
+	return join(config.stateDir, "tasks", taskSegment(taskId));
+}
+const TASK_STATES = /* @__PURE__ */ new Set([
+	"accepted",
+	"running",
+	"cancel-requested",
+	"succeeded",
+	"failed",
+	"cancelled"
+]);
+function stateRecord(value, keys, field) {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) throw new FleetA2ARuntimeError("invalid-task-state", field + " must be an object");
+	const raw = value;
+	const actual = Object.keys(raw).sort();
+	const expected = [...keys].sort();
+	if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) throw new FleetA2ARuntimeError("invalid-task-state", field + " has unsupported or missing fields");
+	return raw;
+}
+function stateText(value, field, max = 128) {
+	if (typeof value !== "string" || value.length === 0 || value !== value.trim() || value.length > max || /[\r\n\0]/.test(value)) throw new FleetA2ARuntimeError("invalid-task-state", field + " is invalid");
+	return value;
+}
+function stateTime(value, field) {
+	if (typeof value !== "string" || !Number.isFinite(Date.parse(value)) || new Date(Date.parse(value)).toISOString() !== value) throw new FleetA2ARuntimeError("invalid-task-state", field + " is invalid");
+	return value;
+}
+function stateDigest(value, field, nullable = false) {
+	if (nullable && value === null) return null;
+	if (typeof value !== "string" || !/^[0-9a-f]{64}$/.test(value)) throw new FleetA2ARuntimeError("invalid-task-state", field + " is invalid");
+	return value;
+}
+function parseTaskRecord(value, expectedTaskId) {
+	const raw = stateRecord(value, [
+		"schemaVersion",
+		"taskId",
+		"requestMessageId",
+		"senderDeviceId",
+		"senderPrincipalId",
+		"workspaceId",
+		"profile",
+		"promptDigest",
+		"state",
+		"createdAt",
+		"updatedAt",
+		"deadlineAt",
+		"resultDigest",
+		"errorCode"
+	], "task record");
+	const taskId = stateText(raw.taskId, "task record.taskId");
+	taskSegment(taskId);
+	const state = stateText(raw.state, "task record.state", 24);
+	if (raw.schemaVersion !== 1 || taskId !== expectedTaskId || !TASK_STATES.has(state)) throw new FleetA2ARuntimeError("invalid-task-state", "task record identity, schema or state is invalid");
+	const errorCode = raw.errorCode === null ? null : stateText(raw.errorCode, "task record.errorCode", 64);
+	return {
+		schemaVersion: 1,
+		taskId,
+		requestMessageId: stateText(raw.requestMessageId, "task record.requestMessageId", 64),
+		senderDeviceId: stateText(raw.senderDeviceId, "task record.senderDeviceId", 64),
+		senderPrincipalId: stateText(raw.senderPrincipalId, "task record.senderPrincipalId", 64),
+		workspaceId: stateText(raw.workspaceId, "task record.workspaceId", 64),
+		profile: stateText(raw.profile, "task record.profile", 64),
+		promptDigest: stateDigest(raw.promptDigest, "task record.promptDigest"),
+		state,
+		createdAt: stateTime(raw.createdAt, "task record.createdAt"),
+		updatedAt: stateTime(raw.updatedAt, "task record.updatedAt"),
+		deadlineAt: stateTime(raw.deadlineAt, "task record.deadlineAt"),
+		resultDigest: stateDigest(raw.resultDigest, "task record.resultDigest", true),
+		errorCode
+	};
+}
+function parseTaskRequest(value, expectedTaskId) {
+	const raw = stateRecord(value, [
+		"schemaVersion",
+		"taskId",
+		"requestMessageId",
+		"senderDeviceId",
+		"senderPrincipalId",
+		"workspaceId",
+		"profile",
+		"promptDigest",
+		"prompt"
+	], "task request");
+	if (raw.schemaVersion !== 1 || raw.taskId !== expectedTaskId || typeof raw.prompt !== "string" || raw.prompt.length === 0 || raw.prompt.includes("\0")) throw new FleetA2ARuntimeError("invalid-task-state", "task request identity, schema or prompt is invalid");
+	const promptDigest = stateDigest(raw.promptDigest, "task request.promptDigest");
+	if (hash(raw.prompt) !== promptDigest) throw new FleetA2ARuntimeError("invalid-task-state", "task request prompt digest is invalid");
+	return {
+		schemaVersion: 1,
+		taskId: expectedTaskId,
+		requestMessageId: stateText(raw.requestMessageId, "task request.requestMessageId", 64),
+		senderDeviceId: stateText(raw.senderDeviceId, "task request.senderDeviceId", 64),
+		senderPrincipalId: stateText(raw.senderPrincipalId, "task request.senderPrincipalId", 64),
+		workspaceId: stateText(raw.workspaceId, "task request.workspaceId", 64),
+		profile: stateText(raw.profile, "task request.profile", 64),
+		promptDigest,
+		prompt: raw.prompt
+	};
+}
+async function readTaskRecord(config, taskId) {
+	try {
+		return parseTaskRecord(JSON.parse(await readRegularFile(join(taskDirectory(config, taskId), "record.json"))), taskId);
+	} catch (error) {
+		if (error.code === "ENOENT") return null;
+		throw error;
+	}
+}
+async function readTaskRequest(config, taskId) {
+	try {
+		return parseTaskRequest(JSON.parse(await readRegularFile(join(taskDirectory(config, taskId), "request.json"))), taskId);
+	} catch (error) {
+		if (error.code === "ENOENT") return null;
+		throw error;
+	}
+}
+async function saveTaskRecord(config, record, state, fields = {}) {
+	const next = {
+		...record,
+		...fields,
+		state,
+		updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+	};
+	await atomicJson(join(taskDirectory(config, record.taskId), "record.json"), next);
+	return next;
+}
+function workerPayload(record, result) {
+	if (record.state === "accepted" || record.state === "running" || record.state === "cancel-requested") return {
+		kind: "task.progress",
+		payload: {
+			taskId: record.taskId,
+			state: record.state,
+			updatedAt: record.updatedAt
+		}
+	};
+	const preview = result === null || result.trim().length === 0 ? null : result.slice(0, 32768);
+	return {
+		kind: "task.result",
+		payload: {
+			taskId: record.taskId,
+			state: record.state,
+			updatedAt: record.updatedAt,
+			resultDigest: record.resultDigest,
+			result: preview,
+			truncated: result !== null && result.length > 32768,
+			errorCode: record.errorCode
+		}
+	};
+}
+async function taskResult(config, taskId) {
+	let record = await readTaskRecord(config, taskId);
+	if (record === null) throw new FleetA2ARuntimeError("task-not-found", "task was not found");
+	let result = null;
+	try {
+		result = await readRegularFile(join(taskDirectory(config, taskId), "result.txt"));
+	} catch (error) {
+		if (error.code !== "ENOENT") throw error;
+	}
+	if (record.state === "accepted" || record.state === "running" || record.state === "cancel-requested") {
+		const workerActive = await processLockActive(join(taskDirectory(config, taskId), "worker.lock"));
+		if (!workerActive && result !== null && record.state !== "accepted") record = await saveTaskRecord(config, record, "succeeded", {
+			resultDigest: hash(result),
+			errorCode: null
+		});
+		else if (!workerActive && record.state === "cancel-requested" && existsSync(join(taskDirectory(config, taskId), "cancel"))) record = await saveTaskRecord(config, record, "cancelled", { errorCode: "cancelled" });
+		else if (!workerActive && (record.state === "running" || Date.now() > Date.parse(record.deadlineAt) + 3e4)) record = await saveTaskRecord(config, record, "failed", { errorCode: "worker-lost" });
+	}
+	return {
+		record,
+		result
+	};
+}
+async function launchTaskWorker(launch, taskId) {
+	const child = spawn(launch.nodeBinary, [
+		launch.agentPath,
+		"--config",
+		launch.configPath,
+		"task-worker"
+	], {
+		detached: process.platform !== "win32",
+		stdio: [
+			"pipe",
+			"ignore",
+			"ignore"
+		],
+		shell: false,
+		env: {
+			...process.env,
+			GIT_TERMINAL_PROMPT: "0"
+		}
+	});
+	child.stdin.on("error", () => void 0);
+	child.stdin.end(JSON.stringify({ taskId }) + "\n");
+	child.unref();
+}
+async function staleProcessLock(path) {
+	let source;
+	try {
+		source = await readRegularFile(path);
+	} catch (error) {
+		if (error.code === "ENOENT") return true;
+		throw error;
+	}
+	try {
+		const owner = JSON.parse(source);
+		if (typeof owner.pid === "number" && Number.isSafeInteger(owner.pid) && owner.pid > 0 && typeof owner.token === "string") return !await processAlive(owner.pid);
+	} catch {}
+	const info = await lstat(path);
+	return Date.now() - info.mtimeMs > 3e4;
+}
+async function acquireProcessLock(path, busyCode, busyMessage) {
+	await ensureDirectory(dirname(path));
+	for (let attempt = 0; attempt < 3; attempt += 1) {
+		const token = randomUUID();
+		let handle;
+		try {
+			handle = await open(path, "wx", 384);
+			await handle.writeFile(JSON.stringify({
+				pid: process.pid,
+				token,
+				at: (/* @__PURE__ */ new Date()).toISOString()
+			}) + "\n");
+			await handle.sync();
+			return {
+				path,
+				token
+			};
+		} catch (error) {
+			if (error.code !== "EEXIST") throw error;
+			if (!await staleProcessLock(path)) throw new FleetA2ARuntimeError(busyCode, busyMessage);
+			await rm(path, { force: true });
+		} finally {
+			await handle?.close();
+		}
+	}
+	throw new FleetA2ARuntimeError(busyCode, busyMessage);
+}
+async function releaseProcessLock(lock) {
+	try {
+		if (JSON.parse(await readRegularFile(lock.path)).token === lock.token) await rm(lock.path, { force: true });
+	} catch (error) {
+		if (error.code !== "ENOENT") throw error;
+	}
+}
+async function processLockActive(path) {
+	try {
+		if (!await staleProcessLock(path)) return true;
+		await rm(path, { force: true });
+		return false;
+	} catch (error) {
+		if (error.code === "ENOENT") return false;
+		throw error;
+	}
+}
+function taskMatchesEnvelope(record, envelope, payload) {
+	return record.promptDigest === hash(payload.prompt) && record.senderDeviceId === envelope.sender.deviceId && record.senderPrincipalId === envelope.sender.principalId && record.workspaceId === payload.workspaceId && record.profile === payload.profile;
+}
+async function acceptTask(config, envelope, launch) {
+	if (!config.tasks.enabled) throw new FleetA2ARuntimeError("tasks-disabled", "remote tasks are disabled on this device");
+	const payload = envelope.payload;
+	if (config.tasks.workspaces[payload.workspaceId] === void 0 || !config.tasks.profiles.includes(payload.profile)) throw new FleetA2ARuntimeError("task-policy-denied", "task workspace or profile is not allowed by local policy");
+	const directory = taskDirectory(config, payload.taskId);
+	const promptDigest = hash(payload.prompt);
+	await ensureDirectory(directory);
+	let creationLock;
+	try {
+		creationLock = await acquireProcessLock(join(directory, "create.lock"), "task-in-progress", "task creation is already in progress");
+	} catch (error) {
+		if (error.code !== "task-in-progress") throw error;
+		for (let attempt = 0; attempt < 40; attempt += 1) {
+			const existing = await readTaskRecord(config, payload.taskId);
+			if (existing !== null) {
+				if (!taskMatchesEnvelope(existing, envelope, payload)) throw new FleetA2ARuntimeError("task-id-conflict", "task id is already bound to a different request");
+				return existing;
+			}
+			await new Promise((resolve) => setTimeout(resolve, 25));
+		}
+		throw error;
+	}
+	try {
+		const existing = await readTaskRecord(config, payload.taskId);
+		if (existing !== null) {
+			if (!taskMatchesEnvelope(existing, envelope, payload)) throw new FleetA2ARuntimeError("task-id-conflict", "task id is already bound to a different request");
+			return existing;
+		}
+		const storedRequest = await readTaskRequest(config, payload.taskId);
+		if (storedRequest !== null && (storedRequest.promptDigest !== promptDigest || storedRequest.prompt !== payload.prompt || storedRequest.senderDeviceId !== envelope.sender.deviceId || storedRequest.senderPrincipalId !== envelope.sender.principalId || storedRequest.workspaceId !== payload.workspaceId || storedRequest.profile !== payload.profile)) throw new FleetA2ARuntimeError("task-id-conflict", "task id is already bound to a different request");
+		const request = storedRequest ?? {
+			schemaVersion: 1,
+			taskId: payload.taskId,
+			requestMessageId: envelope.messageId,
+			senderDeviceId: envelope.sender.deviceId,
+			senderPrincipalId: envelope.sender.principalId,
+			workspaceId: payload.workspaceId,
+			profile: payload.profile,
+			promptDigest,
+			prompt: payload.prompt
+		};
+		if (storedRequest === null) await atomicJson(join(directory, "request.json"), request);
+		const createdAt = (/* @__PURE__ */ new Date()).toISOString();
+		const record = {
+			schemaVersion: 1,
+			taskId: payload.taskId,
+			requestMessageId: request.requestMessageId,
+			senderDeviceId: request.senderDeviceId,
+			senderPrincipalId: request.senderPrincipalId,
+			workspaceId: request.workspaceId,
+			profile: request.profile,
+			promptDigest: request.promptDigest,
+			state: "accepted",
+			createdAt,
+			updatedAt: createdAt,
+			deadlineAt: new Date(Date.parse(createdAt) + config.tasks.timeoutMs).toISOString(),
+			resultDigest: null,
+			errorCode: null
+		};
+		await atomicJson(join(directory, "record.json"), record);
+		await launchTaskWorker(launch, payload.taskId);
+		return record;
+	} finally {
+		await releaseProcessLock(creationLock);
+	}
+}
+async function requestCancellation(config, taskId) {
+	const record = await readTaskRecord(config, taskId);
+	if (record === null) throw new FleetA2ARuntimeError("task-not-found", "task was not found");
+	if (record.state === "succeeded" || record.state === "failed" || record.state === "cancelled") return record;
+	const marker = join(taskDirectory(config, taskId), "cancel");
+	let handle;
+	try {
+		handle = await open(marker, "wx", 384);
+		await handle.writeFile((/* @__PURE__ */ new Date()).toISOString() + "\n");
+		await handle.sync();
+	} catch (error) {
+		if (error.code !== "EEXIST") throw error;
+	} finally {
+		await handle?.close();
+	}
+	return saveTaskRecord(config, record, "cancel-requested");
+}
+async function receiptResponse(config, envelope, launch, now) {
+	let response;
+	if (envelope.kind === "task.submit") response = workerPayload(await acceptTask(config, envelope, launch), null);
+	else if (envelope.kind === "task.status") {
+		const { record, result } = await taskResult(config, envelope.payload.taskId);
+		response = workerPayload(record, result);
+	} else if (envelope.kind === "task.cancel") response = workerPayload(await requestCancellation(config, envelope.payload.taskId), null);
+	else {
+		await atomicJson(join(config.stateDir, "a2a", "inbox", hash(envelope.messageId) + ".json"), envelope);
+		response = {
+			kind: "receipt",
+			payload: {
+				requestMessageId: envelope.messageId,
+				status: envelope.kind === "handoff" ? "stored" : "accepted"
+			}
+		};
+	}
+	return createA2AEnvelope({
+		teamId: config.a2a.teamId,
+		sender: {
+			principalId: config.a2a.principalId,
+			deviceId: config.deviceId
+		},
+		recipient: { deviceId: envelope.sender.deviceId },
+		kind: response.kind,
+		payload: response.payload,
+		privateKey: await privateKeyPem(config),
+		now,
+		ttlMs: Math.min(3e5, config.a2a.maxMessageTtlMs)
+	});
+}
+async function receiveA2AMessage(config, value, launch, now = /* @__PURE__ */ new Date()) {
+	assertA2AReadyConfig(config);
+	const envelope = await verifyA2AMessage(config, value, now);
+	const receiptPath = join(config.stateDir, "a2a", "receipts", hash(envelope.messageId) + ".json");
+	const lockPath = receiptPath + ".lock";
+	try {
+		return JSON.parse(await readRegularFile(receiptPath));
+	} catch (error) {
+		if (error.code !== "ENOENT") throw error;
+	}
+	const lock = await acquireProcessLock(lockPath, "message-in-progress", "A2A message is already being processed");
+	try {
+		try {
+			return JSON.parse(await readRegularFile(receiptPath));
+		} catch (error) {
+			if (error.code !== "ENOENT") throw error;
+		}
+		const response = await receiptResponse(config, envelope, launch, now);
+		const receipt = {
+			requestMessageId: envelope.messageId,
+			response
+		};
+		await atomicJson(receiptPath, receipt);
+		return receipt;
+	} finally {
+		await releaseProcessLock(lock);
+	}
+}
+function taskEnvironment(config) {
+	const path = [
+		dirname(config.dshBinary),
+		dirname(process.execPath),
+		"/opt/homebrew/bin",
+		"/usr/bin",
+		"/bin"
+	].join(":");
+	const env = {
+		DSH_HOME: config.dshHome,
+		PATH: path,
+		GIT_TERMINAL_PROMPT: "0"
+	};
+	for (const key of [
+		"HOME",
+		"USER",
+		"LOGNAME",
+		"TMPDIR",
+		"LANG",
+		"LC_ALL",
+		"SHELL",
+		"TERM"
+	]) if (process.env[key] !== void 0) env[key] = process.env[key];
+	return env;
+}
+async function runTaskProcess(config, request, cancelPath) {
+	const workspace = config.tasks.workspaces[request.workspaceId];
+	if (workspace === void 0 || !config.tasks.profiles.includes(request.profile)) throw new FleetA2ARuntimeError("task-policy-denied", "task no longer matches local policy");
+	const workspaceInfo = await lstat(workspace).catch(() => void 0);
+	if (workspaceInfo === void 0) throw new FleetA2ARuntimeError("task-policy-denied", "task workspace is unavailable");
+	if (workspaceInfo.isSymbolicLink() || !workspaceInfo.isDirectory()) throw new FleetA2ARuntimeError("task-policy-denied", "task workspace must be a real directory");
+	return new Promise((resolve, reject) => {
+		const grouped = process.platform !== "win32";
+		const child = spawn(config.dshBinary, [
+			"--profile",
+			request.profile,
+			request.prompt
+		], {
+			cwd: workspace,
+			env: taskEnvironment(config),
+			stdio: [
+				"ignore",
+				"pipe",
+				"pipe"
+			],
+			shell: false,
+			detached: grouped
+		});
+		let stdout = "";
+		let bytes = 0;
+		let reason;
+		let settled = false;
+		const kill = (signal) => {
+			try {
+				if (grouped && child.pid !== void 0) process.kill(-child.pid, signal);
+				else child.kill(signal);
+			} catch (error) {
+				if (error.code !== "ESRCH") throw error;
+			}
+		};
+		const stop = (next) => {
+			if (reason !== void 0 || settled) return;
+			reason = next;
+			kill("SIGTERM");
+			forceTimer = setTimeout(() => kill("SIGKILL"), 2e3);
+			forceTimer.unref();
+		};
+		const timeout = setTimeout(() => stop("timeout"), config.tasks.timeoutMs);
+		timeout.unref();
+		const cancel = setInterval(() => {
+			if (existsSync(cancelPath)) stop("cancelled");
+		}, 200);
+		cancel.unref();
+		let forceTimer;
+		child.stdout.setEncoding("utf8");
+		child.stdout.on("data", (chunk) => {
+			const remaining = config.tasks.maxOutputBytes - bytes;
+			if (remaining > 0) stdout += Buffer.from(chunk).subarray(0, remaining).toString("utf8");
+			bytes += Buffer.byteLength(chunk);
+			if (bytes > config.tasks.maxOutputBytes) stop("output-limit");
+		});
+		child.stderr.on("data", (chunk) => {
+			bytes += chunk.length;
+			if (bytes > config.tasks.maxOutputBytes) stop("output-limit");
+		});
+		child.once("error", (error) => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timeout);
+			clearInterval(cancel);
+			if (forceTimer !== void 0) clearTimeout(forceTimer);
+			reject(error);
+		});
+		child.once("close", (code) => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timeout);
+			clearInterval(cancel);
+			if (forceTimer !== void 0) clearTimeout(forceTimer);
+			resolve({
+				stdout,
+				code: code ?? 1,
+				...reason === void 0 ? {} : { reason }
+			});
+		});
+	});
+}
+async function processAlive(pid) {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch (error) {
+		return error.code !== "ESRCH";
+	}
+}
+async function acquireTaskSlot(config, taskId) {
+	const directory = join(config.stateDir, "tasks", ".slots");
+	await ensureDirectory(directory);
+	const token = randomUUID();
+	for (;;) {
+		for (let index = 0; index < config.tasks.maxConcurrent; index += 1) {
+			const path = join(directory, String(index) + ".lock");
+			try {
+				const handle = await open(path, "wx", 384);
+				await handle.writeFile(JSON.stringify({
+					pid: process.pid,
+					taskId,
+					token
+				}) + "\n");
+				await handle.close();
+				return {
+					path,
+					token
+				};
+			} catch (error) {
+				if (error.code !== "EEXIST") throw error;
+				try {
+					if (await staleProcessLock(path)) await rm(path, { force: true });
+				} catch (readError) {
+					if (readError.code === "ENOENT") continue;
+					throw readError;
+				}
+			}
+		}
+		if (existsSync(join(taskDirectory(config, taskId), "cancel"))) throw new FleetA2ARuntimeError("task-cancelled", "task was cancelled while queued");
+		await new Promise((resolve) => setTimeout(resolve, 500));
+	}
+}
+async function runTaskWorker(config, taskId) {
+	assertA2AReadyConfig(config);
+	const directory = taskDirectory(config, taskId);
+	const workerLock = join(directory, "worker.lock");
+	try {
+		if (await readTaskRecord(config, taskId) === null) throw new FleetA2ARuntimeError("task-not-found", "task was not found");
+	} catch (error) {
+		throw error;
+	}
+	let worker;
+	try {
+		worker = await acquireProcessLock(workerLock, "worker-in-progress", "task worker is already running");
+	} catch (error) {
+		if (error.code === "worker-in-progress") {
+			const existing = await readTaskRecord(config, taskId);
+			if (existing === null) throw new FleetA2ARuntimeError("task-not-found", "task was not found");
+			return existing;
+		}
+		throw error;
+	}
+	let slot;
+	try {
+		let record = await readTaskRecord(config, taskId);
+		if (record === null) throw new FleetA2ARuntimeError("task-not-found", "task was not found");
+		if ([
+			"succeeded",
+			"failed",
+			"cancelled"
+		].includes(record.state)) return record;
+		const request = await readTaskRequest(config, taskId);
+		if (request === null || request.requestMessageId !== record.requestMessageId || request.senderDeviceId !== record.senderDeviceId || request.senderPrincipalId !== record.senderPrincipalId || request.workspaceId !== record.workspaceId || request.profile !== record.profile || request.promptDigest !== record.promptDigest) throw new FleetA2ARuntimeError("task-request-mismatch", "task request does not match its durable record");
+		const cancelPath = join(directory, "cancel");
+		if (existsSync(cancelPath)) return saveTaskRecord(config, record, "cancelled", { errorCode: "cancelled" });
+		slot = await acquireTaskSlot(config, taskId);
+		if (existsSync(cancelPath)) return saveTaskRecord(config, record, "cancelled", { errorCode: "cancelled" });
+		record = await saveTaskRecord(config, record, "running");
+		const result = await runTaskProcess(config, request, cancelPath);
+		if (result.reason === "cancelled") return saveTaskRecord(config, record, "cancelled", { errorCode: "cancelled" });
+		if (result.reason !== void 0) return saveTaskRecord(config, record, "failed", { errorCode: result.reason });
+		if (result.code !== 0) return saveTaskRecord(config, record, "failed", { errorCode: "dsh-task-failed" });
+		await atomicText(join(directory, "result.txt"), result.stdout);
+		return saveTaskRecord(config, record, "succeeded", {
+			resultDigest: hash(result.stdout),
+			errorCode: null
+		});
+	} catch (error) {
+		const record = await readTaskRecord(config, taskId);
+		if (record === null || [
+			"succeeded",
+			"failed",
+			"cancelled"
+		].includes(record.state)) throw error;
+		const code = typeof error.code === "string" ? error.code : "task-worker-failed";
+		return saveTaskRecord(config, record, code === "task-cancelled" ? "cancelled" : "failed", { errorCode: code });
+	} finally {
+		if (slot !== void 0) try {
+			if (JSON.parse(await readRegularFile(slot.path)).token === slot.token) await rm(slot.path, { force: true });
+		} catch {}
+		await releaseProcessLock(worker);
+	}
+}
+async function resumeAcceptedTasks(config, launch) {
+	assertA2AReadyConfig(config);
+	const root = join(config.stateDir, "tasks");
+	let entries;
+	try {
+		entries = await readdir(root, { withFileTypes: true });
+	} catch (error) {
+		if (error.code === "ENOENT") return 0;
+		throw error;
+	}
+	let resumed = 0;
+	for (const entry of entries) {
+		if (!entry.isDirectory() || !/^[0-9a-f-]{36}$/.test(entry.name)) continue;
+		const taskId = "task:" + entry.name;
+		const record = await readTaskRecord(config, taskId);
+		if (record === null || ![
+			"accepted",
+			"running",
+			"cancel-requested"
+		].includes(record.state)) continue;
+		if (await processLockActive(join(taskDirectory(config, taskId), "worker.lock"))) continue;
+		if (record.state === "accepted" && Date.now() <= Date.parse(record.deadlineAt) + 3e4) {
+			await launchTaskWorker(launch, taskId);
+			resumed += 1;
+		} else await taskResult(config, taskId);
+	}
+	return resumed;
+}
+function safeA2ARuntimeError(error) {
+	const raw = typeof error.code === "string" ? error.code : "internal";
+	const code = /^[a-z0-9-]+$/.test(raw) ? raw : "internal";
+	const messages = {
+		"invalid-envelope": "A2A envelope is invalid",
+		"invalid-payload": "A2A payload is invalid",
+		"invalid-time": "A2A message time window is invalid",
+		"message-expired": "A2A message has expired",
+		"trust-denied": "A2A sender is not trusted for this action",
+		"signature-invalid": "A2A signature is invalid",
+		"recipient-mismatch": "A2A message targets another device",
+		"tasks-disabled": "remote tasks are disabled on this device",
+		"task-policy-denied": "task workspace or profile is not allowed",
+		"task-not-found": "task was not found",
+		"task-id-conflict": "task id is already bound to a different request",
+		"task-in-progress": "task creation is already in progress",
+		"invalid-task-state": "durable task state is invalid",
+		"message-in-progress": "A2A message is already being processed",
+		"unsafe-key-permissions": "A2A private key permissions are unsafe"
+	};
+	return {
+		code: Object.hasOwn(messages, code) ? code : "internal",
+		message: messages[code] ?? "A2A request failed"
+	};
+}
+//#endregion
+//#region src/agent/doctor.ts
+function assertDoctorReady(config) {
+	assertReleaseReadyConfig(config);
+	assertA2AReadyConfig(config);
+}
+async function requireExecutable(path, id) {
+	const info = await lstat(path);
+	if (!info.isFile() && !info.isSymbolicLink()) throw new TypeError(id + " executable path is not a file");
+	await access(path, constants.X_OK);
+	return id;
+}
+async function requireRealDirectory(path, id) {
+	const info = await lstat(path);
+	if (info.isSymbolicLink() || !info.isDirectory()) throw new TypeError(id + " must be a real directory");
+}
+async function doctorAgent(config, now = /* @__PURE__ */ new Date(), signal) {
+	assertDoctorReady(config);
+	const executablePaths = [
+		["dsh", config.dshBinary],
+		["pnpm", config.pnpmBinary],
+		["tar", config.tarBinary]
+	];
+	if (config.restart.kind === "screen") executablePaths.push(["screen", config.restart.screenBinary], ["lsof", config.restart.lsofBinary], ["ps", config.restart.psBinary]);
+	else executablePaths.push(["launchctl", config.restart.launchctlBinary], ["lsof", config.restart.lsofBinary], ["ps", config.restart.psBinary]);
+	const executableChecks = await Promise.all(executablePaths.map(([id, path]) => requireExecutable(path, id)));
+	await requireRealDirectory(config.artifactStore, "artifactStore");
+	for (const [workspaceId, path] of Object.entries(config.tasks.workspaces)) await requireRealDirectory(path, "workspace " + workspaceId);
+	const trust = await readA2ATrustStore(config);
+	const identityProbe = await signA2AMessage(config, config.deviceId, "handoff", {
+		handoffId: "handoff:" + randomUUID(),
+		taskId: null,
+		summary: "dsh-fleet doctor identity check",
+		artifactRefs: []
+	}, now);
+	const inspection = await inspectReleaseAgent(config, now, signal);
+	await verifyReleaseAgentHealth(config, signal);
+	return {
+		protocolVersion: 1,
+		ready: true,
+		deviceId: config.deviceId,
+		profile: config.profile,
+		releaseId: inspection.assignedRelease.releaseId,
+		releaseVersion: inspection.assignedRelease.releaseVersion,
+		healthVerified: true,
+		identityKeyId: identityProbe.sender.keyId,
+		trustedPeerCount: trust.size,
+		tasksEnabled: config.tasks.enabled,
+		workspaceIds: Object.keys(config.tasks.workspaces).sort(),
+		executableChecks
 	};
 }
 //#endregion
@@ -9706,7 +12192,22 @@ function parseArgs(argv) {
 	const configPath = argv[1];
 	if (!isAbsolute(configPath) || normalize(configPath) !== configPath || configPath.includes("\0")) throw Object.assign(/* @__PURE__ */ new Error("config path must be absolute"), { code: "invalid-invocation" });
 	const command = argv[2];
-	if (command !== "inspect" && command !== "plan" && command !== "apply" && command !== "status") throw Object.assign(/* @__PURE__ */ new Error("unsupported command"), { code: "invalid-invocation" });
+	if (![
+		"inspect",
+		"plan",
+		"apply",
+		"status",
+		"release-inspect",
+		"release-plan",
+		"release-apply",
+		"release-status",
+		"a2a-sign",
+		"a2a-verify",
+		"a2a-receive",
+		"task-worker",
+		"tasks-resume",
+		"doctor"
+	].includes(command)) throw Object.assign(/* @__PURE__ */ new Error("unsupported command"), { code: "invalid-invocation" });
 	return {
 		configPath,
 		command
@@ -9717,6 +12218,45 @@ async function dispatch() {
 	const { configPath, command } = parseArgs(process.argv.slice(2));
 	const config = await readAgentConfig(configPath);
 	const payload = await readStdin();
+	const agentPath = process.argv[1];
+	if (agentPath === void 0 || !isAbsolute(agentPath) || normalize(agentPath) !== agentPath) throw Object.assign(/* @__PURE__ */ new Error("fleet agent executable path must be absolute"), { code: "invalid-invocation" });
+	const workerLaunch = {
+		nodeBinary: process.execPath,
+		agentPath,
+		configPath
+	};
+	if (command === "doctor") {
+		if (payload !== null && (isRecord(payload) ? Object.keys(payload).length !== 0 : true)) throw Object.assign(/* @__PURE__ */ new Error("doctor payload must be empty"), { code: "invalid-payload" });
+		return doctorAgent(config, /* @__PURE__ */ new Date(), shutdown.signal);
+	}
+	if (command === "a2a-sign") {
+		const body = exactObject(payload, [
+			"kind",
+			"payload",
+			"recipientDeviceId"
+		], "A2A sign payload");
+		const kind = stringField(body.kind, "kind");
+		if (!FLEET_A2A_KINDS.includes(kind)) throw Object.assign(/* @__PURE__ */ new Error("unsupported A2A kind"), { code: "invalid-payload" });
+		if (!isRecord(body.payload)) throw Object.assign(/* @__PURE__ */ new Error("A2A payload must be an object"), { code: "invalid-payload" });
+		return signA2AMessage(config, stringField(body.recipientDeviceId, "recipientDeviceId"), kind, body.payload, /* @__PURE__ */ new Date());
+	}
+	if (command === "a2a-receive") return receiveA2AMessage(config, exactObject(payload, ["envelope"], "A2A receive payload").envelope, workerLaunch, /* @__PURE__ */ new Date());
+	if (command === "a2a-verify") return verifyA2AMessage(config, exactObject(payload, ["envelope"], "A2A verify payload").envelope, /* @__PURE__ */ new Date());
+	if (command === "task-worker") return runTaskWorker(config, stringField(exactObject(payload, ["taskId"], "task worker payload").taskId, "taskId"));
+	if (command === "tasks-resume") {
+		if (payload !== null && (isRecord(payload) ? Object.keys(payload).length !== 0 : true)) throw Object.assign(/* @__PURE__ */ new Error("tasks-resume payload must be empty"), { code: "invalid-payload" });
+		return { resumed: await resumeAcceptedTasks(config, workerLaunch) };
+	}
+	if (command === "release-inspect" || command === "release-plan") {
+		if (payload !== null && (isRecord(payload) ? Object.keys(payload).length !== 0 : true)) throw Object.assign(/* @__PURE__ */ new Error(command + " payload must be empty"), { code: "invalid-payload" });
+		return command === "release-inspect" ? inspectReleaseAgent(config, /* @__PURE__ */ new Date(), shutdown.signal) : createStoredReleasePlan(config, /* @__PURE__ */ new Date(), shutdown.signal);
+	}
+	if (command === "release-status") {
+		const action = await readOrRecoverReleaseAction(config, stringField(exactObject(payload, ["planId"], "release status payload").planId, "planId"));
+		if (action === null) throw Object.assign(/* @__PURE__ */ new Error("release action not found"), { code: "action-not-found" });
+		return action;
+	}
+	if (command === "release-apply") return applyStoredReleasePlan(config, exactObject(payload, ["approval"], "release apply payload").approval, /* @__PURE__ */ new Date(), shutdown.signal);
 	if (command === "inspect") {
 		if (payload !== null && (isRecord(payload) ? Object.keys(payload).length !== 0 : true)) throw Object.assign(/* @__PURE__ */ new Error("inspect payload must be empty"), { code: "invalid-payload" });
 		return inspectAgent(config, /* @__PURE__ */ new Date(), shutdown.signal);
@@ -9736,9 +12276,10 @@ try {
 		value
 	}) + "\n");
 } catch (error) {
+	const a2a = safeA2ARuntimeError(error);
 	process.stdout.write(JSON.stringify({
 		ok: false,
-		error: safeRuntimeError(error)
+		error: a2a.code === "internal" ? safeRuntimeError(error) : a2a
 	}) + "\n");
 } finally {
 	process.off("SIGINT", onSigint);

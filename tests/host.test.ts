@@ -1,8 +1,10 @@
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
+import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { apply, assertAgentConfiguration, collectFleetStatus } from '../src/index.ts'
+import { digestInstalledArtifact } from '../src/host/artifacts.ts'
 
 const roots: string[] = []
 afterEach(async () => {
@@ -70,6 +72,71 @@ plugins:
     expect(status.manifest.error).toBeTruthy()
     expect(status.device.registered).toBe(false)
     expect(status.summary.desired).toBe(0)
+  })
+
+  it('verifies a private release artifact inside the configured content store', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-fleet-'))
+    roots.push(root)
+    const profileDir = join(root, 'profiles', 'web')
+    const artifactStore = join(root, 'artifacts')
+    await Promise.all([mkdir(profileDir, { recursive: true }), mkdir(artifactStore, { recursive: true })])
+    const artifactPath = join(artifactStore, 'private.tgz')
+    const artifact = 'private plugin tarball fixture'
+    const digest = createHash('sha256').update(artifact).digest('hex')
+    await writeFile(artifactPath, artifact)
+    const manifestPath = join(root, 'fleet.lock.yaml')
+    await writeFile(manifestPath, `schemaVersion: 2
+team: { id: test-team }
+devices:
+  worker: { class: always-on-worker, channel: stable }
+profileReleases:
+  web-release:
+    version: 1.0.0
+    profile: web
+    dshRange: ">=0.1.0-rc.7 <0.2.0"
+    plugins:
+      - id: plugin-private
+        visibility: private
+        source: { kind: artifact, version: 1.0.0, digest: ${digest} }
+assignments:
+  worker: { web: web-release }
+`)
+    await writeFile(join(profileDir, 'package.json'), JSON.stringify({
+      dependencies: { 'plugin-private': `file:${artifactPath}` },
+      dsh: { profile: { bundles: ['plugin-private'] } },
+    }))
+    const status = await collectFleetStatus({
+      loader: { entries: () => [{ id: 'private', options: { name: 'plugin-private' }, fiber: { state: 2 } }] },
+    }, {
+      deviceId: 'worker', manifestPath, profile: 'web', dshHome: root, dshBinary: '/usr/bin/false', artifactStore,
+    })
+    expect(status.plugins[0]).toMatchObject({
+      id: 'plugin-private',
+      state: 'aligned',
+      desiredArtifactDigest: digest,
+      actualArtifactDigest: digest,
+      visibility: 'private',
+      releaseId: 'web-release',
+    })
+  })
+})
+
+describe('private artifact containment', () => {
+  it('hashes only regular tgz files within the configured store', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-fleet-artifact-'))
+    roots.push(root)
+    const profileDir = join(root, 'profile')
+    const store = join(root, 'store')
+    await Promise.all([mkdir(profileDir), mkdir(store)])
+    const inside = join(store, 'inside.tgz')
+    const outside = join(root, 'outside.tgz')
+    const linked = join(store, 'linked.tgz')
+    await Promise.all([writeFile(inside, 'inside'), writeFile(outside, 'outside')])
+    await symlink(outside, linked)
+    expect(await digestInstalledArtifact(profileDir, store, `file:${inside}`)).toBe(createHash('sha256').update('inside').digest('hex'))
+    expect(await digestInstalledArtifact(profileDir, store, `file:${outside}`)).toBeUndefined()
+    expect(await digestInstalledArtifact(profileDir, store, `file:${linked}`)).toBeUndefined()
+    expect(await digestInstalledArtifact(profileDir, store, 'https://example.invalid/plugin.tgz')).toBeUndefined()
   })
 })
 

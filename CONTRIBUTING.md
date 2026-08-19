@@ -7,7 +7,7 @@ Thank you for helping improve dsh-fleet. The project accepts focused bug fixes, 
 - Use an issue for a substantial protocol, schema, storage, transport, or security-boundary change.
 - Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
 - Do not commit real fleet manifests, credentials, session data, hostnames, SSH aliases, usernames, or machine-specific absolute paths.
-- Keep V0 read-only behavior separate from the mutation-capable Agent path.
+- Keep schema-v1 compatibility behavior separate from schema-v2 atomic release and A2A paths.
 
 ## Development environment
 
@@ -34,6 +34,7 @@ Edit files under `src/`, `tests/`, `scripts/`, `examples/`, or the documentation
 - `index.mjs`;
 - `testing.mjs`;
 - `agent.mjs`;
+- `bootstrap.mjs`;
 - `client.js`;
 - `client.js.map`.
 
@@ -57,11 +58,14 @@ Tests that create processes must prove cleanup, not only command completion. Tes
 
 Changes must preserve these constraints unless a reviewed protocol version explicitly replaces them:
 
-- the Web client selects only a configured device and manifest plugin;
-- versions, revisions, commands, arguments, and paths are never accepted from arbitrary Web input;
-- stable mutation accepts only exact npm versions or GitHub 40-character commit SHAs;
+- the Web client selects only configured devices, manifest releases, and target-reported logical workspace/profile IDs;
+- versions, revisions, artifact paths, executables, arguments, shell fragments, and remote paths are never accepted from arbitrary Web input;
+- stable public mutation accepts exact npm+SRI or GitHub 40-SHA sources; private mutation accepts a content-addressed artifact from the fixed store;
+- public team packs cannot grant remote task execution capabilities;
+- A2A signatures bind team, sender, recipient, capability, payload and expiry;
+- one task ID cannot be rebound to a different sender, workspace, profile or prompt;
 - process execution uses fixed arguments with `shell: false`;
-- approval is bound to the full immutable plan and expires;
+- approval is bound to the complete immutable profile release and expires;
 - a started mutation that loses transport is reported as unknown until recovery proves an outcome;
 - success requires restart, loopback health, Fleet RPC, target alignment, and zero Loader failures;
 - failure to prove rollback ends in manual intervention, never success.

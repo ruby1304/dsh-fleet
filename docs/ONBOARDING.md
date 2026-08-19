@@ -1,71 +1,120 @@
 # Single-owner device onboarding
 
-Version 0.2 uses explicit, local configuration. It is suitable for an experienced owner operating a small trusted fleet, but it is not a zero-touch pairing flow: there is no account login, invitation, enrollment token, certificate authority, or automatic manifest distribution.
+Version 0.3 binds trusted devices with two independent proofs:
 
-## Binding model
+1. the fixed local/SSH transport identifies which machine was reached;
+2. a device-local Ed25519 key signs the team, principal, sender device, recipient device, capability, payload digest and expiry.
 
-One target binding has four parts:
+This is single-owner device pairing, not a cloud account or multi-user enrollment system. Device IDs and principals are durable identifiers; display names are not identities.
 
-1. a stable `deviceId` in the private Fleet manifest;
-2. the same `deviceId` in the target Agent config;
-3. a fixed Host target that maps that `deviceId` to a local process or preconfigured SSH alias;
-4. the exact same manifest bytes and profile name on the Host and Agent.
+## Configuration split
 
-The Host rejects inspection and plans when the Agent reports a different device, profile, or manifest digest. SSH authentication and host-key verification establish which machine answered; `assignedTo` and `principalId` are descriptive and audit fields, not authentication.
+Keep these layers separate:
 
-Device IDs are 1 to 64 ASCII letters, digits, dots, underscores, or hyphens, and must start with a letter or digit. Do not derive a durable ID from a display name that may change.
+- `team-pack.yaml` is publishable. It contains the compatible DSH range, exact public plugin releases, logical workspace/profile IDs and optional federation-only trust anchors. Keep the managed service profile (normally `web`) separate from task execution profiles (normally `headless`).
+- `device-overlay.yaml` is private. It contains one device assignment, private artifact digests, real local paths, restart ownership and task-capable peer trust.
+- `identity.private.pem` never leaves its device.
+- `identity.invite.json` is public key material that may be exchanged out of band.
 
-## Recommended target layout
+The bootstrap validator rejects a public pack that contains an artifact source or grants remote task capabilities. This prevents an open-source configuration from silently becoming an execution authorization list.
 
-Keep executable paths free of spaces because the fixed SSH transport deliberately accepts only a narrow path grammar.
+## Recommended layout
+
+Use paths without spaces because fixed Host-to-Agent transport paths intentionally follow a narrow grammar.
 
 ```text
 ~/.config/dsh-fleet/
-  agent.json
-  fleet.lock.yaml
+  identity/
+    identity.private.pem
+    identity.invite.json
+  releases/
+    web-1.0.0/
+      agent.config.json
+      fleet.lock.yaml
+      trust-store.json
+      task-policy.json
 ~/.local/share/dsh-fleet/
-  releases/0.2.0/
-    agent.mjs
-  state/web/
+  artifacts/
+    <sha256>.tgz
+  agent-releases/
+    0.3.0/agent.mjs
+~/.local/state/dsh-fleet/
+  web/
 ```
 
-Use a new immutable release directory for every Agent upgrade. Never overwrite the bundle currently named by the Host target; retain the previous bundle until the new release has completed inspection, one safe operation, restart, and health verification.
+Do not overwrite an active generation. Render the next release into a new directory and retain the previous generation until acceptance and rollback checks pass.
 
-## First target checklist
+## First device
 
-1. Install and verify the supported DSH, Node.js, pnpm, restart, and inspection tools on the target.
-2. Create the private manifest on the controller, then copy those exact bytes to the target. Do not use the packaged example as production state.
-3. Install a reviewed release `agent.mjs` at its immutable release path and record its SHA-256 digest.
-4. Create the target Agent config from `examples/agent.config.json`. Set its `deviceId`, profile, absolute paths, restart owner markers, loopback port, and health URL.
-5. Restrict the config, manifest, and state directory to the owning Unix account.
-6. Configure an SSH alias with explicit host-key policy and confirm non-interactive access. The Fleet config accepts the alias only; it does not accept usernames, SSH flags, or shell fragments.
-7. Run the one-shot inspection directly on the target:
+1. Install a pinned DSH runtime, Node.js 22+, pnpm 11, the reviewed Fleet Agent bundle, and the fixed restart/inspection tools.
+2. Copy `examples/team-pack.yaml` to the team repository and replace all example public coordinates with reviewed exact releases.
+3. Copy `examples/device-overlay.yaml` to an owner-controlled location. Set the real device ID, principal, immutable DSH binary, state/artifact paths, launchd or screen ownership, loopback health URL and logical workspace mapping.
+4. Leave `agent.tasks.enabled: false` until peer trust and direct execution tests are complete.
+5. Create the device identity:
 
    ```bash
-   /absolute/path/to/node \
-     /absolute/path/to/agent.mjs \
-     --config /absolute/private/path/agent.json \
-     inspect
+   dsh-fleet-bootstrap identity \
+     --output-dir /absolute/private/identity-dir \
+     --team team-id \
+     --principal owner-id \
+     --device stable-device-id
    ```
 
-8. Add the fixed Host target while `convergence.enabled` remains false. Confirm the device ID, profile, DSH version, and manifest digest.
-9. Enable convergence only after restart ownership and loopback Fleet RPC health have been tested on a disposable profile.
+6. Render a new immutable generation:
 
-## Upgrade checklist
+   ```bash
+   dsh-fleet-bootstrap render \
+     --pack /absolute/path/team-pack.yaml \
+     --overlay /absolute/private/device-overlay.yaml \
+     --identity-dir /absolute/private/identity-dir \
+     --output-dir /absolute/private/releases/release-id
+   ```
 
-1. Put the new Agent in a new release directory and verify its digest.
-2. Run direct inspection with the existing private config.
-3. Change only the Host target's `agentPath` and reload DSH.
-4. Inspect from Fleet Operations before approving a mutation.
-5. Retain the previous Agent, DSH runtime, manifest, profile snapshot, and config until the new release has passed the full health and rollback gates.
+7. Put each private plugin tarball at `<artifactStore>/<sha256>.tgz`. Verify the digest independently. The Agent will verify it again before staging.
+8. Run `doctor` directly, then `release-inspect`. Confirm identity/trust, live Fleet health, executable/workspace readiness, device, profile, manifest digest, DSH version, release ID and every public/private plugin source.
+9. Configure the DSH service to use the pinned DSH runtime and profile. Confirm the restart owner and every managed port with a non-production profile.
+10. Add the target to the controller while convergence remains disabled. Inspect it through Fleet Settings, then enable convergence.
 
-## Current onboarding limitations
+## Pairing a second device
 
-- manifest copying and SSH alias setup are manual;
-- file ownership and mode are documented requirements but are not yet enforced by an installer;
-- there is no `pair`, `bootstrap`, or interactive `doctor` command;
-- the mutation-capable restart implementation supports macOS/Linux with `screen`, `lsof`, and `ps`; Windows mutation is not implemented;
-- one Host instance manages one configured profile name across its targets;
-- device enrollment, revocation, signed identity, remote attestation, Hub policy, and secret distribution are out of scope for 0.2.
+1. Repeat identity creation on the second device with the same team ID and the second device's stable ID.
+2. Exchange `identity.invite.json` files through a channel where the owner can compare the key IDs.
+3. Add the controller invite fields to the worker's private `trustedPeers`. Grant only `task.submit`, `task.status` and `task.cancel` if the controller needs those powers.
+4. Add the worker invite fields to the controller's private `trustedPeers`. Grant only `task.progress`, `task.result` and `receipt` if those are the expected responses.
+5. Render new configuration generations on both devices. A trust change is a configuration release; do not edit the generated trust store in place.
+6. Configure the controller itself as a fixed local Agent target and set `convergence.signerDeviceId` to that target. The signer must not be an SSH target.
+7. Verify direct `a2a-sign`, `a2a-receive` and `a2a-verify` calls with a harmless fixed workspace/profile.
+8. Enable `agent.tasks.enabled` on the worker, render a new generation, then submit one bounded task through Fleet Settings.
+9. Disconnect/reload the Web client and recover the same task by ID. Confirm status/result signature verification and cancellation behavior.
 
-These limitations are release boundaries, not implied guarantees. A future guided bootstrap should generate both config fragments, verify permissions and SSH host identity, transfer the manifest safely, and produce a redacted diagnostic report without changing a DSH profile.
+## Cross-team federation
+
+Cross-team public packs may carry trust anchors only for `handoff`, `approval.request`, `approval.decision` and `receipt`. A public federation anchor cannot submit, query or cancel a task.
+
+If another team must execute work, the receiving owner must deliberately add that peer to the private overlay with task capabilities and a fixed local policy. There is no transitive trust: trusting team B does not trust devices that B trusts.
+
+## Upgrade
+
+1. Review and install the new Fleet Agent in a new immutable release directory.
+2. Update exact public versions/integrities or private artifact digests and increment the profile release ID/version.
+3. Render a new configuration directory; bootstrap refuses to overwrite the previous one.
+4. Run direct `release-inspect` and `tasks-resume` with the new Agent.
+5. Change only fixed Agent/config paths in the Host target and service definition.
+6. Inspect through Fleet Settings, approve the atomic release, and verify DSH/Fleet health and Loader state.
+7. Retain the prior Agent, DSH runtime, generated configuration and profile backup for one full release cycle.
+
+## Revocation and lost devices
+
+Remove the lost device's key from every receiving trust store, render and activate new generations, remove its Host target, and revoke its SSH access. A2A messages expire quickly, but expiry is not a substitute for trust-store and transport revocation.
+
+Rotate a compromised identity by creating a new owner-only identity directory and redistributing the new invite. Never reuse the old key ID.
+
+## Current limits
+
+- SSH alias creation, host-key verification and file transfer remain owner-operated.
+- Bootstrap renders validated files but does not install launchd units, edit SSH configuration, copy secrets or switch the active generation.
+- There is no hosted relay, offline push, QR/account enrollment, attestation or multi-user role service.
+- Accepted tasks can be resumed after a worker-launch crash. Running tasks are not automatically replayed because their side effects may not be idempotent.
+- A task reconnects by durable task ID and signed status/result; it does not resume a live interactive DSH process.
+
+These are explicit release boundaries. See [SECURITY_MODEL.md](SECURITY_MODEL.md) for the threat model.
