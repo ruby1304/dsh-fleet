@@ -264,8 +264,8 @@ function validatePlanBody(value: FleetReleasePlanBody): void {
       throw new FleetProtocolError('invalid-action', 'change set does not match the final plugin set')
     }
   }
-  if (value.restartRequired !== (value.changes.length > 0)) {
-    throw new FleetProtocolError('invalid-payload', 'restartRequired must reflect whether the release changes the profile')
+  if (value.changes.length > 0 && value.restartRequired !== true) {
+    throw new FleetProtocolError('invalid-payload', 'a plugin change requires a profile restart')
   }
   const expectedReleaseDigest = sha256Canonical({
     releaseId: value.releaseId,

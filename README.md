@@ -7,7 +7,7 @@ Atomic plugin releases and signed, recoverable device-to-device tasks for a sing
 
 ## Status
 
-`0.3.3` targets DSH `>=0.1.0-rc.7 <0.2.0`. It is an open-source preview with a deliberately narrow trust model: one owner, fixed devices, fixed SSH/local transports, and fixed workspace/profile policies.
+`0.3.4` targets DSH `>=0.1.0-rc.7 <0.2.0`. It is an open-source preview with a deliberately narrow trust model: one owner, fixed devices, fixed SSH/local transports, and fixed workspace/profile policies.
 
 It now covers the foundations needed for a Remote Control-like workflow:
 
@@ -45,10 +45,10 @@ The public pack cannot contain private artifacts or grant `task.submit`, `task.s
 
 ## Install
 
-Production profiles should install an exact npm release or a reviewed tarball. Never use a live checkout link as production state. Once `0.3.3` is published:
+Production profiles should install an exact npm release or a reviewed tarball. Never use a live checkout link as production state. Once `0.3.4` is published:
 
 ```bash
-dsh plugin --profile web add dsh-fleet@0.3.3 --save-exact --ignore-scripts
+dsh plugin --profile web add dsh-fleet@0.3.4 --save-exact --ignore-scripts
 ```
 
 To review and pack from source:
@@ -60,8 +60,8 @@ corepack enable
 pnpm install --frozen-lockfile --ignore-scripts
 pnpm run release:check
 npm pack --ignore-scripts
-shasum -a 256 dsh-fleet-0.3.3.tgz
-dsh plugin --profile web add /absolute/path/to/dsh-fleet-0.3.3.tgz --save-exact --ignore-scripts
+shasum -a 256 dsh-fleet-0.3.4.tgz
+dsh plugin --profile web add /absolute/path/to/dsh-fleet-0.3.4.tgz --save-exact --ignore-scripts
 ```
 
 The package provides `dsh-fleet-agent` and `dsh-fleet-bootstrap` binaries. Pin their resolved release paths in services and Host target configuration; do not depend on a login-shell `PATH`.
@@ -125,7 +125,7 @@ Add Fleet to the DSH profile patch. Mutation stays off until explicitly enabled.
   name: dsh-fleet
   config:
     deviceId: controller
-    manifestPath: /absolute/private/path/fleet.lock.yaml
+    manifestPath: /absolute/dsh-home/profiles/web/fleet.lock.yaml
     profile: web
     dshBinary: /absolute/immutable/path/to/dsh
     artifactStore: /absolute/private/path/to/artifacts
@@ -138,13 +138,13 @@ Add Fleet to the DSH profile patch. Mutation stays off until explicitly enabled.
         - deviceId: controller
           transport: local
           nodeBinary: /absolute/path/to/node
-          agentPath: /absolute/path/to/releases/0.3.3/agent.mjs
+          agentPath: /absolute/path/to/releases/0.3.4/agent.mjs
           configPath: /absolute/path/to/controller/agent.config.json
         - deviceId: worker
           transport: ssh
           sshHost: worker-mac
           nodeBinary: /opt/homebrew/bin/node
-          agentPath: /Users/example/.local/share/dsh-fleet/releases/0.3.3/agent.mjs
+          agentPath: /Users/example/.local/share/dsh-fleet/releases/0.3.4/agent.mjs
           configPath: /Users/example/.config/dsh-fleet/releases/web-1.0.0/agent.config.json
 ```
 
@@ -159,6 +159,7 @@ A stable schema-v2 device is assigned exactly one release per profile. One appro
 - Private plugins require an exact version and a tarball named `<sha256>.tgz` in the configured artifact store.
 - The Agent validates private tarball digest, package identity/version and DSH bundle metadata.
 - Staging occurs beside the live profile on the same filesystem.
+- The DSH runtime reads `<DSH_HOME>/profiles/<profile>/fleet.lock.yaml`; the Agent copies the approved immutable generation into the staged profile so manifest and packages swap and roll back together.
 - The Agent validates the staged profile, stops the owned service, swaps directories by rename, restarts, and proves DSH/Fleet health and release alignment.
 - A failed post-swap check restores the previous profile by rename. Durable release markers recover a crash after commit.
 - Plugins not owned by the previous Fleet release are not removed.

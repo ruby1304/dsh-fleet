@@ -36,6 +36,7 @@ function create(overrides: Partial<Parameters<typeof createReleasePlan>[0]> = {}
   return createReleasePlan({
     manifest: parseFleetManifest(manifestSource),
     manifestDigest: 'a'.repeat(64),
+    runtimeManifestDigest: 'a'.repeat(64),
     dependencies: {},
     profileHash: 'c'.repeat(64),
     observedDshVersion: '0.1.0-rc.7',

@@ -37,7 +37,7 @@ Use paths without spaces because fixed Host-to-Agent transport paths intentional
   artifacts/
     <sha256>.tgz
   agent-releases/
-    0.3.3/agent.mjs
+    0.3.4/agent.mjs
 ~/.local/state/dsh-fleet/
   web/
 ```
@@ -70,10 +70,11 @@ Do not overwrite an active generation. Render the next release into a new direct
      --output-dir /absolute/private/releases/release-id
    ```
 
-7. Put each private plugin tarball at `<artifactStore>/<sha256>.tgz`. Verify the digest independently. The Agent will verify it again before staging.
-8. Run `doctor` directly, then `release-inspect`. Confirm identity/trust, live Fleet health, executable/workspace readiness, device, profile, manifest digest, DSH version, release ID and every public/private plugin source.
-9. Configure the DSH service to use the pinned DSH runtime and profile. Confirm the restart owner and every managed port with a non-production profile.
-10. Add the target to the controller while convergence remains disabled. Inspect it through Fleet Settings, then enable convergence.
+7. Bind the DSH profile's Fleet row to `<DSH_HOME>/profiles/<profile>/fleet.lock.yaml`. Seed that regular file with the currently active manifest; after adoption the Agent replaces it only inside a staged profile, so manifest, packages and rollback cross one rename boundary.
+8. Put each private plugin tarball at `<artifactStore>/<sha256>.tgz`. Verify the digest independently. The Agent will verify it again before staging.
+9. Run `doctor` directly, then `release-inspect`. Confirm identity/trust, live Fleet health, executable/workspace readiness, device, profile, manifest digest, DSH version, release ID and every public/private plugin source.
+10. Configure the DSH service to use the pinned DSH runtime and profile. Confirm the restart owner and every managed port with a non-production profile.
+11. Add the target to the controller while convergence remains disabled. Inspect it through Fleet Settings, then enable convergence.
 
 ## Pairing a second device
 

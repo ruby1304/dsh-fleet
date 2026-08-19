@@ -1,6 +1,11 @@
 # Changelog
 
-## 0.3.3 - Unreleased
+## 0.3.4 - Unreleased
+
+- Store the Fleet runtime manifest inside the managed DSH profile so the manifest, package graph and profile patch cross the same atomic rename boundary and roll back together.
+- Treat a manifest-only release as restart-required, materialize the complete staged dependency tree with the pinned pnpm binary, and verify the runtime is bound to the stable profile-local manifest path.
+
+## 0.3.3 - 2026-08-19
 
 - Allow only the fixed `screen -dmS` service launcher to retain its expected managed child after the launcher exits; all plugin, package and inspection commands still reject live process-group descendants.
 - Keep post-launch loopback health, listener ownership, plugin alignment and Loader checks as the authority for successful restart or rollback.

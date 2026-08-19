@@ -16,6 +16,7 @@ export const FLEET_RELEASE_PLAN_TTL_MS = 10 * 60 * 1000
 export interface CreateReleasePlanInput {
   manifest: FleetManifest
   manifestDigest: string
+  runtimeManifestDigest: string | null
   dependencies: Readonly<Record<string, string>>
   artifactDigests?: Readonly<Record<string, string>>
   appliedRelease?: FleetAppliedRelease | null
@@ -198,7 +199,7 @@ export function createReleasePlan(input: CreateReleasePlanInput): FleetReleasePl
       releaseDigest,
       plugins,
       changes,
-      restartRequired: changes.length > 0,
+      restartRequired: changes.length > 0 || input.runtimeManifestDigest !== input.manifestDigest,
       createdAt,
       expiresAt: new Date(Date.parse(createdAt) + planTtlMs).toISOString(),
     })

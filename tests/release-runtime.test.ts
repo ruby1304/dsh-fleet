@@ -31,6 +31,7 @@ async function setup(
   associatedIntegrity = approvedIntegrity,
   runtimeMode: 'current' | 'legacy-before-install' | 'legacy-always' = 'current',
   initialLinks = false,
+  runtimeManifestBinding: 'profile-local' | 'external' = 'profile-local',
 ): Promise<{
   config: FleetAgentConfig
   profileDir: string
@@ -79,6 +80,12 @@ async function setup(
   await writeFile(join(profileDir, 'pnpm-lock.yaml'), "lockfileVersion: '9.0'\n")
   await writeFile(join(profileDir, 'pnpm-workspace.yaml'), 'packages: []\n')
   await writeFile(join(profileDir, 'cordis.patch.yml'), '[]\n')
+  await writeFile(join(profileDir, 'fleet.lock.yaml'), `schemaVersion: 1
+team: { id: test-team }
+devices:
+  worker: { assignedTo: owner, class: always-on-worker, channel: stable }
+plugins: []
+`)
 
   const artifact = 'private plugin artifact fixture'
   const artifactDigest = createHash('sha256').update(artifact).digest('hex')
@@ -161,7 +168,25 @@ if (args[3] === 'remove') {
 fs.writeFileSync(packagePath, JSON.stringify(manifest, null, 2) + '\\n')
 `)
   const pnpmBinary = join(binDir, 'pnpm')
-  await writeFile(pnpmBinary, "#!/bin/sh\nprintf '11.22.0\\n'\n")
+  await writeFile(pnpmBinary, `#!/usr/bin/env node
+const fs = require('node:fs')
+const path = require('node:path')
+const args = process.argv.slice(2)
+if (args[0] === '--version') { process.stdout.write('11.22.0\\n'); process.exit(0) }
+if (args[0] !== 'install') process.exit(9)
+const manifest = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'package.json'), 'utf8'))
+for (const id of ['public-plugin', 'private-plugin']) {
+  if (manifest.dependencies?.[id] === undefined) continue
+  const moduleDir = path.join(process.cwd(), 'node_modules', id)
+  if (!fs.existsSync(moduleDir)) {
+    fs.mkdirSync(moduleDir, { recursive: true })
+    fs.writeFileSync(path.join(moduleDir, 'package.json'), JSON.stringify({
+      name: id,
+      version: id === 'public-plugin' ? '1.2.3' : '2.0.0',
+    }))
+  }
+}
+`)
   const tarBinary = join(binDir, 'tar')
   await writeFile(tarBinary, `#!/usr/bin/env node
 process.stdout.write(JSON.stringify({
@@ -206,6 +231,7 @@ process.stdout.write(JSON.stringify({
         result: {
           ok: true,
           value: {
+            manifest: { path: runtimeManifestBinding === 'profile-local' ? join(profileDir, 'fleet.lock.yaml') : manifestPath },
             summary: { failed: 0 },
             plugins: [
               { id: 'public-plugin', state: profile.dependencies?.['public-plugin'] === '1.2.3' ? 'aligned' : 'missing' },
@@ -302,6 +328,7 @@ describe('atomic profile release runtime', () => {
     expect(profile.dependencies).toMatchObject({ 'public-plugin': '1.2.3', unmanaged: '9.9.9' })
     expect(profile.dependencies['private-plugin']).toBe(`file:${config.artifactStore}/${artifactDigest}.tgz`)
     expect(profile.dsh.profile.bundles).toEqual(expect.arrayContaining(['public-plugin', 'private-plugin', 'unmanaged']))
+    expect(await readFile(join(profileDir, 'fleet.lock.yaml'), 'utf8')).toBe(await readFile(config.manifestPath, 'utf8'))
     expect(await readAppliedRelease(config)).toMatchObject({ releaseId: 'stable-web', releaseVersion: '3.0.0' })
     expect((await readdir(join(config.dshHome, 'profiles'))).sort()).toEqual(['web'])
     expect(await applyStoredReleasePlan(config, approval(plan), new Date('2026-08-19T08:01:01.000Z'))).toEqual(result)
@@ -310,13 +337,39 @@ describe('atomic profile release runtime', () => {
   it('restores the old profile when post-swap runtime health fails', async () => {
     const { config, profileDir, failHealthMarker } = await setup()
     const before = await readFile(join(profileDir, 'package.json'), 'utf8')
+    const beforeRuntimeManifest = await readFile(join(profileDir, 'fleet.lock.yaml'), 'utf8')
     const plan = await createStoredReleasePlan(config, new Date('2026-08-19T08:00:00.000Z'))
     await writeFile(failHealthMarker, 'fail\n')
     const result = await applyStoredReleasePlan(config, approval(plan), new Date('2026-08-19T08:01:00.000Z'))
     expect(result).toMatchObject({ state: 'rolled-back', result: 'rolled-back', errorCode: 'runtime-modules-failed' })
     expect(await readFile(join(profileDir, 'package.json'), 'utf8')).toBe(before)
+    expect(await readFile(join(profileDir, 'fleet.lock.yaml'), 'utf8')).toBe(beforeRuntimeManifest)
     expect(await readAppliedRelease(config)).toBeNull()
     expect((await readdir(join(config.dshHome, 'profiles'))).sort()).toEqual(['web'])
+  })
+
+  it('atomically swaps a new runtime manifest even when plugin coordinates are unchanged', async () => {
+    const { config, profileDir } = await setup()
+    const first = await createStoredReleasePlan(config, new Date('2026-08-19T08:00:00.000Z'))
+    await expect(applyStoredReleasePlan(config, approval(first), new Date('2026-08-19T08:01:00.000Z'))).resolves.toMatchObject({
+      state: 'succeeded',
+      result: 'success',
+    })
+    const nextManifest = (await readFile(config.manifestPath, 'utf8'))
+      .replace('stable-web:', 'stable-web-next:')
+      .replace('version: 3.0.0', 'version: 3.0.1')
+      .replace('{ web: stable-web }', '{ web: stable-web-next }')
+    await writeFile(config.manifestPath, nextManifest)
+    const second = await createStoredReleasePlan(config, new Date('2026-08-19T08:02:00.000Z'))
+    expect(second.changes).toEqual([])
+    expect(second.restartRequired).toBe(true)
+    await expect(applyStoredReleasePlan(config, approval(second), new Date('2026-08-19T08:03:00.000Z'))).resolves.toMatchObject({
+      state: 'succeeded',
+      result: 'success',
+      releaseId: 'stable-web-next',
+    })
+    expect(await readFile(join(profileDir, 'fleet.lock.yaml'), 'utf8')).toBe(nextManifest)
+    expect(await readAppliedRelease(config)).toMatchObject({ releaseId: 'stable-web-next', releaseVersion: '3.0.1' })
   })
 
   it('rejects an approved npm integrity that appears only on an unrelated lock entry', async () => {
@@ -340,6 +393,13 @@ describe('atomic profile release runtime', () => {
       tasksEnabled: false,
       workspaceIds: ['repo'],
       executableChecks: expect.arrayContaining(['dsh', 'pnpm', 'tar', 'screen', 'lsof', 'ps']),
+    })
+  })
+
+  it('rejects a runtime still bound to an external manifest path', async () => {
+    const { config } = await setup('sha512-YWJjZA==', 'sha512-YWJjZA==', 'current', false, 'external')
+    await expect(doctorAgent(config, new Date('2026-08-19T08:00:00.000Z'))).rejects.toMatchObject({
+      code: 'fleet-runtime-manifest-path-mismatch',
     })
   })
 

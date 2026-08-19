@@ -9190,7 +9190,7 @@ function validatePlanBody(value) {
 	if (pluginIds.some((id, index) => index > 0 && id <= pluginIds[index - 1]) || changeIds.some((id, index) => index > 0 && id <= changeIds[index - 1])) throw new FleetProtocolError("invalid-payload", "plugins and changes must be sorted by pluginId");
 	const finalIds = new Set(pluginIds);
 	for (const change of value.changes) if (change.action === "remove" ? finalIds.has(change.pluginId) : !finalIds.has(change.pluginId)) throw new FleetProtocolError("invalid-action", "change set does not match the final plugin set");
-	if (value.restartRequired !== value.changes.length > 0) throw new FleetProtocolError("invalid-payload", "restartRequired must reflect whether the release changes the profile");
+	if (value.changes.length > 0 && value.restartRequired !== true) throw new FleetProtocolError("invalid-payload", "a plugin change requires a profile restart");
 	const expectedReleaseDigest = sha256Canonical({
 		releaseId: value.releaseId,
 		releaseVersion: value.releaseVersion,
@@ -9400,7 +9400,7 @@ function createReleasePlan(input) {
 			releaseDigest,
 			plugins,
 			changes,
-			restartRequired: changes.length > 0,
+			restartRequired: changes.length > 0 || input.runtimeManifestDigest !== input.manifestDigest,
 			createdAt,
 			expiresAt: new Date(Date.parse(createdAt) + planTtlMs).toISOString()
 		});
@@ -9411,11 +9411,13 @@ function createReleasePlan(input) {
 }
 //#endregion
 //#region src/agent/runtime.ts
+const RUNTIME_MANIFEST_FILENAME = "fleet.lock.yaml";
 const SNAPSHOT_FILES = [
 	"package.json",
 	"pnpm-lock.yaml",
 	"pnpm-workspace.yaml",
-	"cordis.patch.yml"
+	"cordis.patch.yml",
+	RUNTIME_MANIFEST_FILENAME
 ];
 const MAX_OUTPUT_BYTES = 1048576;
 const TERMINATION_GRACE_MS = 2e3;
@@ -9430,6 +9432,9 @@ var AgentRuntimeError = class extends Error {
 };
 function profileDir(config) {
 	return join(config.dshHome, "profiles", config.profile);
+}
+function runtimeManifestPath(config) {
+	return join(profileDir(config), RUNTIME_MANIFEST_FILENAME);
 }
 function controlledEnv(config) {
 	const path = [.../* @__PURE__ */ new Set([
@@ -10102,7 +10107,7 @@ async function waitForHttp(url, timeoutMs, signal) {
 	}
 	throw new AgentRuntimeError("health-timeout", "DSH health endpoint did not recover before timeout");
 }
-async function verifyHealth(config, plan, signal, expectedPluginIds = []) {
+async function verifyHealth(config, plan, signal, expectedPluginIds = [], expectedManifestPath) {
 	assertMutationReadyConfig(config);
 	await runFile(config.dshBinary, [
 		"--profile",
@@ -10124,6 +10129,7 @@ async function verifyHealth(config, plan, signal, expectedPluginIds = []) {
 	const targetIds = plan === void 0 ? [...expectedPluginIds] : [plan.pluginId];
 	let targetPending = targetIds.length > 0;
 	let runtimeFailed = false;
+	let manifestPathMismatch = false;
 	while (Date.now() < deadline) {
 		throwIfAborted(signal);
 		const rpcId = "fleet-agent-health-" + randomUUID();
@@ -10146,7 +10152,8 @@ async function verifyHealth(config, plan, signal, expectedPluginIds = []) {
 				const failedModules = body.result?.value?.runtime?.failedModules;
 				runtimeFailed = Array.isArray(failedModules) && failedModules.length > 0;
 				const runtimeHealthy = Array.isArray(failedModules) && failedModules.length === 0 || failedModules === void 0 && targetIds.length === 0;
-				const fleetHealthy = body.rpcId === rpcId && body.result?.ok === true && body.result.value?.summary?.failed === 0 && runtimeHealthy;
+				manifestPathMismatch = expectedManifestPath !== void 0 && body.result?.value?.manifest?.path !== expectedManifestPath;
+				const fleetHealthy = body.rpcId === rpcId && body.result?.ok === true && body.result.value?.summary?.failed === 0 && runtimeHealthy && !manifestPathMismatch;
 				const plugins = body.result?.value?.plugins ?? [];
 				targetPending = targetIds.some((id) => plugins.find((item) => item.id === id)?.state !== "aligned");
 				if (fleetHealthy && !targetPending) return;
@@ -10157,6 +10164,7 @@ async function verifyHealth(config, plan, signal, expectedPluginIds = []) {
 		await new Promise((resolve) => setTimeout(resolve, 350));
 	}
 	if (runtimeFailed) throw new AgentRuntimeError("runtime-modules-failed", "DSH Loader reports failed runtime modules");
+	if (manifestPathMismatch) throw new AgentRuntimeError("fleet-runtime-manifest-path-mismatch", "Fleet runtime is not bound to the profile-local manifest");
 	if (targetPending) throw new AgentRuntimeError("plugin-not-active", "approved plugin did not become active");
 	throw new AgentRuntimeError("fleet-rpc-unhealthy", "Fleet RPC reported an unhealthy runtime");
 }
@@ -10474,10 +10482,12 @@ async function currentArtifactDigests(config, state) {
 async function buildReleasePlan(config, now, signal) {
 	const state = await loadState(config, signal);
 	const appliedRelease = await readAppliedRelease(config);
+	const runtimeManifestSource = state.profileSnapshot.files[RUNTIME_MANIFEST_FILENAME];
 	return {
 		plan: createReleasePlan({
 			manifest: state.manifest,
 			manifestDigest: state.manifestDigest,
+			runtimeManifestDigest: runtimeManifestSource === null ? null : sha256(runtimeManifestSource),
 			dependencies: state.dependencies,
 			artifactDigests: await currentArtifactDigests(config, state),
 			appliedRelease,
@@ -10523,7 +10533,7 @@ async function inspectReleaseAgent(config, now = /* @__PURE__ */ new Date(), sig
 }
 async function verifyReleaseAgentHealth(config, signal) {
 	assertReleaseReadyConfig(config);
-	await verifyHealth(config, void 0, signal);
+	await verifyHealth(config, void 0, signal, [], runtimeManifestPath(config));
 }
 async function createStoredReleasePlan(config, now = /* @__PURE__ */ new Date(), signal) {
 	assertReleaseReadyConfig(config);
@@ -10645,6 +10655,9 @@ function npmLockBindsIntegrity(lockSource, plugin) {
 }
 async function verifyReleaseProfileFiles(config, plan, profile) {
 	const targetConfig = configForProfile(config, profile);
+	const runtimeManifestSource = await readRegularOptional(runtimeManifestPath(targetConfig));
+	if (runtimeManifestSource === null || sha256(runtimeManifestSource) !== plan.manifestDigest) throw new AgentRuntimeError("release-runtime-manifest-mismatch", "release profile does not contain the approved Fleet runtime manifest");
+	parseFleetManifest(runtimeManifestSource);
 	const source = await readRegularOptional(join(profileDir(targetConfig), "package.json"));
 	if (source === null) throw new AgentRuntimeError("profile-missing", "staged release profile is missing");
 	const parsed = JSON.parse(source);
@@ -10698,6 +10711,10 @@ async function stageRelease(config, plan, snapshot, signal) {
 		if (source !== null) await durableWriteFile(join(stageDir, name), source);
 	}
 	if (await computeProfileHash(stageConfig) !== plan.profileHash) throw new AgentRuntimeError("profile-stage-mismatch", "staged profile does not match the approved source profile");
+	const runtimeManifestSource = await readRegularOptional(config.manifestPath);
+	if (runtimeManifestSource === null || sha256(runtimeManifestSource) !== plan.manifestDigest) throw new AgentRuntimeError("release-runtime-manifest-mismatch", "approved Fleet runtime manifest is missing or changed");
+	await rm(runtimeManifestPath(stageConfig), { force: true });
+	await durableWriteFile(runtimeManifestPath(stageConfig), runtimeManifestSource);
 	await runFile(config.pnpmBinary, ["--version"], {
 		env: controlledEnv(config),
 		timeoutMs: 1e4,
@@ -10748,6 +10765,16 @@ async function stageRelease(config, plan, snapshot, signal) {
 			signal
 		});
 	}
+	await runFile(config.pnpmBinary, [
+		"install",
+		"--frozen-lockfile",
+		"--ignore-scripts"
+	], {
+		cwd: stageDir,
+		env: controlledEnv(config),
+		timeoutMs: 12e4,
+		signal
+	});
 	await verifyReleaseProfileFiles(config, plan, stageProfile);
 }
 async function ensureServiceStarted(config) {
@@ -10823,7 +10850,7 @@ async function rollbackRelease(config, plan, record, errorCode) {
 		current = await saveReleaseAction(config, current, "rollback-restarting");
 		await ensureServiceStarted(config);
 		current = await saveReleaseAction(config, current, "rollback-verifying");
-		await verifyHealth(config);
+		await verifyHealth(config, void 0, void 0, [], runtimeManifestPath(config));
 		await rm(failedDir, {
 			recursive: true,
 			force: true
@@ -10855,7 +10882,7 @@ async function recoverReleaseInterrupted(config, plan, record) {
 	if ((await readAppliedRelease(config))?.releaseDigest === plan.releaseDigest) try {
 		await verifyReleaseProfileFiles(config, plan, config.profile);
 		await ensureServiceStarted(config);
-		await verifyHealth(config, void 0, void 0, plan.plugins.map((plugin) => plugin.pluginId));
+		await verifyHealth(config, void 0, void 0, plan.plugins.map((plugin) => plugin.pluginId), runtimeManifestPath(config));
 		const names = releaseProfileNames(plan);
 		const profilesRoot = dirname(profileDir(config));
 		await Promise.all([
@@ -10910,7 +10937,7 @@ async function applyStoredReleasePlanLocked(config, approval, now, signal) {
 	}
 	const current = await loadState(config, signal);
 	if (current.manifestDigest !== plan.manifestDigest || current.profileHash !== plan.profileHash || current.dshVersion !== plan.observedDshVersion) throw new FleetProtocolError("approval-mismatch", "manifest, profile or DSH version changed after the release plan was created");
-	await verifyHealth(config, void 0, signal);
+	await verifyHealth(config, void 0, signal, [], runtimeManifestPath(config));
 	const names = releaseProfileNames(plan);
 	let record = {
 		planId: plan.planId,
@@ -10938,9 +10965,9 @@ async function applyStoredReleasePlanLocked(config, approval, now, signal) {
 	});
 	let releaseCommitted = false;
 	try {
-		if (plan.changes.length === 0) {
+		if (!plan.restartRequired) {
 			await verifyReleaseProfileFiles(config, plan, config.profile);
-			await verifyHealth(config, void 0, signal, plan.plugins.map((plugin) => plugin.pluginId));
+			await verifyHealth(config, void 0, signal, plan.plugins.map((plugin) => plugin.pluginId), runtimeManifestPath(config));
 			await persistAppliedRelease(config, plan);
 			releaseCommitted = true;
 			record = await saveReleaseAction(config, record, "succeeded", { result: "success" });
@@ -10965,7 +10992,7 @@ async function applyStoredReleasePlanLocked(config, approval, now, signal) {
 		throwIfAborted(signal);
 		record = await saveReleaseAction(config, record, "verifying");
 		await verifyReleaseProfileFiles(config, plan, config.profile);
-		await verifyHealth(config, void 0, signal, plan.plugins.map((plugin) => plugin.pluginId));
+		await verifyHealth(config, void 0, signal, plan.plugins.map((plugin) => plugin.pluginId), runtimeManifestPath(config));
 		throwIfAborted(signal);
 		await persistAppliedRelease(config, plan);
 		releaseCommitted = true;
