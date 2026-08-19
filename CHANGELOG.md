@@ -1,6 +1,12 @@
 # Changelog
 
-## 0.3.0 - Unreleased
+## 0.3.1 - Unreleased
+
+- Allow a schema-v2 Agent to accept a healthy schema-v1 Fleet RPC response only during target-free preflight and rollback verification, so an installed 0.2 Host can bootstrap its own 0.3.x atomic upgrade.
+- Continue to require the current runtime health field, zero Loader failures and exact plugin alignment after every release swap; a post-swap legacy response rolls the release back.
+- Run the process- and port-sensitive runtime suite without file-level parallelism so release gates remain deterministic on a busy controller.
+
+## 0.3.0 - 2026-08-19
 
 - Add schema-v2 atomic profile releases that combine exact public npm/GitHub sources and content-addressed private artifacts under one approval and one profile swap.
 - Stage profiles on the live filesystem, verify private tarballs and npm integrity, validate before cutover, prove post-restart DSH/Fleet health, and restore the previous directory on failure.

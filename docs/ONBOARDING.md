@@ -37,7 +37,7 @@ Use paths without spaces because fixed Host-to-Agent transport paths intentional
   artifacts/
     <sha256>.tgz
   agent-releases/
-    0.3.0/agent.mjs
+    0.3.1/agent.mjs
 ~/.local/state/dsh-fleet/
   web/
 ```

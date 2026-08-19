@@ -29,6 +29,7 @@ afterEach(async () => {
 async function setup(
   approvedIntegrity = 'sha512-YWJjZA==',
   associatedIntegrity = approvedIntegrity,
+  runtimeMode: 'current' | 'legacy-before-install' | 'legacy-always' = 'current',
 ): Promise<{
   config: FleetAgentConfig
   profileDir: string
@@ -167,6 +168,8 @@ process.stdout.write(JSON.stringify({
       }
       const privateInstalled = profile.dependencies?.['private-plugin']?.startsWith('file:') === true
       const fail = existsSync(failHealthMarker) && privateInstalled
+      const omitRuntime = runtimeMode === 'legacy-always' ||
+        (runtimeMode === 'legacy-before-install' && !privateInstalled)
       response.setHeader('content-type', 'application/json')
       response.end(JSON.stringify({
         type: 'server-response',
@@ -179,7 +182,7 @@ process.stdout.write(JSON.stringify({
               { id: 'public-plugin', state: profile.dependencies?.['public-plugin'] === '1.2.3' ? 'aligned' : 'missing' },
               { id: 'private-plugin', state: privateInstalled ? 'aligned' : 'missing' },
             ],
-            runtime: { failedModules: fail ? ['private-plugin'] : [] },
+            ...(omitRuntime ? {} : { runtime: { failedModules: fail ? ['private-plugin'] : [] } }),
           },
         },
       }))
@@ -308,5 +311,26 @@ describe('atomic profile release runtime', () => {
       workspaceIds: ['repo'],
       executableChecks: expect.arrayContaining(['dsh', 'pnpm', 'tar', 'screen', 'lsof', 'ps']),
     })
+  })
+
+  it('accepts a legacy preflight response while requiring current runtime health after the swap', async () => {
+    const { config } = await setup('sha512-YWJjZA==', 'sha512-YWJjZA==', 'legacy-before-install')
+    await expect(doctorAgent(config, new Date('2026-08-19T08:00:00.000Z'))).resolves.toMatchObject({ ready: true })
+    const plan = await createStoredReleasePlan(config, new Date('2026-08-19T08:00:00.000Z'))
+    await expect(applyStoredReleasePlan(config, approval(plan), new Date('2026-08-19T08:01:00.000Z'))).resolves.toMatchObject({
+      state: 'succeeded',
+      result: 'success',
+    })
+  })
+
+  it('rolls back when the post-swap response still omits runtime health', async () => {
+    const { config } = await setup('sha512-YWJjZA==', 'sha512-YWJjZA==', 'legacy-always')
+    const plan = await createStoredReleasePlan(config, new Date('2026-08-19T08:00:00.000Z'))
+    await expect(applyStoredReleasePlan(config, approval(plan), new Date('2026-08-19T08:01:00.000Z'))).resolves.toMatchObject({
+      state: 'rolled-back',
+      result: 'rolled-back',
+      errorCode: 'fleet-rpc-unhealthy',
+    })
+    expect(await readAppliedRelease(config)).toBeNull()
   })
 })

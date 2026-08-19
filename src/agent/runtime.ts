@@ -895,8 +895,10 @@ async function verifyHealth(
         }
         const failedModules = body.result?.value?.runtime?.failedModules
         runtimeFailed = Array.isArray(failedModules) && failedModules.length > 0
+        const runtimeHealthy = (Array.isArray(failedModules) && failedModules.length === 0) ||
+          (failedModules === undefined && targetIds.length === 0)
         const fleetHealthy = body.rpcId === rpcId && body.result?.ok === true &&
-          body.result.value?.summary?.failed === 0 && Array.isArray(failedModules) && failedModules.length === 0
+          body.result.value?.summary?.failed === 0 && runtimeHealthy
         const plugins = body.result?.value?.plugins ?? []
         targetPending = targetIds.some(id => plugins.find(item => item.id === id)?.state !== 'aligned')
         if (fleetHealthy && !targetPending) return
