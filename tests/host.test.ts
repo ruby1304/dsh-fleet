@@ -225,5 +225,9 @@ plugins: []
       deviceId: 'worker', pluginId: 'plugin-a', command: 'anything', argv: ['anything'], spec: 'latest',
     }, new AbortController().signal)
     expect(arbitrary).toMatchObject({ ok: false, error: { message: 'plan payload has unsupported or missing fields' } })
+    const invalidTask = await agent!.handler('task-submit', {
+      targetDeviceId: 'worker', taskId: 'task:not-a-uuid', workspaceId: 'repo', profile: 'headless', prompt: 'safe task',
+    }, new AbortController().signal)
+    expect(invalidTask).toMatchObject({ ok: false, error: { message: 'payload.taskId must be a namespaced UUID' } })
   })
 })

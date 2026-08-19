@@ -165,6 +165,66 @@ function isFleetTaskReply(value: unknown): value is FleetTaskReply {
     (payload.errorCode === undefined || payload.errorCode === null || typeof payload.errorCode === 'string')
 }
 
+const TASK_REFERENCE_STORAGE_KEY = 'dsh-fleet.task-reference.v1'
+const TASK_ID_PATTERN = /^task:[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+
+interface StoredTaskReference {
+  targetDeviceId: string
+  taskId: string
+}
+
+function isTaskId(value: string): boolean {
+  return TASK_ID_PATTERN.test(value)
+}
+
+function isStoredTaskReference(value: unknown): value is StoredTaskReference {
+  if (!isRecord(value) || Object.keys(value).length !== 2 ||
+      typeof value.targetDeviceId !== 'string' || typeof value.taskId !== 'string') return false
+  return value.targetDeviceId.length > 0 && value.targetDeviceId.length <= 256 && !value.targetDeviceId.includes('\0') &&
+    isTaskId(value.taskId)
+}
+
+function readStoredTaskReference(): StoredTaskReference | null {
+  try {
+    const storage = window.localStorage
+    if (storage === undefined) return null
+    const raw = storage.getItem(TASK_REFERENCE_STORAGE_KEY)
+    if (raw === null) return null
+    const parsed: unknown = JSON.parse(raw)
+    if (isStoredTaskReference(parsed)) return parsed
+    storage.removeItem(TASK_REFERENCE_STORAGE_KEY)
+  } catch {
+    // Storage is optional (private mode, denied access, SSR, or corrupt JSON).
+    try {
+      window.localStorage?.removeItem(TASK_REFERENCE_STORAGE_KEY)
+    } catch {
+      // Access can remain denied; the in-memory fallback is still safe.
+    }
+  }
+  return null
+}
+
+function writeStoredTaskReference(reference: StoredTaskReference): void {
+  try {
+    const storage = window.localStorage
+    if (storage === undefined) return
+    storage.setItem(TASK_REFERENCE_STORAGE_KEY, JSON.stringify({
+      targetDeviceId: reference.targetDeviceId,
+      taskId: reference.taskId,
+    }))
+  } catch {
+    // Task recovery is best effort and must not block the signed A2A request.
+  }
+}
+
+function clearStoredTaskReference(): void {
+  try {
+    window.localStorage?.removeItem(TASK_REFERENCE_STORAGE_KEY)
+  } catch {
+    // Keep clearing the in-memory reference even when storage is unavailable.
+  }
+}
+
 const driftColors: Record<PluginDriftState, string> = {
   aligned: SM.good,
   missing: SM.bad,
@@ -532,6 +592,7 @@ function TasksView({
   workspaceId,
   profile,
   prompt,
+  taskId,
   reply,
   loading,
   error,
@@ -539,6 +600,8 @@ function TasksView({
   onWorkspace,
   onProfile,
   onPrompt,
+  onTaskId,
+  onClear,
   onSubmit,
   onStatus,
   onCancel,
@@ -548,6 +611,7 @@ function TasksView({
   workspaceId: string
   profile: string
   prompt: string
+  taskId: string
   reply: FleetTaskReply | null
   loading: boolean
   error: string | null
@@ -555,6 +619,8 @@ function TasksView({
   onWorkspace(value: string): void
   onProfile(value: string): void
   onPrompt(value: string): void
+  onTaskId(value: string): void
+  onClear(): void
   onSubmit(): void
   onStatus(): void
   onCancel(): void
@@ -578,7 +644,8 @@ function TasksView({
     {taskTargets.length > 0 && <div style={{ padding: 11, borderRadius: 12, background: SM.panel }}>
       <label style={{ display: 'grid', gap: 5, marginBottom: 9, color: SM.fg2 }}>
         <span>目标设备</span>
-        <select value={targetDeviceId} onChange={event => onTarget(event.currentTarget.value)} style={{ minHeight: 34, border: `1px solid ${SM.borderStrong}`, borderRadius: 9, background: SM.panel, color: SM.fg }}>
+        <select value={targetDeviceId} disabled={loading || taskId !== ''} onChange={event => onTarget(event.currentTarget.value)} style={{ minHeight: 34, border: `1px solid ${SM.borderStrong}`, borderRadius: 9, background: SM.panel, color: SM.fg }}>
+          {targetDeviceId !== '' && selected === undefined && <option value={targetDeviceId}>{targetDeviceId}（已保存）</option>}
           {taskTargets.map(target => <option key={target.deviceId} value={target.deviceId}>{target.deviceId}</option>)}
         </select>
       </label>
@@ -600,11 +667,23 @@ function TasksView({
         <span>任务</span>
         <textarea value={prompt} onChange={event => onPrompt(event.currentTarget.value)} rows={5} maxLength={32 * 1024} placeholder="描述要由目标 DSH 完成的任务" style={{ resize: 'vertical', padding: 9, border: `1px solid ${SM.borderStrong}`, borderRadius: 9, background: SM.panel, color: SM.fg, fontFamily: SM.fontSans }} />
       </label>
-      <button type="button" disabled={loading || prompt.trim().length === 0 || workspaceId === '' || profile === ''} onClick={onSubmit} style={{
+      <button type="button" disabled={loading || taskId !== '' || prompt.trim().length === 0 || workspaceId === '' || profile === ''} onClick={onSubmit} style={{
         width: '100%', minHeight: 34, marginTop: 10, border: 0, borderRadius: 10,
-        background: loading || prompt.trim().length === 0 ? SM.fg4 : SM.info, color: SM.panel,
-        cursor: loading ? 'default' : 'pointer', fontWeight: 600,
+        background: loading || taskId !== '' || prompt.trim().length === 0 ? SM.fg4 : SM.info, color: SM.panel,
+        cursor: loading || taskId !== '' || prompt.trim().length === 0 || workspaceId === '' || profile === '' ? 'default' : 'pointer', fontWeight: 600,
       }}>{loading ? '提交中…' : '签名并提交任务'}</button>
+      {taskId !== '' && <div style={{ marginTop: 7, color: SM.warn }}>已有任务引用；请先查询、取消，或明确清除记录后再新建任务。</div>}
+    </div>}
+    {targetDeviceId !== '' && <div data-dsh-fleet-task-recovery style={{ marginTop: 10, padding: 11, borderRadius: 12, background: SM.panel }}>
+      <label style={{ display: 'grid', gap: 5, color: SM.fg2 }}>
+        <span>Task ID</span>
+        <input aria-label="Task ID" value={taskId} disabled={loading} onChange={event => onTaskId(event.currentTarget.value.trim())} placeholder="task:xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" autoComplete="off" spellCheck={false} style={{ minHeight: 34, padding: '0 9px', border: `1px solid ${SM.borderStrong}`, borderRadius: 9, background: SM.panel, color: SM.fg, fontFamily: SM.fontMono }} />
+      </label>
+      <div style={{ marginTop: 6, color: SM.fg3 }}>浏览器会尝试只保存目标设备和 Task ID，不保存任务描述或输出。</div>
+      <div style={{ display: 'flex', gap: 8, marginTop: 9 }}>
+        <button type="button" disabled={loading || !isTaskId(taskId)} onClick={onStatus} style={{ flex: 1, minHeight: 30, border: `1px solid ${SM.borderStrong}`, borderRadius: 9, background: SM.panel, color: SM.fg2 }}>查询任务</button>
+        <button type="button" disabled={loading || (taskId === '' && reply === null)} onClick={onClear} style={{ flex: 1, minHeight: 30, border: 0, borderRadius: 9, background: SM.bg2, color: SM.fg2 }}>清除记录</button>
+      </div>
     </div>}
     {reply !== null && <div style={{ marginTop: 10, padding: 11, borderRadius: 12, background: SM.panel }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
@@ -625,6 +704,7 @@ function TasksView({
 }
 
 export function FleetSettings({ ctx }: { ctx: ClientContextLike }): React.ReactElement {
+  const [initialTaskReference] = useState<StoredTaskReference | null>(() => readStoredTaskReference())
   const [tab, setTab] = useState<'status' | 'updates' | 'operations' | 'tasks'>('status')
   const [status, setStatus] = useState<FleetStatus | null>(null)
   const [statusError, setStatusError] = useState<string | null>(null)
@@ -638,10 +718,11 @@ export function FleetSettings({ ctx }: { ctx: ClientContextLike }): React.ReactE
   const [agentError, setAgentError] = useState<string | null>(null)
   const [agentLoading, setAgentLoading] = useState(false)
   const [approvalArmed, setApprovalArmed] = useState(false)
-  const [taskTarget, setTaskTarget] = useState('')
+  const [taskTarget, setTaskTarget] = useState(initialTaskReference?.targetDeviceId ?? '')
   const [taskWorkspace, setTaskWorkspace] = useState('')
   const [taskProfile, setTaskProfile] = useState('')
   const [taskPrompt, setTaskPrompt] = useState('')
+  const [taskId, setTaskId] = useState(initialTaskReference?.taskId ?? '')
   const [taskReply, setTaskReply] = useState<FleetTaskReply | null>(null)
   const [taskError, setTaskError] = useState<string | null>(null)
   const [taskLoading, setTaskLoading] = useState(false)
@@ -649,6 +730,9 @@ export function FleetSettings({ ctx }: { ctx: ClientContextLike }): React.ReactE
   const updatesInFlight = useRef<Promise<void> | null>(null)
   const agentsInFlight = useRef<Promise<void> | null>(null)
   const agentMutationInFlight = useRef(false)
+  const taskMutationInFlight = useRef(false)
+  const taskEpoch = useRef(0)
+  const restoredTaskChecked = useRef(false)
 
   const loadStatus = useCallback(async () => {
     if (statusInFlight.current !== null) return statusInFlight.current
@@ -783,27 +867,57 @@ export function FleetSettings({ ctx }: { ctx: ClientContextLike }): React.ReactE
   }, [agentPlan, approvalArmed, ctx, loadAgentTargets])
 
   const taskCall = useCallback(async (endpoint: 'task-submit' | 'task-status' | 'task-cancel') => {
-    if (taskLoading || taskTarget === '') return
+    if (taskMutationInFlight.current || taskTarget === '') return
+    if (endpoint === 'task-submit' && taskId !== '') {
+      setTaskError('请先处理或清除当前任务引用')
+      return
+    }
+    const requestTaskId = endpoint === 'task-submit' ? 'task:' + crypto.randomUUID() : taskId.trim()
+    if (!isTaskId(requestTaskId)) {
+      setTaskError('请输入有效的 Task ID')
+      return
+    }
+    const requestTarget = taskTarget
+    const requestEpoch = endpoint === 'task-submit' ? ++taskEpoch.current : taskEpoch.current
+    const reference = { targetDeviceId: requestTarget, taskId: requestTaskId }
+    if (endpoint === 'task-submit') {
+      setTaskId(requestTaskId)
+      setTaskReply(null)
+    }
+    writeStoredTaskReference(reference)
+    taskMutationInFlight.current = true
     setTaskLoading(true)
     try {
       const payload = endpoint === 'task-submit'
-        ? { targetDeviceId: taskTarget, workspaceId: taskWorkspace, profile: taskProfile, prompt: taskPrompt.trim() }
-        : { targetDeviceId: taskTarget, taskId: taskReply?.taskId }
+        ? { ...reference, workspaceId: taskWorkspace, profile: taskProfile, prompt: taskPrompt.trim() }
+        : reference
       const result = await ctx.connection.rpc.call(AGENT_CHANNEL, endpoint, payload)
-      setTaskReply(rpcValue(result, isFleetTaskReply, 'fleet task response unavailable'))
+      const nextReply = rpcValue(result, isFleetTaskReply, 'fleet task response unavailable')
+      if (nextReply.taskId !== requestTaskId) throw new Error('fleet task response does not match the requested task')
+      if (taskEpoch.current !== requestEpoch) return
+      setTaskReply(nextReply)
+      setTaskId(nextReply.taskId)
       setTaskError(null)
     } catch (cause: unknown) {
+      if (taskEpoch.current !== requestEpoch) return
       setTaskError(cause instanceof Error ? cause.message : String(cause))
     } finally {
+      taskMutationInFlight.current = false
       setTaskLoading(false)
     }
-  }, [ctx, taskLoading, taskProfile, taskPrompt, taskReply?.taskId, taskTarget, taskWorkspace])
+  }, [ctx, taskId, taskProfile, taskPrompt, taskTarget, taskWorkspace])
 
   useEffect(() => {
     void loadStatus()
     const timer = window.setInterval(() => { if (!document.hidden) void loadStatus() }, 30_000)
     return () => window.clearInterval(timer)
   }, [loadStatus])
+
+  useEffect(() => {
+    if (initialTaskReference === null || restoredTaskChecked.current) return
+    restoredTaskChecked.current = true
+    void taskCall('task-status')
+  }, [initialTaskReference, taskCall])
 
   useEffect(() => {
     if (tab !== 'updates' || updates !== null || updateError !== null || updateLoading) return
@@ -823,7 +937,7 @@ export function FleetSettings({ ctx }: { ctx: ClientContextLike }): React.ReactE
         ? [{ deviceId: target.deviceId, tasks: inspection.tasks }]
         : []
     })
-    const selected = available.find(target => target.deviceId === taskTarget) ?? available[0]
+    const selected = taskTarget === '' ? available[0] : available.find(target => target.deviceId === taskTarget)
     if (selected === undefined) return
     if (taskTarget !== selected.deviceId) setTaskTarget(selected.deviceId)
     if (!selected.tasks.workspaceIds.includes(taskWorkspace)) setTaskWorkspace(selected.tasks.workspaceIds[0] ?? '')
@@ -896,13 +1010,35 @@ export function FleetSettings({ ctx }: { ctx: ClientContextLike }): React.ReactE
                   workspaceId={taskWorkspace}
                   profile={taskProfile}
                   prompt={taskPrompt}
+                  taskId={taskId}
                   reply={taskReply}
                   loading={taskLoading}
                   error={taskError ?? agentError}
-                  onTarget={value => { setTaskTarget(value); setTaskReply(null) }}
+                  onTarget={value => {
+                    taskEpoch.current += 1
+                    setTaskTarget(value)
+                    setTaskReply(null)
+                    setTaskId('')
+                    setTaskError(null)
+                    clearStoredTaskReference()
+                  }}
                   onWorkspace={setTaskWorkspace}
                   onProfile={setTaskProfile}
                   onPrompt={setTaskPrompt}
+                  onTaskId={value => {
+                    taskEpoch.current += 1
+                    setTaskId(value)
+                    setTaskReply(null)
+                    setTaskError(null)
+                    clearStoredTaskReference()
+                  }}
+                  onClear={() => {
+                    taskEpoch.current += 1
+                    setTaskId('')
+                    setTaskReply(null)
+                    setTaskError(null)
+                    clearStoredTaskReference()
+                  }}
                   onSubmit={() => void taskCall('task-submit')}
                   onStatus={() => void taskCall('task-status')}
                   onCancel={() => void taskCall('task-cancel')}

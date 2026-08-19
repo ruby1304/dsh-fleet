@@ -111,6 +111,46 @@ window.__ModuleLoader__.load({
 			const payload = value.response.payload;
 			return payload.taskId === value.taskId && typeof payload.state === "string" && typeof payload.updatedAt === "string" && (payload.result === void 0 || payload.result === null || typeof payload.result === "string") && (payload.truncated === void 0 || typeof payload.truncated === "boolean") && (payload.errorCode === void 0 || payload.errorCode === null || typeof payload.errorCode === "string");
 		}
+		const TASK_REFERENCE_STORAGE_KEY = "dsh-fleet.task-reference.v1";
+		const TASK_ID_PATTERN = /^task:[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+		function isTaskId(value) {
+			return TASK_ID_PATTERN.test(value);
+		}
+		function isStoredTaskReference(value) {
+			if (!isRecord(value) || Object.keys(value).length !== 2 || typeof value.targetDeviceId !== "string" || typeof value.taskId !== "string") return false;
+			return value.targetDeviceId.length > 0 && value.targetDeviceId.length <= 256 && !value.targetDeviceId.includes("\0") && isTaskId(value.taskId);
+		}
+		function readStoredTaskReference() {
+			try {
+				const storage = window.localStorage;
+				if (storage === void 0) return null;
+				const raw = storage.getItem(TASK_REFERENCE_STORAGE_KEY);
+				if (raw === null) return null;
+				const parsed = JSON.parse(raw);
+				if (isStoredTaskReference(parsed)) return parsed;
+				storage.removeItem(TASK_REFERENCE_STORAGE_KEY);
+			} catch {
+				try {
+					window.localStorage?.removeItem(TASK_REFERENCE_STORAGE_KEY);
+				} catch {}
+			}
+			return null;
+		}
+		function writeStoredTaskReference(reference) {
+			try {
+				const storage = window.localStorage;
+				if (storage === void 0) return;
+				storage.setItem(TASK_REFERENCE_STORAGE_KEY, JSON.stringify({
+					targetDeviceId: reference.targetDeviceId,
+					taskId: reference.taskId
+				}));
+			} catch {}
+		}
+		function clearStoredTaskReference() {
+			try {
+				window.localStorage?.removeItem(TASK_REFERENCE_STORAGE_KEY);
+			} catch {}
+		}
 		const driftColors = {
 			aligned: SM.good,
 			missing: SM.bad,
@@ -1079,7 +1119,7 @@ window.__ModuleLoader__.load({
 				]
 			});
 		}
-		function TasksView({ targets, targetDeviceId, workspaceId, profile, prompt, reply, loading, error, onTarget, onWorkspace, onProfile, onPrompt, onSubmit, onStatus, onCancel }) {
+		function TasksView({ targets, targetDeviceId, workspaceId, profile, prompt, taskId, reply, loading, error, onTarget, onWorkspace, onProfile, onPrompt, onTaskId, onClear, onSubmit, onStatus, onCancel }) {
 			const taskTargets = (targets?.targets ?? []).flatMap((target) => {
 				const inspection = target.inspection;
 				return target.online && inspection !== void 0 && "kind" in inspection && inspection.kind === "profile-release" && inspection.tasks.enabled ? [{
@@ -1145,8 +1185,9 @@ window.__ModuleLoader__.load({
 									marginBottom: 9,
 									color: SM.fg2
 								},
-								children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: "目标设备" }), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("select", {
+								children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: "目标设备" }), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("select", {
 									value: targetDeviceId,
+									disabled: loading || taskId !== "",
 									onChange: (event) => onTarget(event.currentTarget.value),
 									style: {
 										minHeight: 34,
@@ -1155,10 +1196,13 @@ window.__ModuleLoader__.load({
 										background: SM.panel,
 										color: SM.fg
 									},
-									children: taskTargets.map((target) => /* @__PURE__ */ (0, react_jsx_runtime.jsx)("option", {
+									children: [targetDeviceId !== "" && selected === void 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("option", {
+										value: targetDeviceId,
+										children: [targetDeviceId, "（已保存）"]
+									}), taskTargets.map((target) => /* @__PURE__ */ (0, react_jsx_runtime.jsx)("option", {
 										value: target.deviceId,
 										children: target.deviceId
-									}, target.deviceId))
+									}, target.deviceId))]
 								})]
 							}),
 							/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
@@ -1237,7 +1281,7 @@ window.__ModuleLoader__.load({
 							}),
 							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
 								type: "button",
-								disabled: loading || prompt.trim().length === 0 || workspaceId === "" || profile === "",
+								disabled: loading || taskId !== "" || prompt.trim().length === 0 || workspaceId === "" || profile === "",
 								onClick: onSubmit,
 								style: {
 									width: "100%",
@@ -1245,12 +1289,96 @@ window.__ModuleLoader__.load({
 									marginTop: 10,
 									border: 0,
 									borderRadius: 10,
-									background: loading || prompt.trim().length === 0 ? SM.fg4 : SM.info,
+									background: loading || taskId !== "" || prompt.trim().length === 0 ? SM.fg4 : SM.info,
 									color: SM.panel,
-									cursor: loading ? "default" : "pointer",
+									cursor: loading || taskId !== "" || prompt.trim().length === 0 || workspaceId === "" || profile === "" ? "default" : "pointer",
 									fontWeight: 600
 								},
 								children: loading ? "提交中…" : "签名并提交任务"
+							}),
+							taskId !== "" && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+								style: {
+									marginTop: 7,
+									color: SM.warn
+								},
+								children: "已有任务引用；请先查询、取消，或明确清除记录后再新建任务。"
+							})
+						]
+					}),
+					targetDeviceId !== "" && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+						"data-dsh-fleet-task-recovery": true,
+						style: {
+							marginTop: 10,
+							padding: 11,
+							borderRadius: 12,
+							background: SM.panel
+						},
+						children: [
+							/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("label", {
+								style: {
+									display: "grid",
+									gap: 5,
+									color: SM.fg2
+								},
+								children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: "Task ID" }), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("input", {
+									"aria-label": "Task ID",
+									value: taskId,
+									disabled: loading,
+									onChange: (event) => onTaskId(event.currentTarget.value.trim()),
+									placeholder: "task:xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+									autoComplete: "off",
+									spellCheck: false,
+									style: {
+										minHeight: 34,
+										padding: "0 9px",
+										border: `1px solid ${SM.borderStrong}`,
+										borderRadius: 9,
+										background: SM.panel,
+										color: SM.fg,
+										fontFamily: SM.fontMono
+									}
+								})]
+							}),
+							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+								style: {
+									marginTop: 6,
+									color: SM.fg3
+								},
+								children: "浏览器会尝试只保存目标设备和 Task ID，不保存任务描述或输出。"
+							}),
+							/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+								style: {
+									display: "flex",
+									gap: 8,
+									marginTop: 9
+								},
+								children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+									type: "button",
+									disabled: loading || !isTaskId(taskId),
+									onClick: onStatus,
+									style: {
+										flex: 1,
+										minHeight: 30,
+										border: `1px solid ${SM.borderStrong}`,
+										borderRadius: 9,
+										background: SM.panel,
+										color: SM.fg2
+									},
+									children: "查询任务"
+								}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+									type: "button",
+									disabled: loading || taskId === "" && reply === null,
+									onClick: onClear,
+									style: {
+										flex: 1,
+										minHeight: 30,
+										border: 0,
+										borderRadius: 9,
+										background: SM.bg2,
+										color: SM.fg2
+									},
+									children: "清除记录"
+								})]
 							})
 						]
 					}),
@@ -1345,6 +1473,7 @@ window.__ModuleLoader__.load({
 			});
 		}
 		function FleetSettings({ ctx }) {
+			const [initialTaskReference] = (0, react.useState)(() => readStoredTaskReference());
 			const [tab, setTab] = (0, react.useState)("status");
 			const [status, setStatus] = (0, react.useState)(null);
 			const [statusError, setStatusError] = (0, react.useState)(null);
@@ -1358,10 +1487,11 @@ window.__ModuleLoader__.load({
 			const [agentError, setAgentError] = (0, react.useState)(null);
 			const [agentLoading, setAgentLoading] = (0, react.useState)(false);
 			const [approvalArmed, setApprovalArmed] = (0, react.useState)(false);
-			const [taskTarget, setTaskTarget] = (0, react.useState)("");
+			const [taskTarget, setTaskTarget] = (0, react.useState)(initialTaskReference?.targetDeviceId ?? "");
 			const [taskWorkspace, setTaskWorkspace] = (0, react.useState)("");
 			const [taskProfile, setTaskProfile] = (0, react.useState)("");
 			const [taskPrompt, setTaskPrompt] = (0, react.useState)("");
+			const [taskId, setTaskId] = (0, react.useState)(initialTaskReference?.taskId ?? "");
 			const [taskReply, setTaskReply] = (0, react.useState)(null);
 			const [taskError, setTaskError] = (0, react.useState)(null);
 			const [taskLoading, setTaskLoading] = (0, react.useState)(false);
@@ -1369,6 +1499,9 @@ window.__ModuleLoader__.load({
 			const updatesInFlight = (0, react.useRef)(null);
 			const agentsInFlight = (0, react.useRef)(null);
 			const agentMutationInFlight = (0, react.useRef)(false);
+			const taskMutationInFlight = (0, react.useRef)(false);
+			const taskEpoch = (0, react.useRef)(0);
+			const restoredTaskChecked = (0, react.useRef)(false);
 			const loadStatus = (0, react.useCallback)(async () => {
 				if (statusInFlight.current !== null) return statusInFlight.current;
 				const request = (async () => {
@@ -1499,32 +1632,54 @@ window.__ModuleLoader__.load({
 				loadAgentTargets
 			]);
 			const taskCall = (0, react.useCallback)(async (endpoint) => {
-				if (taskLoading || taskTarget === "") return;
+				if (taskMutationInFlight.current || taskTarget === "") return;
+				if (endpoint === "task-submit" && taskId !== "") {
+					setTaskError("请先处理或清除当前任务引用");
+					return;
+				}
+				const requestTaskId = endpoint === "task-submit" ? "task:" + crypto.randomUUID() : taskId.trim();
+				if (!isTaskId(requestTaskId)) {
+					setTaskError("请输入有效的 Task ID");
+					return;
+				}
+				const requestTarget = taskTarget;
+				const requestEpoch = endpoint === "task-submit" ? ++taskEpoch.current : taskEpoch.current;
+				const reference = {
+					targetDeviceId: requestTarget,
+					taskId: requestTaskId
+				};
+				if (endpoint === "task-submit") {
+					setTaskId(requestTaskId);
+					setTaskReply(null);
+				}
+				writeStoredTaskReference(reference);
+				taskMutationInFlight.current = true;
 				setTaskLoading(true);
 				try {
 					const payload = endpoint === "task-submit" ? {
-						targetDeviceId: taskTarget,
+						...reference,
 						workspaceId: taskWorkspace,
 						profile: taskProfile,
 						prompt: taskPrompt.trim()
-					} : {
-						targetDeviceId: taskTarget,
-						taskId: taskReply?.taskId
-					};
-					const result = await ctx.connection.rpc.call(AGENT_CHANNEL, endpoint, payload);
-					setTaskReply(rpcValue(result, isFleetTaskReply, "fleet task response unavailable"));
+					} : reference;
+					const nextReply = rpcValue(await ctx.connection.rpc.call(AGENT_CHANNEL, endpoint, payload), isFleetTaskReply, "fleet task response unavailable");
+					if (nextReply.taskId !== requestTaskId) throw new Error("fleet task response does not match the requested task");
+					if (taskEpoch.current !== requestEpoch) return;
+					setTaskReply(nextReply);
+					setTaskId(nextReply.taskId);
 					setTaskError(null);
 				} catch (cause) {
+					if (taskEpoch.current !== requestEpoch) return;
 					setTaskError(cause instanceof Error ? cause.message : String(cause));
 				} finally {
+					taskMutationInFlight.current = false;
 					setTaskLoading(false);
 				}
 			}, [
 				ctx,
-				taskLoading,
+				taskId,
 				taskProfile,
 				taskPrompt,
-				taskReply?.taskId,
 				taskTarget,
 				taskWorkspace
 			]);
@@ -1535,6 +1690,11 @@ window.__ModuleLoader__.load({
 				}, 3e4);
 				return () => window.clearInterval(timer);
 			}, [loadStatus]);
+			(0, react.useEffect)(() => {
+				if (initialTaskReference === null || restoredTaskChecked.current) return;
+				restoredTaskChecked.current = true;
+				taskCall("task-status");
+			}, [initialTaskReference, taskCall]);
 			(0, react.useEffect)(() => {
 				if (tab !== "updates" || updates !== null || updateError !== null || updateLoading) return;
 				loadUpdates("if-stale");
@@ -1564,7 +1724,7 @@ window.__ModuleLoader__.load({
 						tasks: inspection.tasks
 					}] : [];
 				});
-				const selected = available.find((target) => target.deviceId === taskTarget) ?? available[0];
+				const selected = taskTarget === "" ? available[0] : available.find((target) => target.deviceId === taskTarget);
 				if (selected === void 0) return;
 				if (taskTarget !== selected.deviceId) setTaskTarget(selected.deviceId);
 				if (!selected.tasks.workspaceIds.includes(taskWorkspace)) setTaskWorkspace(selected.tasks.workspaceIds[0] ?? "");
@@ -1746,16 +1906,35 @@ window.__ModuleLoader__.load({
 							workspaceId: taskWorkspace,
 							profile: taskProfile,
 							prompt: taskPrompt,
+							taskId,
 							reply: taskReply,
 							loading: taskLoading,
 							error: taskError ?? agentError,
 							onTarget: (value) => {
+								taskEpoch.current += 1;
 								setTaskTarget(value);
 								setTaskReply(null);
+								setTaskId("");
+								setTaskError(null);
+								clearStoredTaskReference();
 							},
 							onWorkspace: setTaskWorkspace,
 							onProfile: setTaskProfile,
 							onPrompt: setTaskPrompt,
+							onTaskId: (value) => {
+								taskEpoch.current += 1;
+								setTaskId(value);
+								setTaskReply(null);
+								setTaskError(null);
+								clearStoredTaskReference();
+							},
+							onClear: () => {
+								taskEpoch.current += 1;
+								setTaskId("");
+								setTaskReply(null);
+								setTaskError(null);
+								clearStoredTaskReference();
+							},
 							onSubmit: () => void taskCall("task-submit"),
 							onStatus: () => void taskCall("task-status"),
 							onCancel: () => void taskCall("task-cancel")

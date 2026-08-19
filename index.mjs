@@ -1,11 +1,55 @@
 import { execFileSync, spawn } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import { constants, existsSync } from "node:fs";
 import { lstat, open, readFile, realpath, stat } from "node:fs/promises";
 import { arch, homedir, hostname, platform } from "node:os";
 import { basename, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
 import { gt, valid, validRange } from "semver";
 import { parse } from "yaml";
+//#region src/agent/protocol.ts
+var FleetProtocolError = class extends Error {
+	code;
+	constructor(code, message) {
+		super(message);
+		this.name = "FleetProtocolError";
+		this.code = code;
+	}
+};
+function isRecord$3(value) {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function canonicalize(value, seen) {
+	if (value === null) return "null";
+	if (typeof value === "string" || typeof value === "boolean") return JSON.stringify(value);
+	if (typeof value === "number") {
+		if (!Number.isFinite(value)) throw new FleetProtocolError("invalid-payload", "canonical JSON rejects non-finite numbers");
+		return JSON.stringify(value);
+	}
+	if (Array.isArray(value)) {
+		if (seen.has(value)) throw new FleetProtocolError("invalid-payload", "canonical JSON rejects cycles");
+		seen.add(value);
+		const encoded = "[" + value.map((item) => canonicalize(item, seen)).join(",") + "]";
+		seen.delete(value);
+		return encoded;
+	}
+	if (isRecord$3(value)) {
+		const prototype = Object.getPrototypeOf(value);
+		if (prototype !== Object.prototype && prototype !== null) throw new FleetProtocolError("invalid-payload", "canonical JSON accepts only plain objects");
+		if (seen.has(value)) throw new FleetProtocolError("invalid-payload", "canonical JSON rejects cycles");
+		seen.add(value);
+		const encoded = "{" + Object.keys(value).sort().map((key) => {
+			const item = value[key];
+			if (item === void 0) throw new FleetProtocolError("invalid-payload", "canonical JSON rejects undefined");
+			return JSON.stringify(key) + ":" + canonicalize(item, seen);
+		}).join(",") + "}";
+		seen.delete(value);
+		return encoded;
+	}
+	throw new FleetProtocolError("invalid-payload", "value is not representable as canonical JSON");
+}
+function canonicalJson(value) {
+	return canonicalize(value, /* @__PURE__ */ new Set());
+}
 //#endregion
 //#region src/shared.ts
 const DEVICE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
@@ -14,6 +58,163 @@ function normalizeDeviceId(value, field = "deviceId") {
 	const deviceId = value.trim();
 	if (!DEVICE_ID_PATTERN.test(deviceId)) throw new TypeError(field + " must be 1 to 64 ASCII letters, digits, dots, underscores or hyphens and start with a letter or digit");
 	return deviceId;
+}
+//#endregion
+//#region src/a2a/protocol.ts
+var FleetA2AError = class extends Error {
+	code;
+	constructor(code, message) {
+		super(message);
+		this.name = "FleetA2AError";
+		this.code = code;
+	}
+};
+const MAX_PAYLOAD_BYTES = 49152;
+function isRecord$2(value) {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function text(value, field, maxLength = 128) {
+	if (typeof value !== "string" || value.length === 0 || value !== value.trim() || value.length > maxLength || /[\r\n\0]/.test(value)) throw new FleetA2AError("invalid-payload", field + " must be a bounded trimmed string");
+	return value;
+}
+function longText(value, field, maxLength) {
+	if (typeof value !== "string" || value.trim().length === 0 || value.length > maxLength || value.includes("\0")) throw new FleetA2AError("invalid-payload", field + " must be bounded non-empty text");
+	return value;
+}
+function identifier(value, field) {
+	const result = text(value, field, 64);
+	if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(result)) throw new FleetA2AError("invalid-payload", field + " is invalid");
+	return result;
+}
+function messageId(value, field, prefix) {
+	const result = text(value, field, 64);
+	if (!new RegExp("^" + prefix + ":[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$").test(result)) throw new FleetA2AError("invalid-payload", field + " must be a namespaced UUID");
+	return result;
+}
+function digest(value, field) {
+	if (typeof value !== "string" || !/^[0-9a-f]{64}$/.test(value)) throw new FleetA2AError("invalid-envelope", field + " must be a lowercase SHA-256 digest");
+	return value;
+}
+function canonicalTime(value, field) {
+	if (typeof value !== "string") throw new FleetA2AError("invalid-time", field + " must be a canonical ISO timestamp");
+	const timestamp = Date.parse(value);
+	if (!Number.isFinite(timestamp) || new Date(timestamp).toISOString() !== value) throw new FleetA2AError("invalid-time", field + " must be a canonical ISO timestamp");
+	return timestamp;
+}
+function exactPayload(payload, keys, kind) {
+	const actual = Object.keys(payload).sort();
+	const expected = [...keys].sort();
+	if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) throw new FleetA2AError("invalid-payload", kind + " payload has unsupported or missing fields");
+}
+function taskId(value) {
+	return messageId(value, "payload.taskId", "task");
+}
+function validateA2APayload(kind, payload) {
+	if (!isRecord$2(payload)) throw new FleetA2AError("invalid-payload", kind + " payload must be an object");
+	if (Buffer.byteLength(canonicalJson(payload), "utf8") > MAX_PAYLOAD_BYTES) throw new FleetA2AError("invalid-payload", "A2A payload exceeds the size limit");
+	if (kind === "task.submit") {
+		exactPayload(payload, [
+			"taskId",
+			"workspaceId",
+			"profile",
+			"prompt"
+		], kind);
+		taskId(payload.taskId);
+		identifier(payload.workspaceId, "payload.workspaceId");
+		identifier(payload.profile, "payload.profile");
+		longText(payload.prompt, "payload.prompt", 32768);
+		return;
+	}
+	if (kind === "task.status" || kind === "task.cancel") {
+		exactPayload(payload, ["taskId"], kind);
+		taskId(payload.taskId);
+		return;
+	}
+	if (kind === "task.progress") {
+		exactPayload(payload, [
+			"taskId",
+			"state",
+			"updatedAt"
+		], kind);
+		taskId(payload.taskId);
+		if (![
+			"accepted",
+			"running",
+			"cancel-requested"
+		].includes(text(payload.state, "payload.state", 24))) throw new FleetA2AError("invalid-payload", "task progress state is invalid");
+		canonicalTime(payload.updatedAt, "payload.updatedAt");
+		return;
+	}
+	if (kind === "task.result") {
+		exactPayload(payload, [
+			"taskId",
+			"state",
+			"updatedAt",
+			"resultDigest",
+			"result",
+			"truncated",
+			"errorCode"
+		], kind);
+		taskId(payload.taskId);
+		if (![
+			"succeeded",
+			"failed",
+			"cancelled"
+		].includes(text(payload.state, "payload.state", 16))) throw new FleetA2AError("invalid-payload", "task result state is invalid");
+		canonicalTime(payload.updatedAt, "payload.updatedAt");
+		if (payload.resultDigest !== null) digest(payload.resultDigest, "payload.resultDigest");
+		if (payload.result !== null) longText(payload.result, "payload.result", 32768);
+		if (typeof payload.truncated !== "boolean") throw new FleetA2AError("invalid-payload", "payload.truncated must be boolean");
+		if (payload.errorCode !== null) identifier(payload.errorCode, "payload.errorCode");
+		return;
+	}
+	if (kind === "approval.request") {
+		exactPayload(payload, [
+			"approvalId",
+			"taskId",
+			"summary",
+			"expiresAt"
+		], kind);
+		messageId(payload.approvalId, "payload.approvalId", "approval");
+		taskId(payload.taskId);
+		longText(payload.summary, "payload.summary", 2048);
+		canonicalTime(payload.expiresAt, "payload.expiresAt");
+		return;
+	}
+	if (kind === "approval.decision") {
+		exactPayload(payload, [
+			"approvalId",
+			"taskId",
+			"decision"
+		], kind);
+		messageId(payload.approvalId, "payload.approvalId", "approval");
+		taskId(payload.taskId);
+		if (!["approved", "denied"].includes(text(payload.decision, "payload.decision", 16))) throw new FleetA2AError("invalid-payload", "approval decision is invalid");
+		return;
+	}
+	if (kind === "receipt") {
+		exactPayload(payload, ["requestMessageId", "status"], kind);
+		messageId(payload.requestMessageId, "payload.requestMessageId", "msg");
+		if (!["accepted", "stored"].includes(text(payload.status, "payload.status", 16))) throw new FleetA2AError("invalid-payload", "receipt status is invalid");
+		return;
+	}
+	exactPayload(payload, [
+		"handoffId",
+		"taskId",
+		"summary",
+		"artifactRefs"
+	], kind);
+	messageId(payload.handoffId, "payload.handoffId", "handoff");
+	if (payload.taskId !== null) taskId(payload.taskId);
+	longText(payload.summary, "payload.summary", 8192);
+	if (!Array.isArray(payload.artifactRefs) || payload.artifactRefs.length > 32 || payload.artifactRefs.some((ref) => {
+		try {
+			text(ref, "payload.artifactRefs[]", 512);
+			return false;
+		} catch {
+			return true;
+		}
+	})) throw new FleetA2AError("invalid-payload", "handoff artifactRefs are invalid");
 }
 //#endregion
 //#region src/host/agent-client.ts
@@ -1434,18 +1635,20 @@ function apply(ctx, config) {
 					"profile",
 					"prompt",
 					"targetDeviceId",
+					"taskId",
 					"workspaceId"
 				], "task submit payload");
 				const targetDeviceId = normalizeDeviceId(requiredString(body.targetDeviceId, "targetDeviceId"));
-				const taskId = "task:" + randomUUID();
-				const response = await signedTaskCall(targetDeviceId, "task.submit", {
-					taskId,
+				const taskPayload = {
+					taskId: requiredString(body.taskId, "taskId"),
 					workspaceId: requiredString(body.workspaceId, "workspaceId"),
 					profile: requiredString(body.profile, "profile"),
 					prompt: requiredString(body.prompt, "prompt")
-				}, signal);
+				};
+				validateA2APayload("task.submit", taskPayload);
+				const response = await signedTaskCall(targetDeviceId, "task.submit", taskPayload, signal);
 				return ok({
-					taskId,
+					taskId: taskPayload.taskId,
 					response
 				});
 			}
@@ -1453,6 +1656,7 @@ function apply(ctx, config) {
 				const body = closedPayload(payload, ["targetDeviceId", "taskId"], "task control payload");
 				const targetDeviceId = normalizeDeviceId(requiredString(body.targetDeviceId, "targetDeviceId"));
 				const taskId = requiredString(body.taskId, "taskId");
+				validateA2APayload(endpoint === "task-status" ? "task.status" : "task.cancel", { taskId });
 				const response = await signedTaskCall(targetDeviceId, endpoint === "task-status" ? "task.status" : "task.cancel", { taskId }, signal);
 				return ok({
 					taskId,

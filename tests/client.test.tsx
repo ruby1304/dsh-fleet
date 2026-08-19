@@ -436,12 +436,13 @@ describe('dsh-fleet client slots', () => {
     vi.stubGlobal('window', { setInterval: vi.fn(() => 1), clearInterval: vi.fn() })
     vi.stubGlobal('document', { hidden: false })
     const taskId = 'task:11111111-1111-4111-8111-111111111111'
+    vi.stubGlobal('crypto', { randomUUID: vi.fn(() => taskId.slice('task:'.length)) })
     const call = vi.fn(async (channel: string, endpoint: string, payload: unknown) => {
       if (channel === '/dsh-fleet' && endpoint === 'status') return { ok: true, value: status }
       if (channel === '/dsh-fleet-agent' && endpoint === 'targets') return { ok: true, value: releaseTargetReport() }
       if (channel === '/dsh-fleet-agent' && endpoint === 'task-submit') {
         expect(payload).toEqual({
-          targetDeviceId: 'worker', workspaceId: 'fleet-repo', profile: 'headless', prompt: 'run remote checks',
+          targetDeviceId: 'worker', taskId, workspaceId: 'fleet-repo', profile: 'headless', prompt: 'run remote checks',
         })
         return {
           ok: true,
@@ -498,6 +499,315 @@ describe('dsh-fleet client slots', () => {
       const text = renderedText(component!.toJSON())
       expect(text).toContain('succeeded')
       expect(text).toContain('all checks passed')
+    } finally {
+      await act(async () => { component?.unmount() })
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('restores the saved target and task id after reload without persisting task output', async () => {
+    const taskId = 'task:22222222-2222-4222-8222-222222222222'
+    const localStorage = {
+      getItem: vi.fn(() => JSON.stringify({ targetDeviceId: 'worker', taskId })),
+      setItem: vi.fn(),
+      removeItem: vi.fn(),
+    }
+    vi.stubGlobal('window', { setInterval: vi.fn(() => 1), clearInterval: vi.fn(), localStorage })
+    vi.stubGlobal('document', { hidden: false })
+    const call = vi.fn(async (channel: string, endpoint: string, payload: unknown) => {
+      if (channel === '/dsh-fleet' && endpoint === 'status') return { ok: true, value: status }
+      if (channel === '/dsh-fleet-agent' && endpoint === 'targets') return { ok: true, value: releaseTargetReport() }
+      if (channel === '/dsh-fleet-agent' && endpoint === 'task-status') {
+        expect(payload).toEqual({ targetDeviceId: 'worker', taskId })
+        return {
+          ok: true,
+          value: {
+            taskId,
+            response: {
+              kind: 'task.result',
+              payload: {
+                taskId, state: 'succeeded', updatedAt: '2026-01-01T00:01:00.000Z',
+                result: 'sensitive remote output', truncated: false, errorCode: null,
+              },
+            },
+          },
+        }
+      }
+      return { ok: false, error: { message: `unexpected RPC ${channel} ${endpoint}` } }
+    })
+    const ctx = { connection: { rpc: { call } }, slots: {} } as never
+    let component: TestRenderer.ReactTestRenderer | undefined
+    try {
+      await act(async () => {
+        component = TestRenderer.create(<FleetCard ctx={ctx} />)
+        for (let index = 0; index < 5; index += 1) await Promise.resolve()
+      })
+      expect(call).toHaveBeenCalledWith('/dsh-fleet-agent', 'task-status', { targetDeviceId: 'worker', taskId })
+      expect(localStorage.setItem).toHaveBeenCalled()
+      const persisted = localStorage.setItem.mock.calls.at(-1)?.[1] as string
+      expect(JSON.parse(persisted)).toEqual({ targetDeviceId: 'worker', taskId })
+      expect(persisted).not.toContain('sensitive remote output')
+
+      const tasksTab = component!.root.findAllByType('button').find(button =>
+        button.props.role === 'tab' && renderedText(button.props.children) === '任务',
+      )
+      await act(async () => {
+        tasksTab!.props.onClick()
+        for (let index = 0; index < 5; index += 1) await Promise.resolve()
+      })
+      expect(component!.root.findByProps({ 'aria-label': 'Task ID' }).props.value).toBe(taskId)
+      expect(renderedText(component!.toJSON())).toContain('sensitive remote output')
+    } finally {
+      await act(async () => { component?.unmount() })
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('prestores a client task id and recovers it after the submit response is lost', async () => {
+    const taskId = 'task:55555555-5555-4555-8555-555555555555'
+    let stored: string | null = null
+    const localStorage = {
+      getItem: vi.fn(() => stored),
+      setItem: vi.fn((_key: string, value: string) => { stored = value }),
+      removeItem: vi.fn(() => { stored = null }),
+    }
+    vi.stubGlobal('window', { setInterval: vi.fn(() => 1), clearInterval: vi.fn(), localStorage })
+    vi.stubGlobal('document', { hidden: false })
+    vi.stubGlobal('crypto', { randomUUID: vi.fn(() => taskId.slice('task:'.length)) })
+    let submitCalls = 0
+    const call = vi.fn(async (channel: string, endpoint: string, payload: unknown) => {
+      if (channel === '/dsh-fleet' && endpoint === 'status') return { ok: true, value: status }
+      if (channel === '/dsh-fleet-agent' && endpoint === 'targets') return { ok: true, value: releaseTargetReport() }
+      if (channel === '/dsh-fleet-agent' && endpoint === 'task-submit') {
+        submitCalls += 1
+        expect(payload).toEqual({
+          targetDeviceId: 'worker', taskId, workspaceId: 'fleet-repo', profile: 'headless', prompt: 'ambiguous submit',
+        })
+        expect(JSON.parse(stored!)).toEqual({ targetDeviceId: 'worker', taskId })
+        return { ok: false, error: { message: 'connection lost after target accepted' } }
+      }
+      if (channel === '/dsh-fleet-agent' && endpoint === 'task-status') {
+        expect(payload).toEqual({ targetDeviceId: 'worker', taskId })
+        return {
+          ok: true,
+          value: { taskId, response: { kind: 'task.progress', payload: { taskId, state: 'running', updatedAt: '2026-01-01T00:00:30.000Z' } } },
+        }
+      }
+      return { ok: false, error: { message: `unexpected RPC ${channel} ${endpoint}` } }
+    })
+    const ctx = { connection: { rpc: { call } }, slots: {} } as never
+    let component: TestRenderer.ReactTestRenderer | undefined
+    try {
+      await act(async () => {
+        component = TestRenderer.create(<FleetCard ctx={ctx} />)
+        await Promise.resolve()
+      })
+      const tasksTab = component!.root.findAllByType('button').find(button =>
+        button.props.role === 'tab' && renderedText(button.props.children) === '任务',
+      )
+      await act(async () => {
+        tasksTab!.props.onClick()
+        for (let index = 0; index < 5; index += 1) await Promise.resolve()
+      })
+      await act(async () => {
+        component!.root.findByType('textarea').props.onChange({ currentTarget: { value: 'ambiguous submit' } })
+      })
+      let submit = component!.root.findAllByType('button').find(button => button.props.children === '签名并提交任务')
+      await act(async () => {
+        submit!.props.onClick()
+        for (let index = 0; index < 5; index += 1) await Promise.resolve()
+      })
+      expect(submitCalls).toBe(1)
+      expect(renderedText(component!.toJSON())).toContain('connection lost after target accepted')
+      expect(component!.root.findByProps({ 'aria-label': 'Task ID' }).props.value).toBe(taskId)
+      submit = component!.root.findAllByType('button').find(button => button.props.children === '签名并提交任务')
+      expect(submit?.props.disabled).toBe(true)
+      expect(renderedText(component!.toJSON())).toContain('明确清除记录后再新建任务')
+      await act(async () => {
+        submit!.props.onClick()
+        await Promise.resolve()
+      })
+      expect(submitCalls).toBe(1)
+
+      await act(async () => { component!.unmount() })
+      component = undefined
+      await act(async () => {
+        component = TestRenderer.create(<FleetCard ctx={ctx} />)
+        for (let index = 0; index < 5; index += 1) await Promise.resolve()
+      })
+      expect(call).toHaveBeenCalledWith('/dsh-fleet-agent', 'task-status', { targetDeviceId: 'worker', taskId })
+    } finally {
+      await act(async () => { component?.unmount() })
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('ignores a delayed task response after the target reference changes', async () => {
+    const taskId = 'task:66666666-6666-4666-8666-666666666666'
+    let stored: string | null = null
+    const localStorage = {
+      getItem: vi.fn(() => stored),
+      setItem: vi.fn((_key: string, value: string) => { stored = value }),
+      removeItem: vi.fn(() => { stored = null }),
+    }
+    vi.stubGlobal('window', { setInterval: vi.fn(() => 1), clearInterval: vi.fn(), localStorage })
+    vi.stubGlobal('document', { hidden: false })
+    let resolveStatus: ((value: unknown) => void) | undefined
+    const delayedStatus = new Promise<unknown>(resolve => { resolveStatus = resolve })
+    const targets = releaseTargetReport()
+    targets.targets.push({
+      ...targets.targets[0]!,
+      deviceId: 'worker-2',
+      inspection: { ...targets.targets[0]!.inspection, deviceId: 'worker-2' },
+    })
+    const call = vi.fn(async (channel: string, endpoint: string) => {
+      if (channel === '/dsh-fleet' && endpoint === 'status') return { ok: true, value: status }
+      if (channel === '/dsh-fleet-agent' && endpoint === 'targets') return { ok: true, value: targets }
+      if (channel === '/dsh-fleet-agent' && endpoint === 'task-status') return await delayedStatus
+      return { ok: false, error: { message: `unexpected RPC ${channel} ${endpoint}` } }
+    })
+    const ctx = { connection: { rpc: { call } }, slots: {} } as never
+    let component: TestRenderer.ReactTestRenderer | undefined
+    try {
+      await act(async () => {
+        component = TestRenderer.create(<FleetCard ctx={ctx} />)
+        await Promise.resolve()
+      })
+      const tasksTab = component!.root.findAllByType('button').find(button =>
+        button.props.role === 'tab' && renderedText(button.props.children) === '任务',
+      )
+      await act(async () => {
+        tasksTab!.props.onClick()
+        for (let index = 0; index < 5; index += 1) await Promise.resolve()
+      })
+      let taskInput = component!.root.findByProps({ 'aria-label': 'Task ID' })
+      await act(async () => { taskInput.props.onChange({ currentTarget: { value: taskId } }) })
+      const query = component!.root.findAllByType('button').find(button => button.props.children === '查询任务')
+      await act(async () => {
+        query!.props.onClick()
+        await Promise.resolve()
+      })
+      taskInput = component!.root.findByProps({ 'aria-label': 'Task ID' })
+      const targetSelect = component!.root.findAllByType('select').find(select => select.props.value === 'worker')
+      expect(taskInput.props.disabled).toBe(true)
+      expect(targetSelect?.props.disabled).toBe(true)
+      await act(async () => { targetSelect!.props.onChange({ currentTarget: { value: 'worker-2' } }) })
+      expect(stored).toBeNull()
+
+      await act(async () => {
+        resolveStatus?.({
+          ok: true,
+          value: { taskId, response: { kind: 'task.progress', payload: { taskId, state: 'running', updatedAt: '2026-01-01T00:00:30.000Z' } } },
+        })
+        for (let index = 0; index < 5; index += 1) await Promise.resolve()
+      })
+      expect(component!.root.findAllByType('select').some(select => select.props.value === 'worker-2')).toBe(true)
+      expect(component!.root.findByProps({ 'aria-label': 'Task ID' }).props.value).toBe('')
+      expect(renderedText(component!.toJSON())).not.toContain('running')
+      expect(stored).toBeNull()
+    } finally {
+      await act(async () => { component?.unmount() })
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('drops invalid saved data and allows a manual task id lookup', async () => {
+    const taskId = 'task:33333333-3333-4333-8333-333333333333'
+    const localStorage = {
+      getItem: vi.fn(() => JSON.stringify({ targetDeviceId: 'worker', taskId, result: 'must not be accepted' })),
+      setItem: vi.fn(),
+      removeItem: vi.fn(),
+    }
+    vi.stubGlobal('window', { setInterval: vi.fn(() => 1), clearInterval: vi.fn(), localStorage })
+    vi.stubGlobal('document', { hidden: false })
+    const call = vi.fn(async (channel: string, endpoint: string, payload: unknown) => {
+      if (channel === '/dsh-fleet' && endpoint === 'status') return { ok: true, value: status }
+      if (channel === '/dsh-fleet-agent' && endpoint === 'targets') return { ok: true, value: releaseTargetReport() }
+      if (channel === '/dsh-fleet-agent' && endpoint === 'task-status') {
+        expect(payload).toEqual({ targetDeviceId: 'worker', taskId })
+        return {
+          ok: true,
+          value: { taskId, response: { kind: 'task.progress', payload: { taskId, state: 'running', updatedAt: '2026-01-01T00:00:30.000Z' } } },
+        }
+      }
+      return { ok: false, error: { message: `unexpected RPC ${channel} ${endpoint}` } }
+    })
+    const ctx = { connection: { rpc: { call } }, slots: {} } as never
+    let component: TestRenderer.ReactTestRenderer | undefined
+    try {
+      await act(async () => {
+        component = TestRenderer.create(<FleetCard ctx={ctx} />)
+        for (let index = 0; index < 3; index += 1) await Promise.resolve()
+      })
+      expect(localStorage.removeItem).toHaveBeenCalledWith('dsh-fleet.task-reference.v1')
+      expect(call.mock.calls.filter(([, endpoint]) => endpoint === 'task-status')).toHaveLength(0)
+
+      const tasksTab = component!.root.findAllByType('button').find(button =>
+        button.props.role === 'tab' && renderedText(button.props.children) === '任务',
+      )
+      await act(async () => {
+        tasksTab!.props.onClick()
+        for (let index = 0; index < 5; index += 1) await Promise.resolve()
+      })
+      const taskInput = component!.root.findByProps({ 'aria-label': 'Task ID' })
+      expect(taskInput.props.value).toBe('')
+      await act(async () => { taskInput.props.onChange({ currentTarget: { value: taskId } }) })
+      const query = component!.root.findAllByType('button').find(button => button.props.children === '查询任务')
+      expect(query?.props.disabled).toBe(false)
+      await act(async () => {
+        query!.props.onClick()
+        for (let index = 0; index < 5; index += 1) await Promise.resolve()
+      })
+      expect(renderedText(component!.toJSON())).toContain('running')
+      const persisted = localStorage.setItem.mock.calls.at(-1)?.[1] as string
+      expect(JSON.parse(persisted)).toEqual({ targetDeviceId: 'worker', taskId })
+      expect(persisted).not.toContain('must not be accepted')
+    } finally {
+      await act(async () => { component?.unmount() })
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('clears a recovered task reference from memory and local storage', async () => {
+    const taskId = 'task:44444444-4444-4444-8444-444444444444'
+    const localStorage = {
+      getItem: vi.fn(() => JSON.stringify({ targetDeviceId: 'worker', taskId })),
+      setItem: vi.fn(),
+      removeItem: vi.fn(),
+    }
+    vi.stubGlobal('window', { setInterval: vi.fn(() => 1), clearInterval: vi.fn(), localStorage })
+    vi.stubGlobal('document', { hidden: false })
+    const call = vi.fn(async (channel: string, endpoint: string) => {
+      if (channel === '/dsh-fleet' && endpoint === 'status') return { ok: true, value: status }
+      if (channel === '/dsh-fleet-agent' && endpoint === 'targets') return { ok: true, value: releaseTargetReport() }
+      if (channel === '/dsh-fleet-agent' && endpoint === 'task-status') {
+        return {
+          ok: true,
+          value: { taskId, response: { kind: 'task.progress', payload: { taskId, state: 'accepted', updatedAt: '2026-01-01T00:00:00.000Z' } } },
+        }
+      }
+      return { ok: false, error: { message: `unexpected RPC ${channel} ${endpoint}` } }
+    })
+    const ctx = { connection: { rpc: { call } }, slots: {} } as never
+    let component: TestRenderer.ReactTestRenderer | undefined
+    try {
+      await act(async () => {
+        component = TestRenderer.create(<FleetCard ctx={ctx} />)
+        for (let index = 0; index < 5; index += 1) await Promise.resolve()
+      })
+      const tasksTab = component!.root.findAllByType('button').find(button =>
+        button.props.role === 'tab' && renderedText(button.props.children) === '任务',
+      )
+      await act(async () => {
+        tasksTab!.props.onClick()
+        for (let index = 0; index < 5; index += 1) await Promise.resolve()
+      })
+      expect(renderedText(component!.toJSON())).toContain('accepted')
+      const clear = component!.root.findAllByType('button').find(button => button.props.children === '清除记录')
+      await act(async () => { clear!.props.onClick() })
+      expect(localStorage.removeItem).toHaveBeenCalledWith('dsh-fleet.task-reference.v1')
+      expect(component!.root.findByProps({ 'aria-label': 'Task ID' }).props.value).toBe('')
+      expect(renderedText(component!.toJSON())).not.toContain('accepted')
     } finally {
       await act(async () => { component?.unmount() })
       vi.unstubAllGlobals()

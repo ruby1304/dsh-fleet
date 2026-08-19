@@ -1,6 +1,13 @@
 # Changelog
 
-## 0.3.7 - Unreleased
+## 0.3.8 - Unreleased
+
+- Persist only the selected target device and durable task ID in browser storage so a signed A2A task can be recovered after a page reload or disconnect without retaining its prompt or output.
+- Add strict stored-reference validation, automatic status recovery, manual task-ID lookup and an explicit local-reference clear action.
+- Allocate and persist the task ID before submission, require the Host to validate and reuse it, and block accidental resubmission while delivery is uncertain.
+- Ignore stale task responses after the selected device or task reference changes.
+
+## 0.3.7 - 2026-08-19
 
 - Reconcile the staged lockfile immediately after removing mutable bindings from the disposable package manifest, before adding immutable artifacts.
 - Prevent pnpm from reusing a stale `link:` resolution for a dependency whose approved package spec is now a content-addressed tarball.

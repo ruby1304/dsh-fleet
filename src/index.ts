@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { createHash, randomUUID } from 'node:crypto'
+import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { homedir, hostname, platform, arch } from 'node:os'
@@ -10,7 +10,7 @@ import type { RpcResult } from '@deepseek-ai/dsh-host-apiproxy/api'
 import type { AgentActionRecord, AgentInspection, ReleaseActionRecord, ReleaseAgentInspection } from './agent/runtime.ts'
 import { FLEET_AGENT_PROTOCOL_VERSION, type FleetPlan, type FleetPlanApproval } from './agent/protocol.ts'
 import { FLEET_RELEASE_PROTOCOL_VERSION, type FleetReleaseApproval, type FleetReleasePlan } from './agent/release-protocol.ts'
-import type { FleetA2AEnvelope } from './a2a/protocol.ts'
+import { validateA2APayload, type FleetA2AEnvelope } from './a2a/protocol.ts'
 import type { FleetA2AReceipt } from './a2a/runtime.ts'
 import { AgentClientError, assertAgentIdentity, createAgentClient, type AgentTargetConfig } from './host/agent-client.ts'
 import { digestInstalledArtifact } from './host/artifacts.ts'
@@ -429,21 +429,23 @@ export function apply(ctx: Context, config?: Config): void {
         return ok(await agents.call<ReleaseActionRecord>(deviceId, 'release-status', { planId }, signal))
       }
       if (endpoint === 'task-submit') {
-        const body = closedPayload(payload, ['profile', 'prompt', 'targetDeviceId', 'workspaceId'], 'task submit payload')
+        const body = closedPayload(payload, ['profile', 'prompt', 'targetDeviceId', 'taskId', 'workspaceId'], 'task submit payload')
         const targetDeviceId = normalizeDeviceId(requiredString(body.targetDeviceId, 'targetDeviceId'))
-        const taskId = 'task:' + randomUUID()
-        const response = await signedTaskCall(targetDeviceId, 'task.submit', {
-          taskId,
+        const taskPayload = {
+          taskId: requiredString(body.taskId, 'taskId'),
           workspaceId: requiredString(body.workspaceId, 'workspaceId'),
           profile: requiredString(body.profile, 'profile'),
           prompt: requiredString(body.prompt, 'prompt'),
-        }, signal)
-        return ok({ taskId, response })
+        }
+        validateA2APayload('task.submit', taskPayload)
+        const response = await signedTaskCall(targetDeviceId, 'task.submit', taskPayload, signal)
+        return ok({ taskId: taskPayload.taskId, response })
       }
       if (endpoint === 'task-status' || endpoint === 'task-cancel') {
         const body = closedPayload(payload, ['targetDeviceId', 'taskId'], 'task control payload')
         const targetDeviceId = normalizeDeviceId(requiredString(body.targetDeviceId, 'targetDeviceId'))
         const taskId = requiredString(body.taskId, 'taskId')
+        validateA2APayload(endpoint === 'task-status' ? 'task.status' : 'task.cancel', { taskId })
         const response = await signedTaskCall(targetDeviceId, endpoint === 'task-status' ? 'task.status' : 'task.cancel', { taskId }, signal)
         return ok({ taskId, response })
       }
