@@ -25,8 +25,12 @@
     "README.md",
     "CHANGELOG.md",
     "SECURITY.md",
+    "SUPPORT.md",
+    "CONTRIBUTING.md",
+    "CODE_OF_CONDUCT.md",
     "THIRD_PARTY_NOTICES.md",
     "LICENSE",
+    "docs",
     "examples/fleet.lock.yaml",
     "examples/agent.config.json"
   ],
@@ -39,7 +43,8 @@
       "inject": [
         "@deepseek-ai/dsh-client-runtime",
         "@deepseek-ai/dsh-client-connection",
-        "@deepseek-ai/dsh-client-ui-layout"
+        "@deepseek-ai/dsh-client-ui-layout",
+        "@deepseek-ai/dsh-client-ui-sidebar"
       ],
       "immediately": true
     }

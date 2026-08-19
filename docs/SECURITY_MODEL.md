@@ -28,7 +28,7 @@ The Fleet RPC is loopback-only. The client may select only a device and plugin a
 
 ### Host to Agent
 
-Targets are fixed in the DSH profile. Local and SSH transports execute a fixed Node binary, Agent bundle, config path, and protocol command without shell interpolation. SSH authentication and host-key policy remain the owner's responsibility.
+Targets are fixed in the DSH profile. Local and SSH transports execute a fixed Node binary, Agent bundle, config path, and protocol command without shell interpolation. The Host rejects inspection and plans unless the Agent's device ID, profile, and manifest digest match the configured Host state. SSH authentication and host-key policy remain the owner's responsibility.
 
 ### Agent to package manager and DSH
 
@@ -82,6 +82,7 @@ RPC responses and public diagnostics must not expose credentials, session conten
 
 - keep the Web endpoint loopback-only;
 - store the Agent config/state and manifest in owner-only paths;
+- copy the exact reviewed manifest bytes to Host and Agent; a digest mismatch blocks inspection and planning;
 - pin absolute Node, DSH, pnpm, Agent, config, and restart-tool paths;
 - use immutable package specs and a reviewed manifest;
 - back up the DSH profile and user data independently;

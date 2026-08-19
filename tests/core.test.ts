@@ -84,6 +84,11 @@ plugins: [{ id: x, source: link:/tmp/x, revision: abc }]
   it('rejects unknown schema versions', () => {
     expect(() => parseFleetManifest(source.replace('schemaVersion: 1', 'schemaVersion: 2'))).toThrow(/schemaVersion/)
   })
+
+  it('rejects device ids that cannot be used consistently by Host and Agent routing', () => {
+    expect(() => parseFleetManifest(source.replace('  m5:', '  "m5 worker":'))).toThrow(/device id/)
+    expect(() => parseFleetManifest(source.replace('devices: [m5]', 'devices: ["m5 worker"]'))).toThrow(/target.devices/)
+  })
 })
 
 describe('reconcileFleet', () => {

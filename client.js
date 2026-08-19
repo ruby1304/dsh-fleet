@@ -209,6 +209,43 @@ window.__ModuleLoader__.load({
 				children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("path", { d: "M20 11a8 8 0 1 0-2.34 5.66" }), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("path", { d: "M20 4v7h-7" })]
 			});
 		}
+		function FleetIcon() {
+			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("svg", {
+				"aria-hidden": "true",
+				width: "18",
+				height: "18",
+				viewBox: "0 0 24 24",
+				fill: "none",
+				stroke: "currentColor",
+				strokeWidth: "1.8",
+				strokeLinecap: "round",
+				strokeLinejoin: "round",
+				children: [
+					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("rect", {
+						x: "3",
+						y: "4",
+						width: "7",
+						height: "6",
+						rx: "2"
+					}),
+					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("rect", {
+						x: "14",
+						y: "4",
+						width: "7",
+						height: "6",
+						rx: "2"
+					}),
+					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("rect", {
+						x: "8.5",
+						y: "15",
+						width: "7",
+						height: "5",
+						rx: "2"
+					}),
+					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("path", { d: "M6.5 10v2.5H12M17.5 10v2.5H12M12 12.5V15" })
+				]
+			});
+		}
 		function StatusView({ status, error }) {
 			if (status === null) return /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 				style: {
@@ -924,7 +961,7 @@ window.__ModuleLoader__.load({
 				]
 			});
 		}
-		function FleetCard({ ctx }) {
+		function FleetCard({ ctx, wide = true }) {
 			const [open, setOpen] = (0, react.useState)(false);
 			const [tab, setTab] = (0, react.useState)("status");
 			const [status, setStatus] = (0, react.useState)(null);
@@ -943,6 +980,8 @@ window.__ModuleLoader__.load({
 			const updatesInFlight = (0, react.useRef)(null);
 			const agentsInFlight = (0, react.useRef)(null);
 			const agentMutationInFlight = (0, react.useRef)(false);
+			const rootRef = (0, react.useRef)(null);
+			const [panelAnchor, setPanelAnchor] = (0, react.useState)();
 			const loadStatus = (0, react.useCallback)(async () => {
 				if (statusInFlight.current !== null) return statusInFlight.current;
 				const request = (async () => {
@@ -1099,6 +1138,41 @@ window.__ModuleLoader__.load({
 				open,
 				tab
 			]);
+			(0, react.useLayoutEffect)(() => {
+				if (!open) return;
+				const place = () => {
+					const rect = rootRef.current?.getBoundingClientRect();
+					if (rect === void 0 || typeof window.innerWidth !== "number" || typeof window.innerHeight !== "number") return;
+					const panelWidth = Math.min(380, window.innerWidth - 24);
+					const left = Math.max(12, Math.min(rect.left, window.innerWidth - panelWidth - 12));
+					const availableHeight = Math.max(120, rect.top - 20);
+					setPanelAnchor({
+						left,
+						bottom: window.innerHeight - rect.top + 8,
+						maxHeight: Math.min(Math.floor(window.innerHeight * .68), availableHeight)
+					});
+				};
+				place();
+				if (typeof window.addEventListener !== "function") return;
+				window.addEventListener("resize", place);
+				return () => window.removeEventListener("resize", place);
+			}, [open, wide]);
+			(0, react.useEffect)(() => {
+				if (!open || typeof document.addEventListener !== "function") return;
+				const dismiss = (event) => {
+					if (event instanceof KeyboardEvent && event.key === "Escape") {
+						setOpen(false);
+						return;
+					}
+					if (event instanceof PointerEvent && rootRef.current !== null && event.target instanceof Node && !rootRef.current.contains(event.target)) setOpen(false);
+				};
+				document.addEventListener("pointerdown", dismiss);
+				document.addEventListener("keydown", dismiss);
+				return () => {
+					document.removeEventListener("pointerdown", dismiss);
+					document.removeEventListener("keydown", dismiss);
+				};
+			}, [open]);
 			const driftIssues = (0, react.useMemo)(() => status === null ? 0 : status.summary.missing + status.summary.drifted + status.summary.failed + status.summary.unmanaged, [status]);
 			const availableUpdates = updates?.snapshot?.summary.available ?? 0;
 			const updateFailures = updates?.snapshot?.summary.errors ?? 0;
@@ -1110,23 +1184,35 @@ window.__ModuleLoader__.load({
 				updateError !== null || updateFailures > 0 ? "更新检查失败" : availableUpdates > 0 ? `${availableUpdates} 个更新` : void 0
 			].filter((value) => value !== void 0).join(" · ");
 			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+				ref: rootRef,
+				"data-dsh-fleet-action": true,
 				style: {
-					position: "fixed",
-					left: 14,
-					bottom: 14,
-					zIndex: 950,
+					position: "relative",
+					display: "flex",
+					alignItems: "center",
+					flex: "none",
 					pointerEvents: "auto",
-					width: 380,
-					maxWidth: "calc(100vw - 28px)",
+					width: wide ? "100%" : 36,
+					height: wide ? 42 : 36,
+					margin: wide ? "8px 0 0" : 0,
+					minWidth: 0,
 					fontFamily: SM.fontSans,
 					fontSize: 12,
 					color: SM.fg
 				},
 				children: [open && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+					role: "dialog",
+					"aria-label": "DSH Fleet",
+					"data-dsh-fleet-panel": true,
 					style: {
-						maxHeight: "68vh",
+						position: "fixed",
+						zIndex: 950,
+						left: panelAnchor?.left ?? 12,
+						bottom: panelAnchor?.bottom ?? 64,
+						width: 380,
+						maxWidth: "calc(100vw - 24px)",
+						maxHeight: panelAnchor?.maxHeight ?? "68vh",
 						overflow: "auto",
-						marginBottom: 8,
 						border: `1px solid ${SM.border}`,
 						borderRadius: 20,
 						background: SM.bg,
@@ -1242,46 +1328,85 @@ window.__ModuleLoader__.load({
 					})]
 				}), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("button", {
 					type: "button",
+					"aria-label": `DSH Fleet：${closedText}`,
+					title: "DSH Fleet",
 					"aria-expanded": open,
 					onClick: () => setOpen((value) => !value),
 					style: {
+						position: "relative",
 						display: "flex",
 						alignItems: "center",
-						gap: 7,
-						minHeight: 36,
-						border: `1px solid ${SM.borderStrong}`,
-						borderRadius: 999,
-						background: SM.panel,
-						boxShadow: SM.shadowCard,
-						padding: "7px 12px",
+						justifyContent: wide ? "flex-start" : "center",
+						gap: 8,
+						width: "100%",
+						height: wide ? 42 : 36,
+						minWidth: 0,
+						border: 0,
+						borderRadius: wide ? 12 : 999,
+						background: open ? "var(--dsw-alias-interactive-bg-hover, #e6e9ed)" : "transparent",
+						padding: wide ? "0 10px 0 8px" : 0,
 						cursor: "pointer",
-						color: SM.fg
+						color: "var(--dsw-alias-label-primary, #181a1c)"
 					},
 					children: [
-						/* @__PURE__ */ (0, react_jsx_runtime.jsx)(Dot, {
-							color: tone,
-							size: 8
-						}),
-						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("strong", { children: "Fleet" }),
 						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
 							style: {
-								color: SM.fg2,
-								fontFamily: SM.fontMono,
-								fontVariantNumeric: "tabular-nums"
+								display: "grid",
+								placeItems: "center",
+								color: "var(--dsw-alias-label-secondary, #5f6670)"
 							},
-							children: closedText
+							children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(FleetIcon, {})
+						}),
+						wide && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [
+							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("strong", {
+								style: { whiteSpace: "nowrap" },
+								children: "Fleet"
+							}),
+							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+								style: {
+									minWidth: 0,
+									marginLeft: "auto",
+									overflow: "hidden",
+									textOverflow: "ellipsis",
+									whiteSpace: "nowrap",
+									color: SM.fg2,
+									fontFamily: SM.fontMono,
+									fontSize: 10.5,
+									fontVariantNumeric: "tabular-nums"
+								},
+								children: closedText
+							}),
+							/* @__PURE__ */ (0, react_jsx_runtime.jsx)(Dot, {
+								color: tone,
+								size: 7
+							})
+						] }),
+						!wide && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+							"aria-hidden": "true",
+							style: {
+								position: "absolute",
+								right: 4,
+								bottom: 4
+							},
+							children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(Dot, {
+								color: tone,
+								size: 6
+							})
 						})
 					]
 				})]
 			});
 		}
 		function apply(ctx) {
-			ctx.slots.inject("shell.overlay", () => ctx.slots.register({
-				name: "shell.overlay",
+			ctx.slots.inject("sidebar.footer.action", () => ctx.slots.register({
+				name: "sidebar.footer.action",
 				id: "dsh-fleet",
 				order: 110,
 				label: () => "DSH Fleet"
-			}, () => /* @__PURE__ */ (0, react_jsx_runtime.jsx)(FleetCard, { ctx })));
+			}, ({ wide = true }) => /* @__PURE__ */ (0, react_jsx_runtime.jsx)(FleetCard, {
+				ctx,
+				wide
+			})));
 		}
 		//#endregion
 		exports.FleetCard = FleetCard;

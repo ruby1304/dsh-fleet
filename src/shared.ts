@@ -1,5 +1,18 @@
 export type DeviceClass = 'portable-control' | 'always-on-worker' | 'member-workstation' | 'service-node' | string
 
+export const DEVICE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
+
+export function normalizeDeviceId(value: unknown, field = 'deviceId'): string {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    throw new TypeError(field + ' must be a non-empty string')
+  }
+  const deviceId = value.trim()
+  if (!DEVICE_ID_PATTERN.test(deviceId)) {
+    throw new TypeError(field + ' must be 1 to 64 ASCII letters, digits, dots, underscores or hyphens and start with a letter or digit')
+  }
+  return deviceId
+}
+
 export interface FleetDeviceSpec {
   assignedTo?: string
   class: DeviceClass

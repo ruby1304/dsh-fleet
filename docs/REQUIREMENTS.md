@@ -386,13 +386,13 @@ plugins:
 - `src/shared.ts`：清单和状态类型；
 - `src/host/core.ts`：YAML 解析、校验、设备选择和差异计算；
 - `src/index.ts`：本机 profile/Loader 采集及 loopback RPC；
-- `src/client/index.tsx`：Fleet 悬浮状态面板；
+- `src/client/index.tsx`：注册在 `sidebar.footer.action` 的 Fleet 状态与操作面板；
 - `src/agent/`：不可变计划、审批、快照、安装、健康检查、回滚、锁和一次性 CLI；
 - `src/host/agent-client.ts`：固定 local/SSH target 的结构化 Agent transport；
 - `examples/fleet.lock.yaml`：控制端/工作端 示例清单；
 - `tests/core.test.ts`：清单和收敛单测；
 - `tests/host.test.ts`：profile/Loader 采集集成测试；
-- `tests/client.test.tsx`：overlay 生命周期、状态/更新页，以及 Operations 的精确计划、确认、批准断线恢复和 targets 刷新测试；
+- `tests/client.test.tsx`：sidebar footer action 生命周期、展开/收起侧栏布局、状态/更新页，以及 Operations 的精确计划、确认、批准断线恢复和 targets 刷新测试；
 - `tests/agent-*.test.ts`：计划、transport、真实依赖树回滚、并发和中断恢复测试；
 - `tests/rc7-contract.test.ts`：官方 rc.7 类型、CLI 和隔离 profile reconciliation 契约。
 
@@ -1030,8 +1030,9 @@ V1 已按独立 Fleet Agent 路径开始：计划、审批、快照、健康检�
 - 开源候选只有在当前 PR 合并、tag/Release 建立且 npm provenance 可验证后，才能写成已经发布；
 - 示例清单、来源边界、稳定版本规则和双设备差异已固化；
 - V1 Agent 的 exact install/update、审批、回滚和 控制端→工作端 固定 SSH 路径已经实现；
+- Host 会在展示 target inventory 或生成计划前校验 Agent 的 device ID、profile 与 manifest digest，任何不一致都 fail closed；
 - V1 候选已完成一次日期化的控制端→工作端 rc.7 隔离安装/更新/故障回滚与正式 profile 安装验收；
-- 仍无 runtime 自动 repair、remove/batch/core update、Hub、成员系统、设备 enrollment、签名审批、secrets 分发和通用远程任务。
+- 仍无引导式 bootstrap/pair/doctor、runtime 自动 repair、remove/batch/core update、Hub、成员系统、设备 enrollment、签名审批、secrets 分发和通用远程任务。
 
 `0.2.0` 候选必须持续满足下列 gate；任一回归都要恢复为 preview 状态：
 

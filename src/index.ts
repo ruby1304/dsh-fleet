@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { homedir, hostname, platform, arch } from 'node:os'
@@ -8,10 +9,10 @@ import type { HostConnectionHandle } from '@deepseek-ai/dsh-client-connection'
 import type { RpcResult } from '@deepseek-ai/dsh-host-apiproxy/api'
 import type { AgentActionRecord, AgentInspection } from './agent/runtime.ts'
 import { FLEET_AGENT_PROTOCOL_VERSION, type FleetPlan, type FleetPlanApproval } from './agent/protocol.ts'
-import { AgentClientError, createAgentClient, type AgentTargetConfig } from './host/agent-client.ts'
+import { AgentClientError, assertAgentIdentity, createAgentClient, type AgentTargetConfig } from './host/agent-client.ts'
 import { parseFleetManifest, reconcileFleet } from './host/core.ts'
 import { createUpdateMonitor, type UpdateMode } from './host/updates.ts'
-import type { FleetManifest, FleetStatus, RuntimePhase, RuntimePluginEntry } from './shared.ts'
+import { normalizeDeviceId, type FleetManifest, type FleetStatus, type RuntimePhase, type RuntimePluginEntry } from './shared.ts'
 
 export const name = 'fleet'
 export const inject = ['connection', 'loader']
@@ -85,7 +86,7 @@ function resolveConfig(config: Config | undefined) {
   const boundedNumber = (value: number | undefined, fallback: number, minimum: number, maximum: number) =>
     value === undefined || !Number.isFinite(value) ? fallback : Math.min(maximum, Math.max(minimum, Math.round(value)))
   return {
-    deviceId: (config?.deviceId ?? process.env.DSH_FLEET_DEVICE_ID ?? hostname()).trim(),
+    deviceId: normalizeDeviceId(config?.deviceId ?? process.env.DSH_FLEET_DEVICE_ID ?? hostname()),
     manifestPath: expandHome(config?.manifestPath ?? process.env.DSH_FLEET_MANIFEST ?? '~/.dsh/fleet/fleet.lock.yaml'),
     profile: (config?.profile ?? process.env.DSH_FLEET_PROFILE ?? 'web').trim(),
     dshHome,
@@ -220,6 +221,23 @@ function requiredString(value: unknown, field: string): string {
   return value
 }
 
+async function digestManifest(path: string): Promise<string> {
+  return createHash('sha256').update(await readFile(path, 'utf8'), 'utf8').digest('hex')
+}
+
+export function assertAgentConfiguration(
+  expected: { deviceId: string; profile: string; manifestDigest: string },
+  response: { deviceId: string; profile: string; manifestDigest: string },
+): void {
+  assertAgentIdentity(expected.deviceId, response)
+  if (response.profile !== expected.profile) {
+    throw new AgentClientError('agent-profile-mismatch', 'fleet agent profile does not match the configured Host profile')
+  }
+  if (response.manifestDigest !== expected.manifestDigest) {
+    throw new AgentClientError('agent-manifest-mismatch', 'fleet agent manifest does not match the configured Host manifest')
+  }
+}
+
 export function apply(ctx: Context, config?: Config): void {
   const host = ctx as unknown as HostContext
   const resolved = resolveConfig(config)
@@ -259,9 +277,11 @@ export function apply(ctx: Context, config?: Config): void {
           throw new TypeError('targets payload must be empty')
         }
         if (!agents.enabled) return ok({ enabled: false, targets: [] })
+        const manifestDigest = await digestManifest(resolved.manifestPath)
         const targets = await Promise.all(agents.targets.map(async target => {
           try {
             const inspection = await agents.call<AgentInspection>(target.deviceId, 'inspect', null, signal)
+            assertAgentConfiguration({ deviceId: target.deviceId, profile: resolved.profile, manifestDigest }, inspection)
             return { ...target, online: true, inspection }
           } catch (error: unknown) {
             const code = error instanceof AgentClientError ? error.code : 'agent-unavailable'
@@ -274,7 +294,13 @@ export function apply(ctx: Context, config?: Config): void {
         const body = closedPayload(payload, ['deviceId', 'pluginId'], 'plan payload')
         const deviceId = requiredString(body.deviceId, 'deviceId')
         const pluginId = requiredString(body.pluginId, 'pluginId')
-        return ok(await agents.call<FleetPlan>(deviceId, 'plan', { pluginId }, signal))
+        const plan = await agents.call<FleetPlan>(deviceId, 'plan', { pluginId }, signal)
+        assertAgentConfiguration({
+          deviceId,
+          profile: resolved.profile,
+          manifestDigest: await digestManifest(resolved.manifestPath),
+        }, plan)
+        return ok(plan)
       }
       if (endpoint === 'approve') {
         const body = closedPayload(payload, ['approvalId', 'deviceId', 'planDigest', 'planExpiresAt', 'planId', 'profile'], 'approve payload')

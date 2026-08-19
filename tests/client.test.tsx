@@ -99,11 +99,11 @@ function targetReport(candidates: Array<Record<string, unknown>>) {
 }
 
 describe('dsh-fleet client slots', () => {
-  it('waits for shell.overlay before registering the fleet card', () => {
+  it('uses the sidebar footer action instead of a fixed shell overlay', () => {
     let setup: (() => unknown) | undefined
     const register = vi.fn((_descriptor: Record<string, unknown>, _component: unknown) => () => {})
     const inject = vi.fn((name: string, callback: () => unknown) => {
-      expect(name).toBe('shell.overlay')
+      expect(name).toBe('sidebar.footer.action')
       setup = callback
       return () => {}
     })
@@ -119,10 +119,33 @@ describe('dsh-fleet client slots', () => {
     setup?.()
     expect(register).toHaveBeenCalledOnce()
     expect(register.mock.calls[0]?.[0]).toMatchObject({
-      name: 'shell.overlay',
+      name: 'sidebar.footer.action',
       id: 'dsh-fleet',
       order: 110,
     })
+  })
+
+  it('renders as an in-flow wide row or compact rail action', async () => {
+    vi.stubGlobal('window', { setInterval: vi.fn(() => 1), clearInterval: vi.fn() })
+    vi.stubGlobal('document', { hidden: false })
+    const ctx = { connection: { rpc: { call: vi.fn().mockResolvedValue({ ok: true, value: status }) } }, slots: {} } as never
+    let component: TestRenderer.ReactTestRenderer | undefined
+    try {
+      await act(async () => {
+        component = TestRenderer.create(<FleetCard ctx={ctx} wide />)
+        await Promise.resolve()
+      })
+      const wideRoot = component!.root.findByProps({ 'data-dsh-fleet-action': true })
+      expect(wideRoot.props.style).toMatchObject({ position: 'relative', width: '100%', height: 42 })
+      expect(wideRoot.props.style.position).not.toBe('fixed')
+
+      await act(async () => { component!.update(<FleetCard ctx={ctx} wide={false} />) })
+      const railRoot = component!.root.findByProps({ 'data-dsh-fleet-action': true })
+      expect(railRoot.props.style).toMatchObject({ width: 36, height: 36 })
+    } finally {
+      await act(async () => { component?.unmount() })
+      vi.unstubAllGlobals()
+    }
   })
 
   it('loads status initially, expands the card, shows device and summary fields, and refreshes', async () => {

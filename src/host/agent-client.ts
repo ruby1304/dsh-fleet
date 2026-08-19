@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process'
 import { isAbsolute, normalize } from 'node:path'
+import { normalizeDeviceId } from '../shared.ts'
 
 const MAX_OUTPUT_BYTES = 1024 * 1024
 const NON_MUTATION_TERMINATION_GRACE_MS = 30_000
@@ -60,14 +61,8 @@ function safePath(value: string, field: string): string {
   return value
 }
 
-function nonEmpty(value: string, field: string): string {
-  if (value.trim().length === 0) throw new TypeError(field + ' must not be empty')
-  return value.trim()
-}
-
 export function validateAgentTarget(target: AgentTargetConfig): AgentTargetConfig {
-  const deviceId = nonEmpty(target.deviceId, 'target.deviceId')
-  if (!/^[A-Za-z0-9._-]+$/.test(deviceId)) throw new TypeError('target.deviceId contains unsupported characters')
+  const deviceId = normalizeDeviceId(target.deviceId, 'target.deviceId')
   if (target.transport !== 'local' && target.transport !== 'ssh') throw new TypeError('target.transport must be local or ssh')
   const sshHost = target.sshHost?.trim()
   if (target.transport === 'ssh' && (sshHost === undefined || sshHost.startsWith('-') || !/^[A-Za-z0-9._-]+$/.test(sshHost))) {
@@ -81,6 +76,12 @@ export function validateAgentTarget(target: AgentTargetConfig): AgentTargetConfi
     nodeBinary: safePath(target.nodeBinary, 'target.nodeBinary'),
     agentPath: safePath(target.agentPath, 'target.agentPath'),
     configPath: safePath(target.configPath, 'target.configPath'),
+  }
+}
+
+export function assertAgentIdentity(expectedDeviceId: string, response: unknown): void {
+  if (!isRecord(response) || response.deviceId !== expectedDeviceId) {
+    throw new AgentClientError('agent-identity-mismatch', 'fleet agent identity does not match the configured target')
   }
 }
 

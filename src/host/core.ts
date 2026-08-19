@@ -9,6 +9,7 @@ import type {
   RuntimePhase,
   RuntimePluginEntry,
 } from '../shared.ts'
+import { normalizeDeviceId } from '../shared.ts'
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -60,7 +61,8 @@ function parsePlugin(value: unknown, index: number): FleetPluginSpec {
   let target: FleetPluginTarget | undefined
   if (value.target !== undefined) {
     if (!isRecord(value.target)) throw new TypeError(field + '.target must be an object')
-    const devices = strings(value.target.devices, field + '.target.devices')
+    const devices = strings(value.target.devices, field + '.target.devices')?.map((id, targetIndex) =>
+      normalizeDeviceId(id, `${field}.target.devices[${targetIndex}]`))
     const classes = strings(value.target.classes, field + '.target.classes')
     const channels = strings(value.target.channels, field + '.target.channels')
     target = {
@@ -96,7 +98,10 @@ export function parseFleetManifest(source: string): FleetManifest {
   const teamName = raw.team.name === undefined ? undefined : nonEmpty(raw.team.name, 'team.name')
   if (!isRecord(raw.devices)) throw new TypeError('devices must be an object')
   const devices: Record<string, FleetDeviceSpec> = {}
-  for (const [id, value] of Object.entries(raw.devices)) devices[nonEmpty(id, 'device id')] = parseDevice(value, 'devices.' + id)
+  for (const [id, value] of Object.entries(raw.devices)) {
+    const deviceId = normalizeDeviceId(id, 'device id')
+    devices[deviceId] = parseDevice(value, 'devices.' + deviceId)
+  }
   if (!Array.isArray(raw.plugins)) throw new TypeError('plugins must be an array')
   const plugins = raw.plugins.map(parsePlugin)
   for (const plugin of plugins) {

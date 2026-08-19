@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   agentTerminationGraceMs,
+  assertAgentIdentity,
   callAgent,
   createAgentClient,
   interruptedAgentError,
@@ -92,6 +93,16 @@ describe('agent target validation', () => {
       transport: 'ssh',
       sshHost,
     })).toThrowError(expect.objectContaining({ message: 'target.sshHost must be a configured host alias' }))
+  })
+
+  it('uses one bounded device id grammar across targets and Agent responses', () => {
+    expect(validateAgentTarget({ ...validTarget(), deviceId: 'worker-01.local' }).deviceId).toBe('worker-01.local')
+    expect(() => validateAgentTarget({ ...validTarget(), deviceId: 'worker 01' })).toThrow(/deviceId/)
+    expect(() => validateAgentTarget({ ...validTarget(), deviceId: '-worker' })).toThrow(/deviceId/)
+    expect(() => assertAgentIdentity('worker', { deviceId: 'other-worker' })).toThrowError(
+      expect.objectContaining({ code: 'agent-identity-mismatch' }),
+    )
+    expect(() => assertAgentIdentity('worker', { deviceId: 'worker' })).not.toThrow()
   })
 })
 

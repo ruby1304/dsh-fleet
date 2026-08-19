@@ -31,6 +31,8 @@ loopback DSH Web
 
 The Web client can select only a configured device and a plugin already present in that device's local manifest. It cannot provide package versions, URLs, paths, commands, arguments, or shell fragments.
 
+The Fleet trigger is registered in DSH's additive `sidebar.footer.action` slot, so it participates in the sidebar layout above Settings instead of using viewport-fixed coordinates.
+
 ## Features
 
 - device targeting by id, class, channel, and DSH profile;
@@ -128,6 +130,8 @@ Add the Host row to the DSH profile's `cordis.patch.yml`:
 
 Restart DSH and verify the Fleet status and update views. This configuration is read-only until `convergence.enabled` and at least one fixed Agent target are explicitly added.
 
+For a new machine, follow the complete [single-owner device onboarding checklist](docs/ONBOARDING.md). The packaged examples are schema examples, not a pairing mechanism or production state.
+
 ## Configure a target Agent
 
 Copy [`examples/agent.config.json`](examples/agent.config.json) to an owner-readable target path, replace every placeholder, and set the file and state directory to owner-only permissions.
@@ -194,7 +198,7 @@ Stable mutation rejects ranges, tags, branches, aliases, URLs, `link:`, `file:`,
 
 ## Operations and recovery
 
-In the Fleet overlay, open **Operations**, inspect a configured target, select one manifest-derived candidate, review the full exact plan, tick confirmation, and approve once.
+In the Fleet panel, open **Operations**, inspect a configured target, select one manifest-derived candidate, review the full exact plan, tick confirmation, and approve once.
 
 Outcomes are:
 
@@ -209,6 +213,7 @@ The current planner creates install/update plans only for a missing dependency o
 
 - Approval records are integrity-bound and auditable but not cryptographically signed.
 - SSH trusts the owner's existing account and SSH configuration.
+- Host inspection and plans fail closed unless Agent device ID, profile, and manifest digest match the Host binding.
 - Process-group cleanup is not cgroup/job-object containment; a trusted executable that deliberately creates a new session can escape it.
 - The Fleet lock does not coordinate unrelated same-owner profile writers.
 - The final profile digest check and process spawn are not one atomic filesystem transaction.
@@ -232,6 +237,7 @@ npm pack --dry-run --ignore-scripts
 
 ## Documentation
 
+- [Single-owner device onboarding](docs/ONBOARDING.md)
 - [Security model](docs/SECURITY_MODEL.md)
 - [Release and upgrade process](docs/RELEASING.md)
 - [Product requirements and roadmap](docs/REQUIREMENTS.md)

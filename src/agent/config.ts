@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises'
 import { isAbsolute, normalize } from 'node:path'
+import { normalizeDeviceId } from '../shared.ts'
 
 export interface AgentRestartNone {
   kind: 'none'
@@ -134,7 +135,7 @@ export function parseAgentConfig(value: unknown): FleetAgentConfig {
   if (!/^[A-Za-z0-9._-]+$/.test(profile)) throw new TypeError('profile contains unsupported characters')
   return {
     schemaVersion: 1,
-    deviceId: nonEmpty(value.deviceId, 'deviceId'),
+    deviceId: normalizeDeviceId(value.deviceId),
     manifestPath: absolutePath(value.manifestPath, 'manifestPath'),
     dshHome: absolutePath(value.dshHome, 'dshHome'),
     dshBinary: absolutePath(value.dshBinary, 'dshBinary'),

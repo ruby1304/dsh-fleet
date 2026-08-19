@@ -9,6 +9,15 @@ import { constants } from "node:fs";
 var __commonJSMin = (cb, mod) => () => (mod || (cb((mod = { exports: {} }).exports, mod), cb = null), mod.exports);
 var __require = /* #__PURE__ */ (() => createRequire(import.meta.url))();
 //#endregion
+//#region src/shared.ts
+const DEVICE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+function normalizeDeviceId(value, field = "deviceId") {
+	if (typeof value !== "string" || value.trim().length === 0) throw new TypeError(field + " must be a non-empty string");
+	const deviceId = value.trim();
+	if (!DEVICE_ID_PATTERN.test(deviceId)) throw new TypeError(field + " must be 1 to 64 ASCII letters, digits, dots, underscores or hyphens and start with a letter or digit");
+	return deviceId;
+}
+//#endregion
 //#region src/agent/config.ts
 function isRecord$4(value) {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -112,7 +121,7 @@ function parseAgentConfig(value) {
 	if (!/^[A-Za-z0-9._-]+$/.test(profile)) throw new TypeError("profile contains unsupported characters");
 	return {
 		schemaVersion: 1,
-		deviceId: nonEmpty$1(value.deviceId, "deviceId"),
+		deviceId: normalizeDeviceId(value.deviceId),
 		manifestPath: absolutePath(value.manifestPath, "manifestPath"),
 		dshHome: absolutePath(value.dshHome, "dshHome"),
 		dshBinary: absolutePath(value.dshBinary, "dshBinary"),
@@ -6837,7 +6846,7 @@ function parsePlugin(value, index) {
 	let target;
 	if (value.target !== void 0) {
 		if (!isRecord$3(value.target)) throw new TypeError(field + ".target must be an object");
-		const devices = strings(value.target.devices, field + ".target.devices");
+		const devices = strings(value.target.devices, field + ".target.devices")?.map((id, targetIndex) => normalizeDeviceId(id, `${field}.target.devices[${targetIndex}]`));
 		const classes = strings(value.target.classes, field + ".target.classes");
 		const channels = strings(value.target.channels, field + ".target.channels");
 		target = {
@@ -6874,7 +6883,10 @@ function parseFleetManifest(source) {
 	const teamName = raw.team.name === void 0 ? void 0 : nonEmpty(raw.team.name, "team.name");
 	if (!isRecord$3(raw.devices)) throw new TypeError("devices must be an object");
 	const devices = {};
-	for (const [id, value] of Object.entries(raw.devices)) devices[nonEmpty(id, "device id")] = parseDevice(value, "devices." + id);
+	for (const [id, value] of Object.entries(raw.devices)) {
+		const deviceId = normalizeDeviceId(id, "device id");
+		devices[deviceId] = parseDevice(value, "devices." + deviceId);
+	}
 	if (!Array.isArray(raw.plugins)) throw new TypeError("plugins must be an array");
 	const plugins = raw.plugins.map(parsePlugin);
 	for (const plugin of plugins) if (Object.entries(devices).some(([id, device]) => device.channel === "stable" && targetsDevice$1(plugin, id, device))) {

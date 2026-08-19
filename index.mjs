@@ -1,10 +1,20 @@
 import { execFileSync, spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
 import { arch, homedir, hostname, platform } from "node:os";
 import { basename, isAbsolute, join, normalize, resolve } from "node:path";
 import { gt, valid, validRange } from "semver";
 import { parse } from "yaml";
+//#endregion
+//#region src/shared.ts
+const DEVICE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+function normalizeDeviceId(value, field = "deviceId") {
+	if (typeof value !== "string" || value.trim().length === 0) throw new TypeError(field + " must be a non-empty string");
+	const deviceId = value.trim();
+	if (!DEVICE_ID_PATTERN.test(deviceId)) throw new TypeError(field + " must be 1 to 64 ASCII letters, digits, dots, underscores or hyphens and start with a letter or digit");
+	return deviceId;
+}
 //#endregion
 //#region src/host/agent-client.ts
 const MAX_OUTPUT_BYTES = 1048576;
@@ -32,13 +42,8 @@ function safePath(value, field) {
 	if (!isAbsolute(value) || normalize(value) !== value || !/^\/[A-Za-z0-9._/-]+$/.test(value)) throw new TypeError(field + " must be a normalized absolute path without shell metacharacters");
 	return value;
 }
-function nonEmpty$1(value, field) {
-	if (value.trim().length === 0) throw new TypeError(field + " must not be empty");
-	return value.trim();
-}
 function validateAgentTarget(target) {
-	const deviceId = nonEmpty$1(target.deviceId, "target.deviceId");
-	if (!/^[A-Za-z0-9._-]+$/.test(deviceId)) throw new TypeError("target.deviceId contains unsupported characters");
+	const deviceId = normalizeDeviceId(target.deviceId, "target.deviceId");
 	if (target.transport !== "local" && target.transport !== "ssh") throw new TypeError("target.transport must be local or ssh");
 	const sshHost = target.sshHost?.trim();
 	if (target.transport === "ssh" && (sshHost === void 0 || sshHost.startsWith("-") || !/^[A-Za-z0-9._-]+$/.test(sshHost))) throw new TypeError("target.sshHost must be a configured host alias");
@@ -51,6 +56,9 @@ function validateAgentTarget(target) {
 		agentPath: safePath(target.agentPath, "target.agentPath"),
 		configPath: safePath(target.configPath, "target.configPath")
 	};
+}
+function assertAgentIdentity(expectedDeviceId, response) {
+	if (!isRecord$1(response) || response.deviceId !== expectedDeviceId) throw new AgentClientError("agent-identity-mismatch", "fleet agent identity does not match the configured target");
 }
 function childInvocation(target, command) {
 	const agentArgs = [
@@ -315,7 +323,7 @@ function parsePlugin(value, index) {
 	let target;
 	if (value.target !== void 0) {
 		if (!isRecord(value.target)) throw new TypeError(field + ".target must be an object");
-		const devices = strings(value.target.devices, field + ".target.devices");
+		const devices = strings(value.target.devices, field + ".target.devices")?.map((id, targetIndex) => normalizeDeviceId(id, `${field}.target.devices[${targetIndex}]`));
 		const classes = strings(value.target.classes, field + ".target.classes");
 		const channels = strings(value.target.channels, field + ".target.channels");
 		target = {
@@ -352,7 +360,10 @@ function parseFleetManifest(source) {
 	const teamName = raw.team.name === void 0 ? void 0 : nonEmpty(raw.team.name, "team.name");
 	if (!isRecord(raw.devices)) throw new TypeError("devices must be an object");
 	const devices = {};
-	for (const [id, value] of Object.entries(raw.devices)) devices[nonEmpty(id, "device id")] = parseDevice(value, "devices." + id);
+	for (const [id, value] of Object.entries(raw.devices)) {
+		const deviceId = normalizeDeviceId(id, "device id");
+		devices[deviceId] = parseDevice(value, "devices." + deviceId);
+	}
 	if (!Array.isArray(raw.plugins)) throw new TypeError("plugins must be an array");
 	const plugins = raw.plugins.map(parsePlugin);
 	for (const plugin of plugins) if (Object.entries(devices).some(([id, device]) => device.channel === "stable" && targetsDevice(plugin, id, device))) {
@@ -811,7 +822,7 @@ function resolveConfig(config) {
 	const dshHome = expandHome(config?.dshHome ?? process.env.DSH_HOME ?? "~/.dsh");
 	const boundedNumber = (value, fallback, minimum, maximum) => value === void 0 || !Number.isFinite(value) ? fallback : Math.min(maximum, Math.max(minimum, Math.round(value)));
 	return {
-		deviceId: (config?.deviceId ?? process.env.DSH_FLEET_DEVICE_ID ?? hostname()).trim(),
+		deviceId: normalizeDeviceId(config?.deviceId ?? process.env.DSH_FLEET_DEVICE_ID ?? hostname()),
 		manifestPath: expandHome(config?.manifestPath ?? process.env.DSH_FLEET_MANIFEST ?? "~/.dsh/fleet/fleet.lock.yaml"),
 		profile: (config?.profile ?? process.env.DSH_FLEET_PROFILE ?? "web").trim(),
 		dshHome,
@@ -955,6 +966,14 @@ function requiredString(value, field) {
 	if (typeof value !== "string" || value.trim().length === 0 || value !== value.trim()) throw new TypeError(field + " must be a trimmed non-empty string");
 	return value;
 }
+async function digestManifest(path) {
+	return createHash("sha256").update(await readFile(path, "utf8"), "utf8").digest("hex");
+}
+function assertAgentConfiguration(expected, response) {
+	assertAgentIdentity(expected.deviceId, response);
+	if (response.profile !== expected.profile) throw new AgentClientError("agent-profile-mismatch", "fleet agent profile does not match the configured Host profile");
+	if (response.manifestDigest !== expected.manifestDigest) throw new AgentClientError("agent-manifest-mismatch", "fleet agent manifest does not match the configured Host manifest");
+}
 function apply(ctx, config) {
 	const host = ctx;
 	const resolved = resolveConfig(config);
@@ -995,9 +1014,15 @@ function apply(ctx, config) {
 					enabled: false,
 					targets: []
 				});
+				const manifestDigest = await digestManifest(resolved.manifestPath);
 				const targets = await Promise.all(agents.targets.map(async (target) => {
 					try {
 						const inspection = await agents.call(target.deviceId, "inspect", null, signal);
+						assertAgentConfiguration({
+							deviceId: target.deviceId,
+							profile: resolved.profile,
+							manifestDigest
+						}, inspection);
 						return {
 							...target,
 							online: true,
@@ -1021,7 +1046,13 @@ function apply(ctx, config) {
 				const body = closedPayload(payload, ["deviceId", "pluginId"], "plan payload");
 				const deviceId = requiredString(body.deviceId, "deviceId");
 				const pluginId = requiredString(body.pluginId, "pluginId");
-				return ok(await agents.call(deviceId, "plan", { pluginId }, signal));
+				const plan = await agents.call(deviceId, "plan", { pluginId }, signal);
+				assertAgentConfiguration({
+					deviceId,
+					profile: resolved.profile,
+					manifestDigest: await digestManifest(resolved.manifestPath)
+				}, plan);
+				return ok(plan);
 			}
 			if (endpoint === "approve") {
 				const body = closedPayload(payload, [
@@ -1063,4 +1094,4 @@ function apply(ctx, config) {
 	}, { authority: "loopback" });
 }
 //#endregion
-export { AGENT_RPC_CHANNEL, RPC_CHANNEL, apply, collectFleetStatus, inject, name };
+export { AGENT_RPC_CHANNEL, RPC_CHANNEL, apply, assertAgentConfiguration, collectFleetStatus, inject, name };

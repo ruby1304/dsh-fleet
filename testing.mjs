@@ -5,6 +5,15 @@ import { gt, satisfies, valid, validRange } from "semver";
 import { createHash, randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { constants } from "node:fs";
+//#region src/shared.ts
+const DEVICE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+function normalizeDeviceId(value, field = "deviceId") {
+	if (typeof value !== "string" || value.trim().length === 0) throw new TypeError(field + " must be a non-empty string");
+	const deviceId = value.trim();
+	if (!DEVICE_ID_PATTERN.test(deviceId)) throw new TypeError(field + " must be 1 to 64 ASCII letters, digits, dots, underscores or hyphens and start with a letter or digit");
+	return deviceId;
+}
+//#endregion
 //#region src/host/core.ts
 function isRecord$4(value) {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -14,18 +23,18 @@ function strings(value, field) {
 	if (!Array.isArray(value) || value.some((item) => typeof item !== "string" || item.trim().length === 0)) throw new TypeError(field + " must be an array of non-empty strings");
 	return value.map((item) => item.trim());
 }
-function nonEmpty$2(value, field) {
+function nonEmpty$1(value, field) {
 	if (typeof value !== "string" || value.trim().length === 0) throw new TypeError(field + " must be a non-empty string");
 	return value.trim();
 }
 function parseDevice(value, field) {
 	if (!isRecord$4(value)) throw new TypeError(field + " must be an object");
-	const assignedTo = value.assignedTo === void 0 ? void 0 : nonEmpty$2(value.assignedTo, field + ".assignedTo");
+	const assignedTo = value.assignedTo === void 0 ? void 0 : nonEmpty$1(value.assignedTo, field + ".assignedTo");
 	const labels = strings(value.labels, field + ".labels");
 	return {
 		...assignedTo === void 0 ? {} : { assignedTo },
-		class: nonEmpty$2(value.class, field + ".class"),
-		channel: nonEmpty$2(value.channel, field + ".channel"),
+		class: nonEmpty$1(value.class, field + ".class"),
+		channel: nonEmpty$1(value.channel, field + ".channel"),
 		...labels === void 0 ? {} : { labels }
 	};
 }
@@ -49,7 +58,7 @@ function parsePlugin(value, index) {
 	let target;
 	if (value.target !== void 0) {
 		if (!isRecord$4(value.target)) throw new TypeError(field + ".target must be an object");
-		const devices = strings(value.target.devices, field + ".target.devices");
+		const devices = strings(value.target.devices, field + ".target.devices")?.map((id, targetIndex) => normalizeDeviceId(id, `${field}.target.devices[${targetIndex}]`));
 		const classes = strings(value.target.classes, field + ".target.classes");
 		const channels = strings(value.target.channels, field + ".target.channels");
 		target = {
@@ -58,13 +67,13 @@ function parsePlugin(value, index) {
 			...channels === void 0 ? {} : { channels }
 		};
 	}
-	const id = nonEmpty$2(value.id, field + ".id");
+	const id = nonEmpty$1(value.id, field + ".id");
 	const hasSpec = value.spec !== void 0;
 	const hasSource = value.source !== void 0 || value.revision !== void 0;
 	if (hasSpec === hasSource) throw new TypeError(field + " must specify exactly one of spec or source");
-	const spec = hasSpec ? nonEmpty$2(value.spec, field + ".spec") : void 0;
-	const source = hasSource ? nonEmpty$2(value.source, field + ".source") : void 0;
-	const revision = value.revision === void 0 ? void 0 : nonEmpty$2(value.revision, field + ".revision");
+	const spec = hasSpec ? nonEmpty$1(value.spec, field + ".spec") : void 0;
+	const source = hasSource ? nonEmpty$1(value.source, field + ".source") : void 0;
+	const revision = value.revision === void 0 ? void 0 : nonEmpty$1(value.revision, field + ".revision");
 	return {
 		id,
 		spec: spec ?? dependencySpec(source, revision, field),
@@ -82,11 +91,14 @@ function parseFleetManifest(source) {
 	if (!isRecord$4(raw)) throw new TypeError("fleet manifest must be an object");
 	if (raw.schemaVersion !== 1) throw new TypeError("schemaVersion must equal 1");
 	if (!isRecord$4(raw.team)) throw new TypeError("team must be an object");
-	const teamId = nonEmpty$2(raw.team.id, "team.id");
-	const teamName = raw.team.name === void 0 ? void 0 : nonEmpty$2(raw.team.name, "team.name");
+	const teamId = nonEmpty$1(raw.team.id, "team.id");
+	const teamName = raw.team.name === void 0 ? void 0 : nonEmpty$1(raw.team.name, "team.name");
 	if (!isRecord$4(raw.devices)) throw new TypeError("devices must be an object");
 	const devices = {};
-	for (const [id, value] of Object.entries(raw.devices)) devices[nonEmpty$2(id, "device id")] = parseDevice(value, "devices." + id);
+	for (const [id, value] of Object.entries(raw.devices)) {
+		const deviceId = normalizeDeviceId(id, "device id");
+		devices[deviceId] = parseDevice(value, "devices." + deviceId);
+	}
 	if (!Array.isArray(raw.plugins)) throw new TypeError("plugins must be an array");
 	const plugins = raw.plugins.map(parsePlugin);
 	for (const plugin of plugins) if (Object.entries(devices).some(([id, device]) => device.channel === "stable" && targetsDevice$1(plugin, id, device))) {
@@ -518,12 +530,12 @@ function createUpdateMonitor(config, dependencies = {}) {
 function isRecord$3(value) {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-function nonEmpty$1(value, field) {
+function nonEmpty(value, field) {
 	if (typeof value !== "string" || value.trim().length === 0) throw new TypeError(field + " must be a non-empty string");
 	return value.trim();
 }
 function absolutePath(value, field) {
-	const path = nonEmpty$1(value, field);
+	const path = nonEmpty(value, field);
 	if (!isAbsolute(path) || normalize(path) !== path || path.includes("\0")) throw new TypeError(field + " must be a normalized absolute path");
 	return path;
 }
@@ -538,7 +550,7 @@ function exactKeys(value, allowed, field) {
 }
 function parseRestart(value) {
 	if (!isRecord$3(value)) throw new TypeError("restart must be an object");
-	const kind = nonEmpty$1(value.kind, "restart.kind");
+	const kind = nonEmpty(value.kind, "restart.kind");
 	if (kind === "none") {
 		exactKeys(value, ["kind"], "restart");
 		return { kind: "none" };
@@ -554,9 +566,9 @@ function parseRestart(value) {
 		"host",
 		"port"
 	], "restart");
-	const sessionName = nonEmpty$1(value.sessionName, "restart.sessionName");
+	const sessionName = nonEmpty(value.sessionName, "restart.sessionName");
 	if (!/^[A-Za-z0-9._-]+$/.test(sessionName)) throw new TypeError("restart.sessionName contains unsupported characters");
-	const host = nonEmpty$1(value.host, "restart.host");
+	const host = nonEmpty(value.host, "restart.host");
 	if (host !== "127.0.0.1" && host !== "localhost" && host !== "::1") throw new TypeError("restart.host must be loopback");
 	if (!Array.isArray(value.ownerMarkers) || value.ownerMarkers.length === 0 || value.ownerMarkers.length > 8 || value.ownerMarkers.some((marker) => typeof marker !== "string" || marker.trim() !== marker || marker.length === 0 || marker.length > 240 || /[\r\n\0]/.test(marker))) throw new TypeError("restart.ownerMarkers must contain 1 to 8 fixed command fragments");
 	return {
@@ -583,7 +595,7 @@ function parseHealth(value) {
 	], "health");
 	let url;
 	if (value.url !== void 0) {
-		url = nonEmpty$1(value.url, "health.url");
+		url = nonEmpty(value.url, "health.url");
 		const parsed = new URL(url);
 		if (parsed.protocol !== "http:" || parsed.hostname !== "127.0.0.1" && parsed.hostname !== "localhost" && parsed.hostname !== "[::1]") throw new TypeError("health.url must be a loopback http URL");
 		if (parsed.username !== "" || parsed.password !== "") throw new TypeError("health.url must not contain credentials");
@@ -613,11 +625,11 @@ function parseAgentConfig(value) {
 		"health"
 	], "agent config");
 	if (value.schemaVersion !== 1) throw new TypeError("agent config schemaVersion must equal 1");
-	const profile = nonEmpty$1(value.profile, "profile");
+	const profile = nonEmpty(value.profile, "profile");
 	if (!/^[A-Za-z0-9._-]+$/.test(profile)) throw new TypeError("profile contains unsupported characters");
 	return {
 		schemaVersion: 1,
-		deviceId: nonEmpty$1(value.deviceId, "deviceId"),
+		deviceId: normalizeDeviceId(value.deviceId),
 		manifestPath: absolutePath(value.manifestPath, "manifestPath"),
 		dshHome: absolutePath(value.dshHome, "dshHome"),
 		dshBinary: absolutePath(value.dshBinary, "dshBinary"),
@@ -1981,13 +1993,8 @@ function safePath(value, field) {
 	if (!isAbsolute(value) || normalize(value) !== value || !/^\/[A-Za-z0-9._/-]+$/.test(value)) throw new TypeError(field + " must be a normalized absolute path without shell metacharacters");
 	return value;
 }
-function nonEmpty(value, field) {
-	if (value.trim().length === 0) throw new TypeError(field + " must not be empty");
-	return value.trim();
-}
 function validateAgentTarget(target) {
-	const deviceId = nonEmpty(target.deviceId, "target.deviceId");
-	if (!/^[A-Za-z0-9._-]+$/.test(deviceId)) throw new TypeError("target.deviceId contains unsupported characters");
+	const deviceId = normalizeDeviceId(target.deviceId, "target.deviceId");
 	if (target.transport !== "local" && target.transport !== "ssh") throw new TypeError("target.transport must be local or ssh");
 	const sshHost = target.sshHost?.trim();
 	if (target.transport === "ssh" && (sshHost === void 0 || sshHost.startsWith("-") || !/^[A-Za-z0-9._-]+$/.test(sshHost))) throw new TypeError("target.sshHost must be a configured host alias");

@@ -2,7 +2,7 @@ import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { apply, collectFleetStatus } from '../src/index.ts'
+import { apply, assertAgentConfiguration, collectFleetStatus } from '../src/index.ts'
 
 const roots: string[] = []
 afterEach(async () => {
@@ -74,6 +74,20 @@ plugins:
 })
 
 describe('Host', () => {
+  it('rejects a target whose device, profile, or manifest identity differs from the Host binding', () => {
+    const expected = { deviceId: 'worker', profile: 'web', manifestDigest: 'a'.repeat(64) }
+    expect(() => assertAgentConfiguration(expected, { ...expected, deviceId: 'other' })).toThrowError(
+      expect.objectContaining({ code: 'agent-identity-mismatch' }),
+    )
+    expect(() => assertAgentConfiguration(expected, { ...expected, profile: 'other' })).toThrowError(
+      expect.objectContaining({ code: 'agent-profile-mismatch' }),
+    )
+    expect(() => assertAgentConfiguration(expected, { ...expected, manifestDigest: 'b'.repeat(64) })).toThrowError(
+      expect.objectContaining({ code: 'agent-manifest-mismatch' }),
+    )
+    expect(() => assertAgentConfiguration(expected, expected)).not.toThrow()
+  })
+
   it('registers the loopback RPC channel and serves fleet status', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-fleet-'))
     roots.push(root)

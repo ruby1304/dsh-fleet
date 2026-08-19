@@ -77,7 +77,10 @@ if (pkg.repository?.url !== 'git+https://github.com/ruby1304/dsh-fleet.git') fai
 if (pkg.publishConfig?.access !== 'public' || pkg.publishConfig?.provenance !== true) {
   fail('publishConfig must require public access and provenance')
 }
-for (const file of ['README.md', 'CHANGELOG.md', 'SECURITY.md', 'THIRD_PARTY_NOTICES.md', 'LICENSE']) {
+for (const file of [
+  'README.md', 'CHANGELOG.md', 'SECURITY.md', 'SUPPORT.md', 'CONTRIBUTING.md',
+  'CODE_OF_CONDUCT.md', 'THIRD_PARTY_NOTICES.md', 'LICENSE', 'docs',
+]) {
   if (!pkg.files?.includes(file)) fail(`public package omits ${file}`)
 }
 if (!/^pnpm@\d+\.\d+\.\d+$/.test(pkg.packageManager ?? '')) fail('packageManager must pin an exact pnpm version')
