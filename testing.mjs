@@ -397,10 +397,54 @@ function reconcileFleet(input) {
 }
 //#endregion
 //#region src/host/updates.ts
-const NPM_NAME = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/i;
+const NPM_NAME_SEGMENT = /^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$/;
+const GITHUB_OWNER = /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/;
+const GITHUB_REPOSITORY = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/;
+const GITHUB_REF = /^[A-Za-z0-9](?:[A-Za-z0-9._/@+-]*[A-Za-z0-9])?$/;
+function exactMatch(pattern, value) {
+	return pattern.exec(value)?.[0] === value;
+}
+function isPublicNpmPackageName(value) {
+	if (value.length === 0 || value.length > 214 || value !== value.toLowerCase()) return false;
+	const parts = value.startsWith("@") ? value.slice(1).split("/") : [value];
+	return parts.length === (value.startsWith("@") ? 2 : 1) && parts.every((part) => part.length > 0 && exactMatch(NPM_NAME_SEGMENT, part));
+}
+function validGitHubCoordinate(owner, repository) {
+	return owner.length <= 39 && repository.length <= 100 && exactMatch(GITHUB_OWNER, owner) && !owner.includes("--") && exactMatch(GITHUB_REPOSITORY, repository);
+}
+function npmRegistryLatestUrl(packageName) {
+	if (!isPublicNpmPackageName(packageName)) throw new Error("unsupported npm package name");
+	const url = new URL("https://registry.npmjs.org/");
+	url.pathname = `/${encodeURIComponent(packageName)}/latest`;
+	return url;
+}
+function githubApiHeadUrl(owner, repository) {
+	if (!validGitHubCoordinate(owner, repository)) throw new Error("unsupported GitHub repository");
+	const url = new URL("https://api.github.com/");
+	url.pathname = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repository)}/commits`;
+	url.searchParams.set("per_page", "1");
+	return url;
+}
+function npmPackagePageUrl(packageName) {
+	const url = new URL("https://www.npmjs.com/");
+	url.pathname = `/package/${encodeURIComponent(packageName)}`;
+	return url.href;
+}
+function githubRepositoryUrls(owner, repository) {
+	if (!validGitHubCoordinate(owner, repository)) throw new Error("unsupported GitHub repository");
+	const page = new URL("https://github.com/");
+	page.pathname = `/${encodeURIComponent(owner)}/${encodeURIComponent(repository)}`;
+	const clone = new URL(page);
+	clone.pathname += ".git";
+	return {
+		clone: clone.href,
+		page: page.href
+	};
+}
 const systemUpdateProbe = {
 	async npmLatest(packageName, timeoutMs) {
-		const response = await fetch(`https://registry.npmjs.org/${encodeURIComponent(packageName)}/latest`, {
+		const requestUrl = npmRegistryLatestUrl(packageName);
+		const response = await fetch(requestUrl, {
 			headers: { accept: "application/json" },
 			credentials: "omit",
 			redirect: "error",
@@ -412,9 +456,10 @@ const systemUpdateProbe = {
 		return payload.version.trim();
 	},
 	async githubHead(repository, timeoutMs) {
-		const match = /^https:\/\/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\.git$/.exec(repository);
-		if (match?.[1] === void 0 || match[2] === void 0) throw new Error("unsupported GitHub repository");
-		const response = await fetch(`https://api.github.com/repos/${encodeURIComponent(match[1])}/${encodeURIComponent(match[2])}/commits?per_page=1`, {
+		const match = /^https:\/\/github\.com\/([^/?#]+)\/([^/?#]+)\.git$/.exec(repository);
+		if (match?.[0] !== repository || match[1] === void 0 || match[2] === void 0 || !validGitHubCoordinate(match[1], match[2])) throw new Error("unsupported GitHub repository");
+		const requestUrl = githubApiHeadUrl(match[1], match[2]);
+		const response = await fetch(requestUrl, {
 			headers: {
 				accept: "application/vnd.github+json",
 				"user-agent": "dsh-fleet",
@@ -432,16 +477,19 @@ const systemUpdateProbe = {
 	}
 };
 function githubDescriptor(spec) {
-	const shorthand = /^github:([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)(?:#.*)?$/.exec(spec);
-	const url = /^(?:git\+)?https:\/\/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)(?:#.*)?$/.exec(spec);
+	const shorthand = /^github:([^/?#]+)\/([^/?#]+?)(?:#([^#]+))?$/.exec(spec);
+	const url = /^(?:git\+)?https:\/\/github\.com\/([^/?#]+)\/([^/?#]+?)(?:#([^#]+))?$/.exec(spec);
 	const match = shorthand ?? url;
-	if (match?.[1] === void 0 || match[2] === void 0) return void 0;
+	if (match?.[0] !== spec || match[1] === void 0 || match[2] === void 0) return void 0;
 	const owner = match[1];
 	const repositoryName = match[2].replace(/\.git$/, "");
+	if (!validGitHubCoordinate(owner, repositoryName)) return void 0;
+	if (match[3] !== void 0 && (match[3].length > 200 || !exactMatch(GITHUB_REF, match[3]))) return void 0;
+	const repositoryUrls = githubRepositoryUrls(owner, repositoryName);
 	return {
 		source: "github",
-		repository: `https://github.com/${owner}/${repositoryName}.git`,
-		sourceUrl: `https://github.com/${owner}/${repositoryName}`
+		repository: repositoryUrls.clone,
+		sourceUrl: repositoryUrls.page
 	};
 }
 function describeSource(id, spec) {
@@ -450,10 +498,10 @@ function describeSource(id, spec) {
 	if (/^(?:link|file|workspace):/.test(spec) || spec.startsWith("/") || spec.startsWith("./") || spec.startsWith("../")) return { source: "local" };
 	const github = githubDescriptor(spec);
 	if (github !== void 0) return github;
-	if (NPM_NAME.test(id) && (validRange(spec) !== null || /^[a-z][a-z0-9._-]*$/i.test(spec))) return {
+	if (isPublicNpmPackageName(id) && (validRange(spec) !== null || /^[a-z][a-z0-9._-]*$/i.test(spec))) return {
 		source: "npm",
 		packageName: id,
-		sourceUrl: `https://www.npmjs.com/package/${encodeURIComponent(id)}`
+		sourceUrl: npmPackagePageUrl(id)
 	};
 	return { source: "unknown" };
 }
@@ -5895,14 +5943,24 @@ async function launchTaskWorker(launch, taskId) {
 	child.stdin.end(JSON.stringify({ taskId }) + "\n");
 	child.unref();
 }
+function processLockToken(source) {
+	try {
+		const owner = JSON.parse(source);
+		return typeof owner.token === "string" ? owner.token : null;
+	} catch {
+		return null;
+	}
+}
 async function readProcessLockSnapshot(path) {
 	let handle;
 	try {
 		handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
 		const info = await handle.stat();
 		if (!info.isFile()) throw new FleetA2ARuntimeError("unsafe-state-file", "A2A lock must be a regular file");
+		const source = await handle.readFile("utf8");
 		return {
-			source: await handle.readFile("utf8"),
+			source,
+			token: processLockToken(source),
 			dev: info.dev,
 			ino: info.ino,
 			mtimeMs: info.mtimeMs
@@ -5920,7 +5978,7 @@ async function observeProcessLock(path) {
 	if (snapshot === null) return { state: "missing" };
 	try {
 		const owner = JSON.parse(snapshot.source);
-		if (typeof owner.pid === "number" && Number.isSafeInteger(owner.pid) && owner.pid > 0 && typeof owner.token === "string") return await processAlive(owner.pid) ? { state: "active" } : {
+		if (typeof owner.pid === "number" && Number.isSafeInteger(owner.pid) && owner.pid > 0 && snapshot.token !== null) return await processAlive(owner.pid) ? { state: "active" } : {
 			state: "stale",
 			snapshot
 		};
@@ -5931,7 +5989,7 @@ async function observeProcessLock(path) {
 	} : { state: "active" };
 }
 function sameProcessLockIdentity(snapshot, expected) {
-	return snapshot !== null && snapshot.dev === expected.dev && snapshot.ino === expected.ino;
+	return snapshot !== null && snapshot.dev === expected.dev && snapshot.ino === expected.ino && snapshot.source === expected.source && snapshot.token === expected.token;
 }
 async function casUnlinkProcessLock(path, expected) {
 	const claimPath = path + ".reap-" + hash(expected.source);
@@ -5961,18 +6019,20 @@ async function createProcessLock(path, fields = {}) {
 	try {
 		handle = await open(path, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW, 384);
 		const info = await handle.stat();
-		createdLock = {
-			path,
-			token,
-			dev: info.dev,
-			ino: info.ino
-		};
-		await handle.writeFile(JSON.stringify({
+		const source = JSON.stringify({
 			...fields,
 			pid: process.pid,
 			token,
 			at: (/* @__PURE__ */ new Date()).toISOString()
-		}) + "\n");
+		}) + "\n";
+		createdLock = {
+			path,
+			source,
+			token,
+			dev: info.dev,
+			ino: info.ino
+		};
+		await handle.writeFile(source);
 		await handle.sync();
 		return createdLock;
 	} catch (error) {
@@ -6002,8 +6062,8 @@ async function acquireProcessLock(path, busyCode, busyMessage, hooks) {
 async function releaseProcessLock(lock) {
 	try {
 		const snapshot = await readProcessLockSnapshot(lock.path);
-		if (snapshot === null || snapshot.dev !== lock.dev || snapshot.ino !== lock.ino) return;
-		if (JSON.parse(snapshot.source).token === lock.token) await casUnlinkProcessLock(lock.path, snapshot);
+		if (snapshot === null || !sameProcessLockIdentity(snapshot, lock)) return;
+		await casUnlinkProcessLock(lock.path, snapshot);
 	} catch (error) {
 		if (error.code !== "ENOENT") throw error;
 	}

@@ -663,6 +663,7 @@ async function launchTaskWorker(launch: A2AWorkerLaunch, taskId: string): Promis
 
 interface ProcessLock {
   path: string
+  source: string
   token: string
   dev: number
   ino: number
@@ -670,6 +671,7 @@ interface ProcessLock {
 
 interface ProcessLockSnapshot {
   source: string
+  token: string | null
   dev: number
   ino: number
   mtimeMs: number
@@ -680,13 +682,23 @@ type ProcessLockObservation =
   | { state: 'active' }
   | { state: 'stale'; snapshot: ProcessLockSnapshot }
 
+function processLockToken(source: string): string | null {
+  try {
+    const owner = JSON.parse(source) as { token?: unknown }
+    return typeof owner.token === 'string' ? owner.token : null
+  } catch {
+    return null
+  }
+}
+
 async function readProcessLockSnapshot(path: string): Promise<ProcessLockSnapshot | null> {
   let handle
   try {
     handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW)
     const info = await handle.stat()
     if (!info.isFile()) throw new FleetA2ARuntimeError('unsafe-state-file', 'A2A lock must be a regular file')
-    return { source: await handle.readFile('utf8'), dev: info.dev, ino: info.ino, mtimeMs: info.mtimeMs }
+    const source = await handle.readFile('utf8')
+    return { source, token: processLockToken(source), dev: info.dev, ino: info.ino, mtimeMs: info.mtimeMs }
   } catch (error: unknown) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
     if ((error as NodeJS.ErrnoException).code === 'ELOOP') {
@@ -702,8 +714,8 @@ async function observeProcessLock(path: string): Promise<ProcessLockObservation>
   const snapshot = await readProcessLockSnapshot(path)
   if (snapshot === null) return { state: 'missing' }
   try {
-    const owner = JSON.parse(snapshot.source) as { pid?: unknown; token?: unknown }
-    if (typeof owner.pid === 'number' && Number.isSafeInteger(owner.pid) && owner.pid > 0 && typeof owner.token === 'string') {
+    const owner = JSON.parse(snapshot.source) as { pid?: unknown }
+    if (typeof owner.pid === 'number' && Number.isSafeInteger(owner.pid) && owner.pid > 0 && snapshot.token !== null) {
       return await processAlive(owner.pid) ? { state: 'active' } : { state: 'stale', snapshot }
     }
   } catch {
@@ -713,10 +725,11 @@ async function observeProcessLock(path: string): Promise<ProcessLockObservation>
 }
 
 function sameProcessLockIdentity(
-  snapshot: Pick<ProcessLockSnapshot, 'dev' | 'ino'> | null,
-  expected: Pick<ProcessLockSnapshot, 'dev' | 'ino'>,
+  snapshot: Pick<ProcessLockSnapshot, 'source' | 'token' | 'dev' | 'ino'> | null,
+  expected: Pick<ProcessLockSnapshot, 'source' | 'token' | 'dev' | 'ino'>,
 ): boolean {
-  return snapshot !== null && snapshot.dev === expected.dev && snapshot.ino === expected.ino
+  return snapshot !== null && snapshot.dev === expected.dev && snapshot.ino === expected.ino &&
+    snapshot.source === expected.source && snapshot.token === expected.token
 }
 
 async function casUnlinkProcessLock(path: string, expected: ProcessLockSnapshot): Promise<boolean> {
@@ -756,8 +769,9 @@ async function createProcessLock(path: string, fields: Record<string, unknown> =
   try {
     handle = await open(path, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600)
     const info = await handle.stat()
-    createdLock = { path, token, dev: info.dev, ino: info.ino }
-    await handle.writeFile(JSON.stringify({ ...fields, pid: process.pid, token, at: new Date().toISOString() }) + '\n')
+    const source = JSON.stringify({ ...fields, pid: process.pid, token, at: new Date().toISOString() }) + '\n'
+    createdLock = { path, source, token, dev: info.dev, ino: info.ino }
+    await handle.writeFile(source)
     await handle.sync()
     return createdLock
   } catch (error: unknown) {
@@ -799,9 +813,8 @@ async function acquireProcessLock(
 async function releaseProcessLock(lock: ProcessLock): Promise<void> {
   try {
     const snapshot = await readProcessLockSnapshot(lock.path)
-    if (snapshot === null || snapshot.dev !== lock.dev || snapshot.ino !== lock.ino) return
-    const owner = JSON.parse(snapshot.source) as { token?: unknown }
-    if (owner.token === lock.token) await casUnlinkProcessLock(lock.path, snapshot)
+    if (snapshot === null || !sameProcessLockIdentity(snapshot, lock)) return
+    await casUnlinkProcessLock(lock.path, snapshot)
   } catch (error: unknown) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
   }

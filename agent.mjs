@@ -14583,14 +14583,24 @@ async function launchTaskWorker(launch, taskId) {
 	child.stdin.end(JSON.stringify({ taskId }) + "\n");
 	child.unref();
 }
+function processLockToken(source) {
+	try {
+		const owner = JSON.parse(source);
+		return typeof owner.token === "string" ? owner.token : null;
+	} catch {
+		return null;
+	}
+}
 async function readProcessLockSnapshot(path) {
 	let handle;
 	try {
 		handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
 		const info = await handle.stat();
 		if (!info.isFile()) throw new FleetA2ARuntimeError("unsafe-state-file", "A2A lock must be a regular file");
+		const source = await handle.readFile("utf8");
 		return {
-			source: await handle.readFile("utf8"),
+			source,
+			token: processLockToken(source),
 			dev: info.dev,
 			ino: info.ino,
 			mtimeMs: info.mtimeMs
@@ -14608,7 +14618,7 @@ async function observeProcessLock(path) {
 	if (snapshot === null) return { state: "missing" };
 	try {
 		const owner = JSON.parse(snapshot.source);
-		if (typeof owner.pid === "number" && Number.isSafeInteger(owner.pid) && owner.pid > 0 && typeof owner.token === "string") return await processAlive(owner.pid) ? { state: "active" } : {
+		if (typeof owner.pid === "number" && Number.isSafeInteger(owner.pid) && owner.pid > 0 && snapshot.token !== null) return await processAlive(owner.pid) ? { state: "active" } : {
 			state: "stale",
 			snapshot
 		};
@@ -14619,7 +14629,7 @@ async function observeProcessLock(path) {
 	} : { state: "active" };
 }
 function sameProcessLockIdentity(snapshot, expected) {
-	return snapshot !== null && snapshot.dev === expected.dev && snapshot.ino === expected.ino;
+	return snapshot !== null && snapshot.dev === expected.dev && snapshot.ino === expected.ino && snapshot.source === expected.source && snapshot.token === expected.token;
 }
 async function casUnlinkProcessLock(path, expected) {
 	const claimPath = path + ".reap-" + hash(expected.source);
@@ -14649,18 +14659,20 @@ async function createProcessLock(path, fields = {}) {
 	try {
 		handle = await open(path, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW, 384);
 		const info = await handle.stat();
-		createdLock = {
-			path,
-			token,
-			dev: info.dev,
-			ino: info.ino
-		};
-		await handle.writeFile(JSON.stringify({
+		const source = JSON.stringify({
 			...fields,
 			pid: process.pid,
 			token,
 			at: (/* @__PURE__ */ new Date()).toISOString()
-		}) + "\n");
+		}) + "\n";
+		createdLock = {
+			path,
+			source,
+			token,
+			dev: info.dev,
+			ino: info.ino
+		};
+		await handle.writeFile(source);
 		await handle.sync();
 		return createdLock;
 	} catch (error) {
@@ -14690,8 +14702,8 @@ async function acquireProcessLock(path, busyCode, busyMessage, hooks) {
 async function releaseProcessLock(lock) {
 	try {
 		const snapshot = await readProcessLockSnapshot(lock.path);
-		if (snapshot === null || snapshot.dev !== lock.dev || snapshot.ino !== lock.ino) return;
-		if (JSON.parse(snapshot.source).token === lock.token) await casUnlinkProcessLock(lock.path, snapshot);
+		if (snapshot === null || !sameProcessLockIdentity(snapshot, lock)) return;
+		await casUnlinkProcessLock(lock.path, snapshot);
 	} catch (error) {
 		if (error.code !== "ENOENT") throw error;
 	}

@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
-import { chmod, mkdtemp, mkdir, readFile, readlink, rename, rm, stat, symlink, unlink, writeFile } from 'node:fs/promises'
+import { constants } from 'node:fs'
+import { chmod, mkdtemp, mkdir, open, readFile, readlink, rename, rm, stat, symlink, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { stringify } from 'yaml'
@@ -107,6 +108,18 @@ async function waitForPath(path: string): Promise<void> {
     await new Promise(resolve => setTimeout(resolve, 10))
   }
   throw new TypeError('timed out waiting for probe path')
+}
+
+async function readRegularFileWithMode(path: string, expectedMode: number): Promise<string> {
+  const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW)
+  try {
+    const info = await handle.stat()
+    expect(info.isFile()).toBe(true)
+    expect(info.mode & 0o777).toBe(expectedMode)
+    return await handle.readFile('utf8')
+  } finally {
+    await handle.close()
+  }
 }
 
 function packValue() {
@@ -322,17 +335,16 @@ describe('team bootstrap runtime', () => {
     expect(forward.manifestDigest).toBe(reverse.manifestDigest)
     expect(new Set([forward.manifestDigest, reverse.manifestDigest, third.manifestDigest])).toEqual(new Set([forwardPlan.manifestDigest]))
     for (const rendered of [forward, reverse, third]) {
-      expect(await readFile(rendered.manifestPath, 'utf8')).toBe(forwardPlan.manifestYaml)
-      expect((await stat(rendered.manifestPath)).mode & 0o777).toBe(0o600)
+      expect(await readRegularFileWithMode(rendered.manifestPath, 0o600)).toBe(forwardPlan.manifestYaml)
       expect((await stat(rendered.trustStorePath)).mode & 0o777).toBe(0o600)
-      expect((await stat(rendered.taskPolicyPath)).mode & 0o777).toBe(0o600)
-      expect((await stat(rendered.agentConfigPath)).mode & 0o777).toBe(0o600)
-      const agent = parseAgentConfig(JSON.parse(await readFile(rendered.agentConfigPath, 'utf8')) as unknown)
+      const agent = parseAgentConfig(JSON.parse(
+        await readRegularFileWithMode(rendered.agentConfigPath, 0o600),
+      ) as unknown)
       expect(agent.deviceId).toBe(rendered.deviceId)
       expect(agent.manifestPath).toBe(join(paths.root, `dsh-home-${rendered.deviceId}`, 'profiles', 'headless', 'fleet.lock.yaml'))
       expect(agent.desiredManifestPath).toBe(rendered.manifestPath)
       expect(agent.tasks?.workspaces).toEqual({ 'fleet-repo': join(paths.root, `workspace-${rendered.deviceId}`) })
-      expect(JSON.parse(await readFile(rendered.taskPolicyPath, 'utf8'))).toEqual({
+      expect(JSON.parse(await readRegularFileWithMode(rendered.taskPolicyPath, 0o600))).toEqual({
         profiles: ['headless'],
         workspaces: { 'fleet-repo': join(paths.root, `workspace-${rendered.deviceId}`) },
       })
@@ -401,8 +413,10 @@ describe('team bootstrap runtime', () => {
     ])
     expect((await stat(inspected.generationPath)).mode & 0o777).toBe(0o500)
     expect((await stat(join(inspected.generationPath, 'agent.mjs'))).mode & 0o777).toBe(0o500)
-    expect((await stat(join(inspected.generationPath, 'agent.config.json'))).mode & 0o777).toBe(0o400)
-    const agentConfig = JSON.parse(await readFile(join(inspected.generationPath, 'agent.config.json'), 'utf8')) as Record<string, unknown>
+    const agentConfig = JSON.parse(await readRegularFileWithMode(
+      join(inspected.generationPath, 'agent.config.json'),
+      0o400,
+    )) as Record<string, unknown>
     expect(agentConfig.manifestPath).toBe(join(paths.root, 'dsh-home-worker', 'profiles', 'headless', 'fleet.lock.yaml'))
     expect(agentConfig.desiredManifestPath).toBe(join(inspected.generationPath, 'fleet.lock.yaml'))
     const routes = JSON.parse(await readFile(join(inspected.generationPath, 'routes.json'), 'utf8')) as { routes: unknown[] }

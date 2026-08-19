@@ -10,7 +10,60 @@ import type {
   PluginStatus,
 } from '../shared.ts'
 
-const NPM_NAME = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/i
+const NPM_NAME_SEGMENT = /^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$/
+const GITHUB_OWNER = /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/
+const GITHUB_REPOSITORY = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/
+const GITHUB_REF = /^[A-Za-z0-9](?:[A-Za-z0-9._/@+-]*[A-Za-z0-9])?$/
+
+function exactMatch(pattern: RegExp, value: string): boolean {
+  return pattern.exec(value)?.[0] === value
+}
+
+function isPublicNpmPackageName(value: string): boolean {
+  if (value.length === 0 || value.length > 214 || value !== value.toLowerCase()) return false
+  const parts = value.startsWith('@') ? value.slice(1).split('/') : [value]
+  return parts.length === (value.startsWith('@') ? 2 : 1)
+    && parts.every(part => part.length > 0 && exactMatch(NPM_NAME_SEGMENT, part))
+}
+
+function validGitHubCoordinate(owner: string, repository: string): boolean {
+  return owner.length <= 39
+    && repository.length <= 100
+    && exactMatch(GITHUB_OWNER, owner)
+    && !owner.includes('--')
+    && exactMatch(GITHUB_REPOSITORY, repository)
+}
+
+function npmRegistryLatestUrl(packageName: string): URL {
+  if (!isPublicNpmPackageName(packageName)) throw new Error('unsupported npm package name')
+  const url = new URL('https://registry.npmjs.org/')
+  url.pathname = `/${encodeURIComponent(packageName)}/latest`
+  return url
+}
+
+function githubApiHeadUrl(owner: string, repository: string): URL {
+  if (!validGitHubCoordinate(owner, repository)) throw new Error('unsupported GitHub repository')
+  const url = new URL('https://api.github.com/')
+  url.pathname = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repository)}/commits`
+  url.searchParams.set('per_page', '1')
+  return url
+}
+
+function npmPackagePageUrl(packageName: string): string {
+  const url = new URL('https://www.npmjs.com/')
+  url.pathname = `/package/${encodeURIComponent(packageName)}`
+  return url.href
+}
+
+function githubRepositoryUrls(owner: string, repository: string): { clone: string; page: string } {
+  if (!validGitHubCoordinate(owner, repository)) throw new Error('unsupported GitHub repository')
+  const page = new URL('https://github.com/')
+  page.pathname = `/${encodeURIComponent(owner)}/${encodeURIComponent(repository)}`
+  const clone = new URL(page)
+  clone.pathname += '.git'
+  return { clone: clone.href, page: page.href }
+}
+
 export interface UpdateRuntimeConfig {
   enabled: boolean
   cacheMs: number
@@ -58,7 +111,8 @@ export interface UpdateMonitorDependencies {
 
 export const systemUpdateProbe: UpdateProbe = {
   async npmLatest(packageName, timeoutMs) {
-    const response = await fetch(`https://registry.npmjs.org/${encodeURIComponent(packageName)}/latest`, {
+    const requestUrl = npmRegistryLatestUrl(packageName)
+    const response = await fetch(requestUrl, {
       headers: { accept: 'application/json' },
       credentials: 'omit',
       redirect: 'error',
@@ -70,9 +124,12 @@ export const systemUpdateProbe: UpdateProbe = {
     return payload.version.trim()
   },
   async githubHead(repository, timeoutMs) {
-    const match = /^https:\/\/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\.git$/.exec(repository)
-    if (match?.[1] === undefined || match[2] === undefined) throw new Error('unsupported GitHub repository')
-    const response = await fetch(`https://api.github.com/repos/${encodeURIComponent(match[1])}/${encodeURIComponent(match[2])}/commits?per_page=1`, {
+    const match = /^https:\/\/github\.com\/([^/?#]+)\/([^/?#]+)\.git$/.exec(repository)
+    if (match?.[0] !== repository || match[1] === undefined || match[2] === undefined || !validGitHubCoordinate(match[1], match[2])) {
+      throw new Error('unsupported GitHub repository')
+    }
+    const requestUrl = githubApiHeadUrl(match[1], match[2])
+    const response = await fetch(requestUrl, {
       headers: {
         accept: 'application/vnd.github+json',
         'user-agent': 'dsh-fleet',
@@ -91,16 +148,19 @@ export const systemUpdateProbe: UpdateProbe = {
 }
 
 function githubDescriptor(spec: string): SourceDescriptor | undefined {
-  const shorthand = /^github:([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)(?:#.*)?$/.exec(spec)
-  const url = /^(?:git\+)?https:\/\/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)(?:#.*)?$/.exec(spec)
+  const shorthand = /^github:([^/?#]+)\/([^/?#]+?)(?:#([^#]+))?$/.exec(spec)
+  const url = /^(?:git\+)?https:\/\/github\.com\/([^/?#]+)\/([^/?#]+?)(?:#([^#]+))?$/.exec(spec)
   const match = shorthand ?? url
-  if (match?.[1] === undefined || match[2] === undefined) return undefined
+  if (match?.[0] !== spec || match[1] === undefined || match[2] === undefined) return undefined
   const owner = match[1]
   const repositoryName = match[2].replace(/\.git$/, '')
+  if (!validGitHubCoordinate(owner, repositoryName)) return undefined
+  if (match[3] !== undefined && (match[3].length > 200 || !exactMatch(GITHUB_REF, match[3]))) return undefined
+  const repositoryUrls = githubRepositoryUrls(owner, repositoryName)
   return {
     source: 'github',
-    repository: `https://github.com/${owner}/${repositoryName}.git`,
-    sourceUrl: `https://github.com/${owner}/${repositoryName}`,
+    repository: repositoryUrls.clone,
+    sourceUrl: repositoryUrls.page,
   }
 }
 
@@ -116,8 +176,8 @@ function describeSource(id: string, spec: string): SourceDescriptor {
   }
   const github = githubDescriptor(spec)
   if (github !== undefined) return github
-  if (NPM_NAME.test(id) && (validSemverRange(spec) !== null || /^[a-z][a-z0-9._-]*$/i.test(spec))) {
-    return { source: 'npm', packageName: id, sourceUrl: `https://www.npmjs.com/package/${encodeURIComponent(id)}` }
+  if (isPublicNpmPackageName(id) && (validSemverRange(spec) !== null || /^[a-z][a-z0-9._-]*$/i.test(spec))) {
+    return { source: 'npm', packageName: id, sourceUrl: npmPackagePageUrl(id) }
   }
   return { source: 'unknown' }
 }

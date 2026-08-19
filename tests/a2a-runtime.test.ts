@@ -1,5 +1,5 @@
 import { createHash, generateKeyPairSync, randomUUID } from 'node:crypto'
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -356,6 +356,30 @@ describe('durable A2A task channel', () => {
         await writeFile(path, JSON.stringify({ pid: process.pid, token: replacementToken }) + '\n')
       },
     })).rejects.toMatchObject({ code: 'message-in-progress' })
+    expect(JSON.parse(await readFile(receiptLock, 'utf8'))).toMatchObject({ pid: process.pid, token: replacementToken })
+  })
+
+  it('binds stale-lock reclaim to source and token when dev/ino identity is reused', async () => {
+    const state = await setup()
+    const { workerConfig, launch, controllerKeys } = state
+    const taskId = 'task:' + randomUUID()
+    const submit = message(controllerKeys, 'task.submit', taskPayload(state, taskId, { prompt: 'lock inode ABA' }))
+    const receiptDirectory = join(workerConfig.stateDir, 'a2a', 'receipts')
+    await mkdir(receiptDirectory, { recursive: true })
+    const receiptLock = join(receiptDirectory, createHash('sha256').update(submit.messageId).digest('hex') + '.json.lock')
+    await writeFile(receiptLock, JSON.stringify({ pid: 2_147_483_647, token: 'stale' }) + '\n')
+    const observed = await stat(receiptLock)
+    const replacementToken = randomUUID()
+
+    await expect(receiveA2AMessage(workerConfig, submit, launch, new Date(), {
+      beforeStaleLockClaim: async path => {
+        await writeFile(path, JSON.stringify({ pid: process.pid, token: replacementToken }) + '\n')
+        const replacement = await stat(path)
+        expect(replacement.dev).toBe(observed.dev)
+        expect(replacement.ino).toBe(observed.ino)
+      },
+    })).rejects.toMatchObject({ code: 'message-in-progress' })
+
     expect(JSON.parse(await readFile(receiptLock, 'utf8'))).toMatchObject({ pid: process.pid, token: replacementToken })
   })
 

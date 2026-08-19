@@ -154,17 +154,36 @@ describe('collectFleetUpdates', () => {
     try {
       await expect(systemUpdateProbe.githubHead('https://github.com/team/repository.git', 2000))
         .resolves.toBe('bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb')
-      expect(fetchMock).toHaveBeenCalledWith(
-        'https://api.github.com/repos/team/repository/commits?per_page=1',
-        expect.objectContaining({ credentials: 'omit', redirect: 'error' }),
-      )
+      expect(String(fetchMock.mock.calls[0]?.[0])).toBe('https://api.github.com/repos/team/repository/commits?per_page=1')
+      expect(fetchMock.mock.calls[0]?.[1]).toEqual(expect.objectContaining({ credentials: 'omit', redirect: 'error' }))
       await expect(systemUpdateProbe.npmLatest('@team/public-package', 2000)).resolves.toBe('1.2.3')
-      expect(fetchMock).toHaveBeenCalledWith(
-        'https://registry.npmjs.org/%40team%2Fpublic-package/latest',
-        expect.objectContaining({ credentials: 'omit', redirect: 'error' }),
-      )
-      await expect(systemUpdateProbe.githubHead('https://example.com/team/repository.git', 2000))
-        .rejects.toThrow('unsupported GitHub repository')
+      expect(String(fetchMock.mock.calls[1]?.[0])).toBe('https://registry.npmjs.org/%40team%2Fpublic-package/latest')
+      expect(fetchMock.mock.calls[1]?.[1]).toEqual(expect.objectContaining({ credentials: 'omit', redirect: 'error' }))
+
+      for (const repository of [
+        'https://example.com/team/repository.git',
+        'https://github.com.evil.example/team/repository.git',
+        'https://github.com/team/repository.git?redirect=https://example.com',
+        'https://github.com/team%2Fevil/repository.git',
+        'https://github.com/_team/repository.git',
+        'https://github.com/team/repository-.git',
+        'https://github.com/team/repository.git\n',
+      ]) {
+        await expect(systemUpdateProbe.githubHead(repository, 2000)).rejects.toThrow('unsupported GitHub repository')
+      }
+      for (const packageName of [
+        'UPPERCASE',
+        '@team',
+        '@team/package/extra',
+        '../package',
+        'package%2fescape',
+        'package.',
+        'package\n',
+        'a'.repeat(215),
+      ]) {
+        await expect(systemUpdateProbe.npmLatest(packageName, 2000)).rejects.toThrow('unsupported npm package name')
+      }
+      expect(fetchMock).toHaveBeenCalledTimes(2)
     } finally {
       vi.unstubAllGlobals()
     }
