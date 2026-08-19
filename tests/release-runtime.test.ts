@@ -184,6 +184,7 @@ fs.writeFileSync(packagePath, JSON.stringify(manifest, null, 2) + '\\n')
 const fs = require('node:fs')
 const path = require('node:path')
 const args = process.argv.slice(2)
+fs.appendFileSync(${JSON.stringify(commandLog)}, 'pnpm ' + args.join(' ') + '\\n')
 if (args[0] === '--version') { process.stdout.write('11.22.0\\n'); process.exit(0) }
 if (args[0] !== 'install') process.exit(9)
 const manifest = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'package.json'), 'utf8'))
@@ -450,10 +451,12 @@ describe('atomic profile release runtime', () => {
       result: 'success',
     })
     const commands = (await readFile(commandLog, 'utf8')).trim().split('\n')
+    const lockOnly = commands.findIndex(command => command === 'pnpm install --lockfile-only --ignore-scripts')
+    expect(lockOnly).toBeGreaterThanOrEqual(0)
     for (const pluginId of ['private-plugin', 'public-plugin']) {
       const added = commands.findIndex(command => command.includes(' add ') && command.includes(pluginId === 'private-plugin' ? '.tgz' : pluginId + '@'))
       expect(commands.some(command => command.includes(' remove ' + pluginId))).toBe(false)
-      expect(added).toBeGreaterThanOrEqual(0)
+      expect(added).toBeGreaterThan(lockOnly)
     }
     expect(existsSync(join(legacyPublic, 'node_modules', 'keep'))).toBe(true)
     expect(existsSync(join(legacyPrivate, 'node_modules', 'keep'))).toBe(true)

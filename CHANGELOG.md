@@ -1,6 +1,11 @@
 # Changelog
 
-## 0.3.6 - Unreleased
+## 0.3.7 - Unreleased
+
+- Reconcile the staged lockfile immediately after removing mutable bindings from the disposable package manifest, before adding immutable artifacts.
+- Prevent pnpm from reusing a stale `link:` resolution for a dependency whose approved package spec is now a content-addressed tarball.
+
+## 0.3.6 - 2026-08-19
 
 - Accept literal scoped npm package names in bootstrap `runtimeModules`, matching the Cordis Loader module names used by bundle-only private plugins.
 - Keep runtime-module declarations exact and duplicate-free while allowing generated manifests to represent configured providers such as `@deepseek-ai/dsh-skill-filesystem`.

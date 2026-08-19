@@ -10736,6 +10736,16 @@ async function stageRelease(config, plan, snapshot, signal) {
 		signal
 	});
 	await removeChangedReleaseBindings(stageConfig, plan);
+	if (plan.changes.some((change) => change.action === "remove" || change.action === "update")) await runFile(config.pnpmBinary, [
+		"install",
+		"--lockfile-only",
+		"--ignore-scripts"
+	], {
+		cwd: stageDir,
+		env: controlledEnv(config),
+		timeoutMs: 12e4,
+		signal
+	});
 	const bindings = new Map(plan.plugins.map((plugin) => [plugin.pluginId, plugin]));
 	for (const change of plan.changes) {
 		throwIfAborted(signal);
@@ -10757,16 +10767,6 @@ async function stageRelease(config, plan, snapshot, signal) {
 			signal
 		});
 	}
-	if (plan.changes.length > 0 && plan.changes.every((change) => change.action === "remove")) await runFile(config.pnpmBinary, [
-		"install",
-		"--lockfile-only",
-		"--ignore-scripts"
-	], {
-		cwd: stageDir,
-		env: controlledEnv(config),
-		timeoutMs: 12e4,
-		signal
-	});
 	await runFile(config.pnpmBinary, [
 		"install",
 		"--frozen-lockfile",

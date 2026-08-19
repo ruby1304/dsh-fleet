@@ -1547,6 +1547,14 @@ async function stageRelease(
   await durableWriteFile(runtimeManifestPath(stageConfig), runtimeManifestSource)
   await runFile(config.pnpmBinary, ['--version'], { env: controlledEnv(config), timeoutMs: 10_000, signal })
   await removeChangedReleaseBindings(stageConfig, plan)
+  if (plan.changes.some(change => change.action === 'remove' || change.action === 'update')) {
+    await runFile(config.pnpmBinary, ['install', '--lockfile-only', '--ignore-scripts'], {
+      cwd: stageDir,
+      env: controlledEnv(config),
+      timeoutMs: 120_000,
+      signal,
+    })
+  }
   const bindings = new Map(plan.plugins.map(plugin => [plugin.pluginId, plugin]))
   for (const change of plan.changes) {
     throwIfAborted(signal)
@@ -1557,14 +1565,6 @@ async function stageRelease(
     await runFile(config.dshBinary, [
       'plugin', '--profile', stageProfile, 'add', argument, '--save-exact', '--ignore-scripts',
     ], { env: controlledEnv(config), timeoutMs: 120_000, signal })
-  }
-  if (plan.changes.length > 0 && plan.changes.every(change => change.action === 'remove')) {
-    await runFile(config.pnpmBinary, ['install', '--lockfile-only', '--ignore-scripts'], {
-      cwd: stageDir,
-      env: controlledEnv(config),
-      timeoutMs: 120_000,
-      signal,
-    })
   }
   await runFile(config.pnpmBinary, ['install', '--frozen-lockfile', '--ignore-scripts'], {
     cwd: stageDir,
