@@ -16,12 +16,15 @@ export const FLEET_RELEASE_PLAN_TTL_MS = 10 * 60 * 1000
 export interface CreateReleasePlanInput {
   manifest: FleetManifest
   manifestDigest: string
+  liveManifestDigest?: string
   runtimeManifestDigest: string | null
   dependencies: Readonly<Record<string, string>>
   artifactDigests?: Readonly<Record<string, string>>
   appliedRelease?: FleetAppliedRelease | null
   profileHash: string
   observedDshVersion: string
+  observedRuntimeDigest: string
+  observedServiceDefinitionDigest: string | null
   now: Date | string
   deviceId: string
   profile: string
@@ -35,6 +38,7 @@ export type FleetReleasePlannerErrorCode =
   | 'device-not-stable'
   | 'release-not-assigned'
   | 'release-incompatible'
+  | 'release-ownership-conflict'
 
 export class FleetReleasePlannerError extends Error {
   readonly code: FleetReleasePlannerErrorCode
@@ -146,6 +150,12 @@ function buildChanges(
     if (finalIds.has(plugin.pluginId)) continue
     const actualSpec = dependencies[plugin.pluginId]
     if (actualSpec === undefined) continue
+    if (!currentMatches(plugin, actualSpec, artifactDigests)) {
+      throw new FleetReleasePlannerError(
+        'release-ownership-conflict',
+        'live binding for ' + plugin.pluginId + ' no longer matches the previously applied release marker',
+      )
+    }
     changes.push({
       pluginId: plugin.pluginId,
       visibility: plugin.visibility,
@@ -185,21 +195,34 @@ export function createReleasePlan(input: CreateReleasePlanInput): FleetReleasePl
     throw new FleetReleasePlannerError('invalid-input', 'planTtlMs must be an integer from 60000 to 3600000')
   }
   const releaseDigest = sha256Canonical({ releaseId: release.id, releaseVersion: release.version, profile, plugins })
+  const toManifestDigest = trimmed(input.manifestDigest, 'manifestDigest').toLowerCase()
+  const fromManifestDigest = trimmed(
+    input.liveManifestDigest ?? input.runtimeManifestDigest ?? input.manifestDigest,
+    'liveManifestDigest',
+  ).toLowerCase()
   try {
     return createFleetReleasePlan({
       protocolVersion: FLEET_RELEASE_PROTOCOL_VERSION,
       kind: 'profile-release',
       deviceId,
       profile,
-      manifestDigest: trimmed(input.manifestDigest, 'manifestDigest').toLowerCase(),
+      fromManifestDigest,
+      toManifestDigest,
+      fromReleaseDigest: input.appliedRelease?.releaseDigest ?? null,
+      toReleaseDigest: releaseDigest,
+      manifestDigest: toManifestDigest,
       profileHash: trimmed(input.profileHash, 'profileHash').toLowerCase(),
       observedDshVersion,
+      observedRuntimeDigest: trimmed(input.observedRuntimeDigest, 'observedRuntimeDigest').toLowerCase(),
+      observedServiceDefinitionDigest: input.observedServiceDefinitionDigest === null
+        ? null
+        : trimmed(input.observedServiceDefinitionDigest, 'observedServiceDefinitionDigest').toLowerCase(),
       releaseId: release.id,
       releaseVersion: release.version,
       releaseDigest,
       plugins,
       changes,
-      restartRequired: changes.length > 0 || input.runtimeManifestDigest !== input.manifestDigest,
+      restartRequired: changes.length > 0 || fromManifestDigest !== toManifestDigest,
       createdAt,
       expiresAt: new Date(Date.parse(createdAt) + planTtlMs).toISOString(),
     })

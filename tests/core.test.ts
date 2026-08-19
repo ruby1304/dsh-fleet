@@ -5,11 +5,11 @@ const source = `schemaVersion: 1
 team:
   id: example-team
 devices:
-  m5:
+  controller:
     assignedTo: owner
     class: portable-control
     channel: dev
-  m3:
+  worker:
     assignedTo: owner
     class: always-on-worker
     channel: stable
@@ -24,7 +24,7 @@ plugins:
   - id: plugin-c
     spec: 2.0.0
     target:
-      devices: [m5]
+      devices: [controller]
     runtimeModules: [plugin-c-host]
 `
 
@@ -32,11 +32,11 @@ const v2Source = `schemaVersion: 2
 team:
   id: example-team
 devices:
-  m5:
+  controller:
     assignedTo: owner
     class: portable-control
     channel: stable
-  m3:
+  worker:
     assignedTo: owner
     class: always-on-worker
     channel: stable
@@ -69,9 +69,9 @@ profileReleases:
           repository: example/dsh-worker
           revision: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 assignments:
-  m5:
+  controller:
     web: control-web
-  m3:
+  worker:
     web: worker-web
 `
 
@@ -79,14 +79,14 @@ describe('parseFleetManifest', () => {
   it('parses devices, targets and runtime module aliases', () => {
     const manifest = parseFleetManifest(source)
     expect(manifest.team.id).toBe('example-team')
-    expect(manifest.devices.m5?.class).toBe('portable-control')
+    expect(manifest.devices.controller?.class).toBe('portable-control')
     expect(manifest.plugins[2]?.runtimeModules).toEqual(['plugin-c-host'])
   })
 
   it('derives dependency specs from source and revision', () => {
     const manifest = parseFleetManifest(`schemaVersion: 1
 team: { id: test }
-devices: { m5: { class: portable-control, channel: dev } }
+devices: { controller: { class: portable-control, channel: dev } }
 plugins:
   - { id: npm-plugin, source: npm, revision: ^0.1.0 }
   - { id: github-plugin, source: github:team/plugin, revision: abc }
@@ -123,7 +123,7 @@ plugins:
     ))).toThrow(/stable plugin/)
     expect(() => parseFleetManifest(`schemaVersion: 1
 team: { id: test }
-devices: { m3: { class: worker, channel: stable } }
+devices: { worker: { class: worker, channel: stable } }
 plugins: [{ id: x, source: link:/tmp/x, revision: abc }]
 `)).toThrow(/link sources/)
   })
@@ -133,14 +133,14 @@ plugins: [{ id: x, source: link:/tmp/x, revision: abc }]
   })
 
   it('rejects device ids that cannot be used consistently by Host and Agent routing', () => {
-    expect(() => parseFleetManifest(source.replace('  m5:', '  "m5 worker":'))).toThrow(/device id/)
-    expect(() => parseFleetManifest(source.replace('devices: [m5]', 'devices: ["m5 worker"]'))).toThrow(/target.devices/)
+    expect(() => parseFleetManifest(source.replace('  controller:', '  "controller worker":'))).toThrow(/device id/)
+    expect(() => parseFleetManifest(source.replace('devices: [controller]', 'devices: ["controller worker"]'))).toThrow(/target.devices/)
   })
 
   it('normalizes schema v2 atomic profile releases with public and private plugins', () => {
     const manifest = parseFleetManifest(v2Source)
     expect(manifest.schemaVersion).toBe(2)
-    expect(manifest.v2?.assignments).toEqual({ m5: { web: 'control-web' }, m3: { web: 'worker-web' } })
+    expect(manifest.v2?.assignments).toEqual({ controller: { web: 'control-web' }, worker: { web: 'worker-web' } })
     expect(manifest.v2?.profileReleases['control-web']?.plugins).toHaveLength(2)
     expect(manifest.plugins.find(plugin => plugin.id === 'dsh-public')).toMatchObject({
       spec: '1.2.3',
@@ -149,7 +149,7 @@ plugins: [{ id: x, source: link:/tmp/x, revision: abc }]
       releaseVersion: '2026.8.19-1',
       visibility: 'public',
       profiles: ['web'],
-      target: { devices: ['m5'] },
+      target: { devices: ['controller'] },
     })
     expect(manifest.plugins.find(plugin => plugin.id === 'dsh-private')).toMatchObject({
       spec: 'artifact:sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
@@ -168,7 +168,7 @@ plugins: [{ id: x, source: link:/tmp/x, revision: abc }]
       '      - id: dsh-public',
     ))).toThrow(/duplicate plugin id/)
     expect(() => parseFleetManifest(v2Source.replace(
-      'assignments:\n  m5:',
+      'assignments:\n  controller:',
       'assignments:\n  unknown:',
     ))).toThrow(/unknown device/)
   })
@@ -178,7 +178,7 @@ describe('reconcileFleet', () => {
   it('selects by device and channel and reports aligned, drift, failed and unmanaged states', () => {
     const result = reconcileFleet({
       manifest: parseFleetManifest(source),
-      deviceId: 'm5',
+      deviceId: 'controller',
       profile: 'web',
       dependencies: {
         'plugin-a': '1.0.0',
@@ -203,7 +203,7 @@ describe('reconcileFleet', () => {
   it('reports runtime failure after the desired spec matches', () => {
     const result = reconcileFleet({
       manifest: parseFleetManifest(source),
-      deviceId: 'm5',
+      deviceId: 'controller',
       profile: 'web',
       dependencies: { 'plugin-a': '1.0.0', 'plugin-c': '2.0.0' },
       bundles: ['plugin-a', 'plugin-c'],
@@ -219,7 +219,7 @@ describe('reconcileFleet', () => {
   it('selects stable-only plugins for the worker', () => {
     const result = reconcileFleet({
       manifest: parseFleetManifest(source),
-      deviceId: 'm3',
+      deviceId: 'worker',
       profile: 'web',
       dependencies: {},
       bundles: [],
@@ -233,11 +233,11 @@ describe('reconcileFleet', () => {
     const manifest = parseFleetManifest(v2Source)
     const aligned = reconcileFleet({
       manifest,
-      deviceId: 'm5',
+      deviceId: 'controller',
       profile: 'web',
       dependencies: {
         'dsh-public': '1.2.3',
-        'dsh-private': 'file:/Users/owner/.local/share/dsh-fleet/artifacts/private.tgz',
+        'dsh-private': 'file:/Users/example/.local/share/dsh-fleet/artifacts/private.tgz',
       },
       artifactDigests: { 'dsh-private': 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' },
       bundles: ['dsh-public', 'dsh-private'],
@@ -258,7 +258,7 @@ describe('reconcileFleet', () => {
     const drifted = reconcileFleet({
       ...aligned,
       manifest,
-      deviceId: 'm5',
+      deviceId: 'controller',
       profile: 'web',
       dependencies: { 'dsh-private': 'file:/tmp/private.tgz' },
       artifactDigests: { 'dsh-private': 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc' },

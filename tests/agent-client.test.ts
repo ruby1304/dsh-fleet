@@ -141,6 +141,9 @@ describe('interrupted agent errors', () => {
   it('allows the Agent full mutation convergence time before forced termination', () => {
     expect(agentTerminationGraceMs('apply')).toBe(10 * 60_000)
     expect(agentTerminationGraceMs('status')).toBe(10 * 60_000)
+    expect(agentTerminationGraceMs('release-rollback-apply')).toBe(10 * 60_000)
+    expect(agentTerminationGraceMs('release-rollback-status')).toBe(10 * 60_000)
+    expect(agentTerminationGraceMs('release-rollback-plan')).toBe(30_000)
     expect(agentTerminationGraceMs('inspect')).toBe(30_000)
     expect(agentTerminationGraceMs('plan')).toBe(30_000)
   })
@@ -234,6 +237,23 @@ describe('local agent transport', () => {
       name: 'AgentClientError',
       code: 'agent-rejected',
       message: 'fleet agent rejected the request',
+    })
+    expect(String(error)).not.toContain('secret')
+  })
+
+  it('surfaces the fixed migration guidance for a legacy task without exposing agent text', async () => {
+    const target = await fakeAgent(`
+      process.stdout.write(JSON.stringify({
+        ok: false,
+        error: { code: 'legacy-task-owner-unbound', message: 'token=agent-declared-secret' },
+      }))
+    `)
+
+    const error = await callAgent(target, 'a2a-receive', {}, 2_000).catch((reason: unknown) => reason)
+    expect(error).toMatchObject({
+      name: 'AgentClientError',
+      code: 'legacy-task-owner-unbound',
+      message: 'this task was created before signed owner binding; clear the saved task reference and submit a new task',
     })
     expect(String(error)).not.toContain('secret')
   })

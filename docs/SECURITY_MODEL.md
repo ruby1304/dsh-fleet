@@ -2,7 +2,7 @@
 
 ## Scope
 
-dsh-fleet 0.3 is for one owner operating a small set of trusted Unix accounts and devices. It provides inventory, atomic plugin releases and policy-bounded asynchronous DSH tasks. It does not isolate mutually untrusted local users and does not replace SSH policy, OS hardening, package review or backups.
+The unreleased dsh-fleet 0.4.0 candidate is for one owner operating a small set of trusted Unix accounts and devices. It provides inventory, atomic plugin releases and policy-bounded asynchronous DSH tasks. It does not isolate mutually untrusted local users and does not replace SSH policy, OS hardening, package review or backups.
 
 ## Assets
 
@@ -26,7 +26,7 @@ Fleet RPC remains loopback-only. The UI may choose only configured device IDs, m
 
 Targets are fixed in the DSH profile. Local and SSH transports execute a fixed Node binary, Agent bundle, config path and protocol command with `shell: false`. SSH authentication and host-key verification identify the machine; Fleet does not replace them.
 
-The Host rejects Agent inspection/plans when device ID, profile or manifest digest does not match its local binding. The configured A2A signer must be a fixed local Agent target.
+The Host keeps the live profile-local manifest separate from the desired immutable generation. It rejects Agent inspection/plans when device ID, profile or either digest does not match the corresponding binding. A target remains visible while live and desired differ, but tasks require both to be equal. The configured A2A signer must be a fixed local Agent target.
 
 ### A2A identity and authorization
 
@@ -50,7 +50,7 @@ The Agent rejects links, ranges, tags, branches, arbitrary URLs and artifact fil
 
 ## Atomic release protocol
 
-One immutable plan binds the device, profile, full release, manifest digest, observed profile digest, complete plugin set, operations, timestamps and expiry. Approval binds that exact plan.
+One immutable plan binds the device, profile, both sides of the manifest/release transition, observed profile digest, complete plugin set, actual running DSH runtime digest, launchd service-definition digest when applicable, operations, timestamps and expiry. Approval binds that exact plan.
 
 The Agent stages a sibling profile on the same filesystem, validates it, stops the configured service owner, swaps live/staged directories by rename, restarts and proves:
 
@@ -58,18 +58,26 @@ The Agent stages a sibling profile on the same filesystem, validates it, stops t
 - Fleet RPC device/profile identity;
 - full release alignment;
 - no enabled Loader module is failed.
+- the running Node/DSH entrypoint realpaths, DSH package version and entrypoint/package digests still match the plan;
+- launchd still owns the primary listener and its exact program arguments, `DSH_HOME`, host and port still identify that runtime.
+
+The only compatibility exception is a one-time pre-0.4 launchd bridge: if the old Host cannot report RPC runtime identity, the Agent requires the exact launchd service definition plus matching job/listener PID and runtime files. `screen` targets cannot use this exception, and post-upgrade health must return the plan-bound runtime identity. Missing identity never degrades to trusting `dsh --version` or a mutable wrapper.
 
 If post-swap verification fails, the previous directory is restored by rename and health is checked again. Durable applied-release and action records recover a crash after the swap. An unproved result is never reported as success.
 
-Only plugins owned by the previous applied Fleet release are eligible for automatic removal. Unmanaged plugins remain visible and untouched.
+Only plugins owned by the previous applied Fleet release are eligible for automatic removal. Unmanaged plugins remain visible and untouched. Profile staging preserves only the explicit reproducible top-level file schema plus a rebuilt `node_modules`; an unknown top-level entry blocks the release instead of being silently discarded.
+
+Successful releases retain a bounded current/previous rollback chain. A separate retention plan binds every superseded descriptor and backup manifest/profile hash before deletion. Orphan, stage and failed directories are inventory only and are never selected by a pathname glob.
 
 ## Durable task protocol
 
-`task.submit` contains exactly task ID, logical workspace ID, logical profile ID and prompt. The receiving Agent maps IDs to local fixed paths/policies. It bounds task TTL, execution time, output bytes and concurrency.
+The Web client submits only target, logical workspace/profile/policy IDs and prompt. The Host then creates the closed signed `task.submit` payload, which also binds the actual execution-profile hash, live manifest, applied release, installed policy digest and deadline. The receiving Agent maps IDs to local fixed paths/policies and rechecks those bindings before acceptance and worker launch. The worker rechecks the execution profile before each tool call. It bounds task TTL, execution time, output bytes and concurrency.
 
 Requests, records, receipts, cancellation markers and bounded results are owner-only durable files. The same signed message returns the stored receipt. Concurrent creation of one task ID is serialized, and a task ID cannot be rebound to different sender, workspace, profile or prompt content.
 
-Stale receipt/worker/slot locks are reaped only when their owning process is gone, or an invalid partial lock has exceeded a grace period. An accepted task can be relaunched after a crash before execution. A task recorded as running is not blindly replayed because the original operation may have side effects; it becomes a recoverable result if a durable result exists, otherwise `worker-lost`.
+Stale receipt/create/worker/slot locks are reaped only when their owning process is gone, or an invalid partial lock has exceeded a grace period. Reaping uses a token plus device/inode hard-link claim so a replacement lock is not removed by pathname. An accepted task can be relaunched after a crash before execution. A task recorded as running is not blindly replayed because the original operation may have side effects; it becomes a recoverable result if a durable result exists, otherwise `worker-lost`.
+
+Cross-team federation is advisory only. Foreign trust can authorize handoff, approval request/decision and receipt, never `task.*` or tool approval. Manual envelopes may use a configured validity window up to 24 hours; ordinary same-team task messages remain limited to five minutes. Inbox acknowledgement is first-write final, and artifact references remain inert text.
 
 ## Process boundary
 
@@ -109,6 +117,8 @@ RPC responses and diagnostics must not include private keys, provider credential
 - compare invite key IDs out of band and grant minimal message kinds;
 - keep task execution disabled until fixed workspace/profile mappings are reviewed;
 - test launchd/screen ownership, all managed ports, health, rollback, cancellation and task reconnect on a disposable profile;
-- retain the prior Agent, DSH runtime, generated configuration and profile backup;
+- use the generation launcher so one call cannot mix Agent, config and worker files from different activations;
+- review the reported runtime/service-definition digests and exercise both automatic and explicit rollback;
+- retain the current rollback chain and use only an exact retention plan for older backups;
 - remove trust keys and SSH access promptly when revoking a device;
 - review [../SECURITY.md](../SECURITY.md) before publishing diagnostics.

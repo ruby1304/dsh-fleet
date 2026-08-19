@@ -8,15 +8,29 @@ import {
 } from 'node:crypto'
 import { canonicalJson, sha256Canonical } from '../agent/protocol.ts'
 import { normalizeDeviceId } from '../shared.ts'
+import { digestToolArguments, MAX_TASK_TOOL_ARGUMENT_BYTES } from '../worker/context.ts'
 
-export const FLEET_A2A_SCHEMA_VERSION = 1 as const
+export const FLEET_A2A_SCHEMA_VERSION = 2 as const
 export const FLEET_A2A_KINDS = [
   'task.submit', 'task.status', 'task.cancel', 'task.progress', 'task.result',
+  'task.approval.request', 'task.approval.decision',
   'approval.request', 'approval.decision', 'handoff',
   'receipt',
 ] as const
 
 export type FleetA2AKind = (typeof FLEET_A2A_KINDS)[number]
+
+export const FLEET_FEDERATION_ADVISORY_KINDS = [
+  'approval.request', 'approval.decision', 'handoff', 'receipt',
+] as const satisfies readonly FleetA2AKind[]
+
+export type FleetFederationAdvisoryKind = (typeof FLEET_FEDERATION_ADVISORY_KINDS)[number]
+
+const FEDERATION_ADVISORY_KINDS = new Set<FleetA2AKind>(FLEET_FEDERATION_ADVISORY_KINDS)
+
+export function isFleetFederationAdvisoryKind(kind: FleetA2AKind): kind is FleetFederationAdvisoryKind {
+  return FEDERATION_ADVISORY_KINDS.has(kind)
+}
 
 export interface FleetA2ASender {
   principalId: string
@@ -25,6 +39,7 @@ export interface FleetA2ASender {
 }
 
 export interface FleetA2ARecipient {
+  teamId: string
   deviceId: string
 }
 
@@ -46,6 +61,7 @@ export interface FleetA2AEnvelope extends FleetA2AEnvelopeBody {
 }
 
 export interface FleetA2ATrustEntry {
+  teamId: string
   keyId: string
   principalId: string
   deviceId: string
@@ -53,10 +69,85 @@ export interface FleetA2ATrustEntry {
   allowedKinds: FleetA2AKind[]
 }
 
+export interface FleetTaskSubmitPayload extends Record<string, unknown> {
+  taskId: string
+  workspaceId: string
+  profile: string
+  executionProfileHash: string
+  manifestDigest: string
+  releaseDigest: string
+  policyId: string
+  policyDigest: string
+  deadline: string
+  prompt: string
+}
+
+export type FleetTaskApprovalCapability =
+  | 'workspace-mutation'
+  | 'command-execution'
+  | 'network-access'
+
+export interface FleetTaskApprovalRequestPayload extends Record<string, unknown> {
+  approvalId: string
+  taskId: string
+  taskBindingDigest: string
+  toolCallId: string
+  toolName: string
+  arguments: Record<string, unknown>
+  argumentsDigest: string
+  capability: FleetTaskApprovalCapability
+  summary: string
+  expiresAt: string
+}
+
+export type FleetTaskApprovalDecision = 'allowed-once' | 'rejected'
+
+export interface FleetTaskApprovalDecisionPayload extends Record<string, unknown> {
+  approvalId: string
+  taskId: string
+  approvalRequestMessageId: string
+  approvalRequestPayloadDigest: string
+  taskBindingDigest: string
+  toolCallId: string
+  argumentsDigest: string
+  decision: FleetTaskApprovalDecision
+  decidedAt: string
+}
+
+/** Cross-team request metadata. It is advisory and has no tool arguments or capability grant. */
+export interface FleetFederationApprovalRequestPayload extends Record<string, unknown> {
+  approvalId: string
+  taskId: string
+  summary: string
+  expiresAt: string
+}
+
+export type FleetFederationApprovalDecision = 'endorsed' | 'declined'
+
+/** Cross-team decision metadata. It cannot carry an allowed-once task token. */
+export interface FleetFederationApprovalDecisionPayload extends Record<string, unknown> {
+  approvalId: string
+  taskId: string
+  approvalRequestMessageId: string
+  approvalRequestPayloadDigest: string
+  decision: FleetFederationApprovalDecision
+  decidedAt: string
+}
+
+export interface FleetFederationHandoffPayload extends Record<string, unknown> {
+  handoffId: string
+  taskId: string | null
+  summary: string
+  /** Opaque display labels only; recipients must never dereference them automatically. */
+  artifactRefs: string[]
+}
+
 export interface CreateA2AEnvelopeInput {
+  /** Sender team identity. It is covered by the envelope signature. */
   teamId: string
   sender: Omit<FleetA2ASender, 'keyId'>
-  recipient: FleetA2ARecipient
+  /** recipient.teamId defaults to the sender team for same-team traffic only. */
+  recipient: Omit<FleetA2ARecipient, 'teamId'> & { teamId?: string }
   kind: FleetA2AKind
   payload: Record<string, unknown>
   privateKey: string | Buffer | KeyObject
@@ -97,10 +188,11 @@ const BODY_KEYS = [
 ] as const
 const ENVELOPE_KEYS = [...BODY_KEYS, 'signature'] as const
 const SENDER_KEYS = ['principalId', 'deviceId', 'keyId'] as const
-const RECIPIENT_KEYS = ['deviceId'] as const
+const RECIPIENT_KEYS = ['teamId', 'deviceId'] as const
 const MAX_PAYLOAD_BYTES = 48 * 1024
 const DEFAULT_TTL_MS = 5 * 60 * 1000
 const DEFAULT_MAX_TTL_MS = 15 * 60 * 1000
+const ABSOLUTE_MAX_TTL_MS = 24 * 60 * 60 * 1000
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -182,10 +274,19 @@ export function validateA2APayload(kind: FleetA2AKind, payload: unknown): assert
     throw new FleetA2AError('invalid-payload', 'A2A payload exceeds the size limit')
   }
   if (kind === 'task.submit') {
-    exactPayload(payload, ['taskId', 'workspaceId', 'profile', 'prompt'], kind)
+    exactPayload(payload, [
+      'taskId', 'workspaceId', 'profile', 'executionProfileHash', 'manifestDigest', 'releaseDigest',
+      'policyId', 'policyDigest', 'deadline', 'prompt',
+    ], kind)
     taskId(payload.taskId)
     identifier(payload.workspaceId, 'payload.workspaceId')
     identifier(payload.profile, 'payload.profile')
+    digest(payload.executionProfileHash, 'payload.executionProfileHash')
+    digest(payload.manifestDigest, 'payload.manifestDigest')
+    digest(payload.releaseDigest, 'payload.releaseDigest')
+    identifier(payload.policyId, 'payload.policyId')
+    digest(payload.policyDigest, 'payload.policyDigest')
+    canonicalTime(payload.deadline, 'payload.deadline')
     longText(payload.prompt, 'payload.prompt', 32 * 1024)
     return
   }
@@ -212,6 +313,51 @@ export function validateA2APayload(kind: FleetA2AKind, payload: unknown): assert
     if (payload.errorCode !== null) identifier(payload.errorCode, 'payload.errorCode')
     return
   }
+  if (kind === 'task.approval.request') {
+    exactPayload(payload, [
+      'approvalId', 'taskId', 'taskBindingDigest', 'toolCallId', 'toolName',
+      'arguments', 'argumentsDigest', 'capability', 'summary', 'expiresAt',
+    ], kind)
+    messageId(payload.approvalId, 'payload.approvalId', 'approval')
+    taskId(payload.taskId)
+    digest(payload.taskBindingDigest, 'payload.taskBindingDigest')
+    text(payload.toolCallId, 'payload.toolCallId')
+    identifier(payload.toolName, 'payload.toolName')
+    let argumentsDigest: string
+    try {
+      argumentsDigest = digestToolArguments(payload.arguments, MAX_TASK_TOOL_ARGUMENT_BYTES)
+    } catch {
+      throw new FleetA2AError('invalid-payload', 'task approval arguments must be a bounded canonical JSON object')
+    }
+    digest(payload.argumentsDigest, 'payload.argumentsDigest')
+    if (payload.argumentsDigest !== argumentsDigest) {
+      throw new FleetA2AError('invalid-payload', 'task approval argumentsDigest does not match arguments')
+    }
+    if (!['workspace-mutation', 'command-execution', 'network-access'].includes(text(payload.capability, 'payload.capability', 32))) {
+      throw new FleetA2AError('invalid-payload', 'task approval capability is invalid')
+    }
+    longText(payload.summary, 'payload.summary', 2048)
+    canonicalTime(payload.expiresAt, 'payload.expiresAt')
+    return
+  }
+  if (kind === 'task.approval.decision') {
+    exactPayload(payload, [
+      'approvalId', 'taskId', 'approvalRequestMessageId', 'approvalRequestPayloadDigest',
+      'taskBindingDigest', 'toolCallId', 'argumentsDigest', 'decision', 'decidedAt',
+    ], kind)
+    messageId(payload.approvalId, 'payload.approvalId', 'approval')
+    taskId(payload.taskId)
+    messageId(payload.approvalRequestMessageId, 'payload.approvalRequestMessageId', 'msg')
+    digest(payload.approvalRequestPayloadDigest, 'payload.approvalRequestPayloadDigest')
+    digest(payload.taskBindingDigest, 'payload.taskBindingDigest')
+    text(payload.toolCallId, 'payload.toolCallId')
+    digest(payload.argumentsDigest, 'payload.argumentsDigest')
+    if (!['allowed-once', 'rejected'].includes(text(payload.decision, 'payload.decision', 16))) {
+      throw new FleetA2AError('invalid-payload', 'task approval decision is invalid')
+    }
+    canonicalTime(payload.decidedAt, 'payload.decidedAt')
+    return
+  }
   if (kind === 'approval.request') {
     exactPayload(payload, ['approvalId', 'taskId', 'summary', 'expiresAt'], kind)
     messageId(payload.approvalId, 'payload.approvalId', 'approval')
@@ -221,10 +367,17 @@ export function validateA2APayload(kind: FleetA2AKind, payload: unknown): assert
     return
   }
   if (kind === 'approval.decision') {
-    exactPayload(payload, ['approvalId', 'taskId', 'decision'], kind)
+    exactPayload(payload, [
+      'approvalId', 'taskId', 'approvalRequestMessageId', 'approvalRequestPayloadDigest', 'decision', 'decidedAt',
+    ], kind)
     messageId(payload.approvalId, 'payload.approvalId', 'approval')
     taskId(payload.taskId)
-    if (!['approved', 'denied'].includes(text(payload.decision, 'payload.decision', 16))) throw new FleetA2AError('invalid-payload', 'approval decision is invalid')
+    messageId(payload.approvalRequestMessageId, 'payload.approvalRequestMessageId', 'msg')
+    digest(payload.approvalRequestPayloadDigest, 'payload.approvalRequestPayloadDigest')
+    if (!['endorsed', 'declined'].includes(text(payload.decision, 'payload.decision', 16))) {
+      throw new FleetA2AError('invalid-payload', 'federation approval decision is invalid')
+    }
+    canonicalTime(payload.decidedAt, 'payload.decidedAt')
     return
   }
   if (kind === 'receipt') {
@@ -275,7 +428,7 @@ export function createA2AEnvelope(input: CreateA2AEnvelopeInput): FleetA2AEnvelo
   const key = privateKey(input.privateKey)
   const issuedAt = nowIso(input.now)
   const ttlMs = input.ttlMs ?? DEFAULT_TTL_MS
-  boundedInteger(ttlMs, 'ttlMs', 1000, DEFAULT_MAX_TTL_MS)
+  boundedInteger(ttlMs, 'ttlMs', 1000, ABSOLUTE_MAX_TTL_MS)
   const body: FleetA2AEnvelopeBody = {
     schemaVersion: FLEET_A2A_SCHEMA_VERSION,
     teamId: identifier(input.teamId, 'teamId'),
@@ -285,7 +438,10 @@ export function createA2AEnvelope(input: CreateA2AEnvelopeInput): FleetA2AEnvelo
       deviceId: normalizeDeviceId(input.sender.deviceId, 'sender.deviceId'),
       keyId: a2aKeyId(key),
     },
-    recipient: { deviceId: normalizeDeviceId(input.recipient.deviceId, 'recipient.deviceId') },
+    recipient: {
+      teamId: identifier(input.recipient.teamId ?? input.teamId, 'recipient.teamId'),
+      deviceId: normalizeDeviceId(input.recipient.deviceId, 'recipient.deviceId'),
+    },
     kind: input.kind,
     issuedAt,
     expiresAt: new Date(Date.parse(issuedAt) + ttlMs).toISOString(),
@@ -318,6 +474,7 @@ export function verifyA2AEnvelope(value: unknown, input: VerifyA2AEnvelopeInput)
   messageId(envelope.messageId, 'messageId', 'msg')
   identifier(envelope.sender.principalId, 'sender.principalId')
   normalizeDeviceId(envelope.sender.deviceId, 'sender.deviceId')
+  identifier(envelope.recipient.teamId, 'recipient.teamId')
   normalizeDeviceId(envelope.recipient.deviceId, 'recipient.deviceId')
   if (!/^ed25519:[0-9a-f]{64}$/.test(envelope.sender.keyId)) throw new FleetA2AError('invalid-envelope', 'sender.keyId is invalid')
   digest(envelope.payloadDigest, 'payloadDigest')
@@ -327,16 +484,20 @@ export function verifyA2AEnvelope(value: unknown, input: VerifyA2AEnvelopeInput)
   const expiresAt = canonicalTime(envelope.expiresAt, 'expiresAt')
   const now = Date.parse(nowIso(input.now))
   const maxTtlMs = input.maxTtlMs ?? DEFAULT_MAX_TTL_MS
-  boundedInteger(maxTtlMs, 'maxTtlMs', 1000, 24 * 60 * 60 * 1000)
+  boundedInteger(maxTtlMs, 'maxTtlMs', 1000, ABSOLUTE_MAX_TTL_MS)
   if (expiresAt <= issuedAt || expiresAt - issuedAt > maxTtlMs || issuedAt > now + 30_000) {
     throw new FleetA2AError('invalid-time', 'A2A envelope validity window is invalid')
   }
   if (now >= expiresAt) throw new FleetA2AError('message-expired', 'A2A envelope has expired')
-  if (envelope.teamId !== input.expectedTeamId || envelope.recipient.deviceId !== input.expectedDeviceId) {
+  if (envelope.recipient.teamId !== input.expectedTeamId || envelope.recipient.deviceId !== input.expectedDeviceId) {
     throw new FleetA2AError('recipient-mismatch', 'A2A envelope targets a different team or device')
   }
+  if (envelope.teamId !== input.expectedTeamId && !isFleetFederationAdvisoryKind(envelope.kind)) {
+    throw new FleetA2AError('trust-denied', 'foreign teams may send advisory federation messages only')
+  }
   const trusted = trustEntry(input.trust, envelope.sender.keyId)
-  if (trusted === undefined || trusted.principalId !== envelope.sender.principalId || trusted.deviceId !== envelope.sender.deviceId ||
+  if (trusted === undefined || trusted.teamId !== envelope.teamId ||
+      trusted.principalId !== envelope.sender.principalId || trusted.deviceId !== envelope.sender.deviceId ||
       !trusted.allowedKinds.includes(envelope.kind)) {
     throw new FleetA2AError('trust-denied', 'A2A sender is not trusted for this message kind')
   }

@@ -5,7 +5,7 @@ This process keeps source, generated bundles, package contents, and the deployed
 ## 1. Prepare the release
 
 1. Start from a clean branch based on current `main`.
-2. Update `package.json` and move the release notes in `CHANGELOG.md` from Unreleased to the release date.
+2. Update `package.json` and move the release notes in `CHANGELOG.md` from `Unreleased candidate` to the release date.
 3. Keep the DSH contract dependencies on one exact compatible release line.
 4. Review dependency licenses and update `THIRD_PARTY_NOTICES.md` when a bundled dependency or version changes.
 5. Confirm examples contain no real device, account, path, manifest, credential, or session data.
@@ -33,7 +33,7 @@ tar -tzf dsh-fleet-<version>.tgz
 shasum -a 256 dsh-fleet-<version>.tgz
 ```
 
-The package must contain only the declared runtime bundles, patch, generic examples, user documentation, MIT license, security policy, changelog, and third-party notices.
+The package must contain only the declared runtime bundles, patch, generic examples, user documentation, MIT license, security policy, changelog, and third-party notices. A candidate tarball is not a published release and must not be referenced through an npm version until provenance exists.
 
 ## 3. Candidate gate
 
@@ -67,7 +67,7 @@ Record the candidate tarball SHA-256, Git commit, Node/pnpm/DSH versions, test r
 3. Merge the release commit to `main`.
 4. Create a signed or protected tag `v<package-version>` from that exact commit.
 5. Create a GitHub Release from the tag only after the candidate gate passes.
-6. The `publish.yml` workflow verifies that the tag equals `package.json.version`, repeats all release checks, and publishes from a GitHub-hosted runner.
+6. The `publish.yml` workflow verifies that the tag equals `package.json.version`, points to the clean checked-out commit on `origin/main`, and has a dated top changelog entry; it then repeats all release checks and publishes from a GitHub-hosted runner.
 
 The npm workflow uses OIDC trusted publishing and public provenance; it intentionally contains no long-lived npm token. The npm package must be configured to trust `ruby1304/dsh-fleet` and `.github/workflows/publish.yml`, and the GitHub `npm` environment should require maintainer approval.
 

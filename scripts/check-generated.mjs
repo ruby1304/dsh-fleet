@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const root = fileURLToPath(new URL('..', import.meta.url))
-const generated = ['index.mjs', 'testing.mjs', 'agent.mjs', 'bootstrap.mjs', 'client.js', 'client.js.map']
+const generated = ['index.mjs', 'testing.mjs', 'agent.mjs', 'worker.mjs', 'bootstrap.mjs', 'client.js', 'client.js.map']
 
 async function digest(path) {
   try {

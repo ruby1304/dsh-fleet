@@ -7,7 +7,7 @@ import {
   sha256Canonical,
 } from './protocol.ts'
 
-export const FLEET_RELEASE_PROTOCOL_VERSION = 1 as const
+export const FLEET_RELEASE_PROTOCOL_VERSION = 2 as const
 
 export type FleetReleaseSourceKind = 'npm' | 'github' | 'artifact'
 export type FleetReleaseChangeAction = 'install' | 'update' | 'remove'
@@ -38,9 +38,15 @@ export interface FleetReleasePlanBody {
   kind: 'profile-release'
   deviceId: string
   profile: string
+  fromManifestDigest: string
+  toManifestDigest: string
+  fromReleaseDigest: string | null
+  toReleaseDigest: string
   manifestDigest: string
   profileHash: string
   observedDshVersion: string
+  observedRuntimeDigest: string
+  observedServiceDefinitionDigest: string | null
   releaseId: string
   releaseVersion: string
   releaseDigest: string
@@ -65,12 +71,59 @@ export interface FleetReleaseApproval {
   planDigest: string
   deviceId: string
   profile: string
+  fromManifestDigest: string
+  toManifestDigest: string
+  fromReleaseDigest: string | null
+  toReleaseDigest: string
+  approvedAt: string
+  expiresAt: string
+}
+
+export interface FleetReleaseRollbackPlanBody {
+  protocolVersion: typeof FLEET_RELEASE_PROTOCOL_VERSION
+  kind: 'profile-release-rollback'
+  transitionPlanId: string
+  transitionPlanDigest: string
+  deviceId: string
+  profile: string
+  fromManifestDigest: string
+  toManifestDigest: string
+  fromReleaseDigest: string
+  toReleaseDigest: string | null
+  fromProfileHash: string
+  toProfileHash: string
+  observedDshVersion: string
+  observedRuntimeDigest: string
+  observedServiceDefinitionDigest: string | null
+  createdAt: string
+  expiresAt: string
+}
+
+export interface FleetReleaseRollbackPlan extends FleetReleaseRollbackPlanBody {
+  planId: string
+  digest: string
+}
+
+export interface FleetReleaseRollbackApproval {
+  protocolVersion: typeof FLEET_RELEASE_PROTOCOL_VERSION
+  kind: 'profile-release-rollback'
+  approvalId: string
+  principalId: string
+  planId: string
+  planDigest: string
+  transitionPlanId: string
+  deviceId: string
+  profile: string
+  fromManifestDigest: string
+  toManifestDigest: string
+  fromReleaseDigest: string
+  toReleaseDigest: string | null
   approvedAt: string
   expiresAt: string
 }
 
 export interface FleetAppliedRelease {
-  schemaVersion: 1
+  schemaVersion: 1 | 2
   deviceId: string
   profile: string
   releaseId: string
@@ -78,10 +131,14 @@ export interface FleetAppliedRelease {
   releaseDigest: string
   plugins: FleetReleasePluginBinding[]
   appliedAt: string
+  transitionPlanId?: string
+  transitionPlanDigest?: string
 }
 
 const PLAN_BODY_KEYS = [
-  'protocolVersion', 'kind', 'deviceId', 'profile', 'manifestDigest', 'profileHash', 'observedDshVersion',
+  'protocolVersion', 'kind', 'deviceId', 'profile',
+  'fromManifestDigest', 'toManifestDigest', 'fromReleaseDigest', 'toReleaseDigest',
+  'manifestDigest', 'profileHash', 'observedDshVersion', 'observedRuntimeDigest', 'observedServiceDefinitionDigest',
   'releaseId', 'releaseVersion', 'releaseDigest', 'plugins', 'changes', 'restartRequired', 'createdAt', 'expiresAt',
 ] as const
 const PLAN_KEYS = [...PLAN_BODY_KEYS, 'planId', 'digest'] as const
@@ -90,11 +147,25 @@ const PLUGIN_KEYS = [
 ] as const
 const CHANGE_KEYS = ['pluginId', 'visibility', 'sourceKind', 'action', 'fromSpecDigest', 'exactToSpec', 'artifactDigest'] as const
 const APPROVAL_KEYS = [
-  'protocolVersion', 'kind', 'approvalId', 'principalId', 'planId', 'planDigest', 'deviceId', 'profile', 'approvedAt', 'expiresAt',
+  'protocolVersion', 'kind', 'approvalId', 'principalId', 'planId', 'planDigest', 'deviceId', 'profile',
+  'fromManifestDigest', 'toManifestDigest', 'fromReleaseDigest', 'toReleaseDigest', 'approvedAt', 'expiresAt',
 ] as const
-const APPLIED_KEYS = [
+const ROLLBACK_PLAN_BODY_KEYS = [
+  'protocolVersion', 'kind', 'transitionPlanId', 'transitionPlanDigest', 'deviceId', 'profile',
+  'fromManifestDigest', 'toManifestDigest', 'fromReleaseDigest', 'toReleaseDigest',
+  'fromProfileHash', 'toProfileHash', 'observedDshVersion', 'observedRuntimeDigest', 'observedServiceDefinitionDigest',
+  'createdAt', 'expiresAt',
+] as const
+const ROLLBACK_PLAN_KEYS = [...ROLLBACK_PLAN_BODY_KEYS, 'planId', 'digest'] as const
+const ROLLBACK_APPROVAL_KEYS = [
+  'protocolVersion', 'kind', 'approvalId', 'principalId', 'planId', 'planDigest', 'transitionPlanId',
+  'deviceId', 'profile', 'fromManifestDigest', 'toManifestDigest', 'fromReleaseDigest', 'toReleaseDigest',
+  'approvedAt', 'expiresAt',
+] as const
+const APPLIED_V1_KEYS = [
   'schemaVersion', 'deviceId', 'profile', 'releaseId', 'releaseVersion', 'releaseDigest', 'plugins', 'appliedAt',
 ] as const
+const APPLIED_V2_KEYS = [...APPLIED_V1_KEYS, 'transitionPlanId', 'transitionPlanDigest'] as const
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -128,6 +199,10 @@ function assertDigest(value: unknown, field: string): asserts value is string {
   if (typeof value !== 'string' || !/^[0-9a-f]{64}$/.test(value)) {
     throw new FleetProtocolError('invalid-digest', field + ' must be a lowercase SHA-256 digest')
   }
+}
+
+function assertNullableDigest(value: unknown, field: string): asserts value is string | null {
+  if (value !== null) assertDigest(value, field)
 }
 
 function parseTime(value: unknown, field: string): number {
@@ -233,18 +308,27 @@ function validatePlanBody(value: FleetReleasePlanBody): void {
   }
   assertIdentifier(value.deviceId, 'deviceId')
   assertIdentifier(value.profile, 'profile')
+  assertDigest(value.fromManifestDigest, 'fromManifestDigest')
+  assertDigest(value.toManifestDigest, 'toManifestDigest')
+  assertNullableDigest(value.fromReleaseDigest, 'fromReleaseDigest')
+  assertDigest(value.toReleaseDigest, 'toReleaseDigest')
   assertDigest(value.manifestDigest, 'manifestDigest')
   assertDigest(value.profileHash, 'profileHash')
   assertString(value.observedDshVersion, 'observedDshVersion')
   if (!isSupportedDshVersion(value.observedDshVersion)) {
     throw new FleetProtocolError('unsupported-dsh-version', 'DSH version is outside the supported Agent range')
   }
+  assertDigest(value.observedRuntimeDigest, 'observedRuntimeDigest')
+  assertNullableDigest(value.observedServiceDefinitionDigest, 'observedServiceDefinitionDigest')
   assertIdentifier(value.releaseId, 'releaseId')
   assertString(value.releaseVersion, 'releaseVersion')
   if (valid(value.releaseVersion) !== value.releaseVersion) {
     throw new FleetProtocolError('invalid-payload', 'releaseVersion must be an exact semantic version')
   }
   assertDigest(value.releaseDigest, 'releaseDigest')
+  if (value.manifestDigest !== value.toManifestDigest || value.releaseDigest !== value.toReleaseDigest) {
+    throw new FleetProtocolError('plan-integrity-failed', 'legacy release digest aliases must equal the transition target digests')
+  }
   if (!Array.isArray(value.plugins) || value.plugins.length === 0) throw new FleetProtocolError('invalid-payload', 'plugins must not be empty')
   value.plugins.forEach(validatePlugin)
   if (!Array.isArray(value.changes)) throw new FleetProtocolError('invalid-payload', 'changes must be an array')
@@ -312,6 +396,14 @@ export function validateFleetReleaseApproval(plan: FleetReleasePlan, approval: F
     profile: approval.profile,
   })) assertString(value, field)
   assertDigest(approval.planDigest, 'planDigest')
+  assertDigest(approval.fromManifestDigest, 'fromManifestDigest')
+  assertDigest(approval.toManifestDigest, 'toManifestDigest')
+  assertNullableDigest(approval.fromReleaseDigest, 'fromReleaseDigest')
+  assertDigest(approval.toReleaseDigest, 'toReleaseDigest')
+  if (approval.fromManifestDigest !== plan.fromManifestDigest || approval.toManifestDigest !== plan.toManifestDigest ||
+      approval.fromReleaseDigest !== plan.fromReleaseDigest || approval.toReleaseDigest !== plan.toReleaseDigest) {
+    throw new FleetProtocolError('approval-mismatch', 'release approval transition digests do not match its plan')
+  }
   const approvedAt = parseTime(approval.approvedAt, 'approvedAt')
   const expiresAt = parseTime(approval.expiresAt, 'approval.expiresAt')
   const nowAt = now instanceof Date ? now.getTime() : parseTime(now, 'now')
@@ -327,9 +419,113 @@ export function validateFleetReleaseApproval(plan: FleetReleasePlan, approval: F
   return { idempotencyKey: sha256Canonical({ planDigest: plan.digest, approval: JSON.parse(canonicalJson(approval)) as unknown }) }
 }
 
+function validateRollbackPlanBody(value: FleetReleaseRollbackPlanBody): void {
+  assertExactKeys(value, ROLLBACK_PLAN_BODY_KEYS, 'release rollback plan body')
+  if (value.protocolVersion !== FLEET_RELEASE_PROTOCOL_VERSION || value.kind !== 'profile-release-rollback') {
+    throw new FleetProtocolError('invalid-protocol', 'unsupported release rollback protocol')
+  }
+  if (!/^release-plan:[0-9a-f]{64}$/.test(value.transitionPlanId)) {
+    throw new FleetProtocolError('invalid-payload', 'transitionPlanId is invalid')
+  }
+  assertDigest(value.transitionPlanDigest, 'transitionPlanDigest')
+  if (value.transitionPlanId !== 'release-plan:' + value.transitionPlanDigest) {
+    throw new FleetProtocolError('plan-integrity-failed', 'transition plan id does not match transitionPlanDigest')
+  }
+  assertIdentifier(value.deviceId, 'deviceId')
+  assertIdentifier(value.profile, 'profile')
+  assertDigest(value.fromManifestDigest, 'fromManifestDigest')
+  assertDigest(value.toManifestDigest, 'toManifestDigest')
+  assertDigest(value.fromReleaseDigest, 'fromReleaseDigest')
+  assertNullableDigest(value.toReleaseDigest, 'toReleaseDigest')
+  assertDigest(value.fromProfileHash, 'fromProfileHash')
+  assertDigest(value.toProfileHash, 'toProfileHash')
+  assertString(value.observedDshVersion, 'observedDshVersion')
+  if (!isSupportedDshVersion(value.observedDshVersion)) {
+    throw new FleetProtocolError('unsupported-dsh-version', 'DSH version is outside the supported Agent range')
+  }
+  assertDigest(value.observedRuntimeDigest, 'observedRuntimeDigest')
+  assertNullableDigest(value.observedServiceDefinitionDigest, 'observedServiceDefinitionDigest')
+  if (value.fromManifestDigest === value.toManifestDigest && value.fromReleaseDigest === value.toReleaseDigest) {
+    throw new FleetProtocolError('invalid-payload', 'release rollback must change a manifest or applied release binding')
+  }
+  const createdAt = parseTime(value.createdAt, 'createdAt')
+  const expiresAt = parseTime(value.expiresAt, 'expiresAt')
+  if (expiresAt <= createdAt) throw new FleetProtocolError('invalid-time', 'expiresAt must be after createdAt')
+}
+
+export function createFleetReleaseRollbackPlan(body: FleetReleaseRollbackPlanBody): FleetReleaseRollbackPlan {
+  validateRollbackPlanBody(body)
+  const digest = sha256Canonical(body)
+  return Object.freeze({ ...body, planId: 'release-rollback-plan:' + digest, digest })
+}
+
+export function validateFleetReleaseRollbackPlan(value: FleetReleaseRollbackPlan): void {
+  assertExactKeys(value, ROLLBACK_PLAN_KEYS, 'release rollback plan')
+  const body = Object.fromEntries(ROLLBACK_PLAN_BODY_KEYS.map(key => [key, value[key]])) as unknown as FleetReleaseRollbackPlanBody
+  validateRollbackPlanBody(body)
+  assertDigest(value.digest, 'digest')
+  const digest = sha256Canonical(body)
+  if (value.digest !== digest || value.planId !== 'release-rollback-plan:' + digest) {
+    throw new FleetProtocolError('plan-integrity-failed', 'release rollback plan id or digest does not match its canonical body')
+  }
+}
+
+export function validateFleetReleaseRollbackApproval(
+  plan: FleetReleaseRollbackPlan,
+  approval: FleetReleaseRollbackApproval,
+  now: Date | string,
+): { idempotencyKey: string } {
+  validateFleetReleaseRollbackPlan(plan)
+  assertExactKeys(approval, ROLLBACK_APPROVAL_KEYS, 'release rollback approval')
+  if (approval.protocolVersion !== FLEET_RELEASE_PROTOCOL_VERSION || approval.kind !== 'profile-release-rollback') {
+    throw new FleetProtocolError('invalid-protocol', 'unsupported release rollback approval protocol')
+  }
+  for (const [field, value] of Object.entries({
+    approvalId: approval.approvalId,
+    principalId: approval.principalId,
+    planId: approval.planId,
+    transitionPlanId: approval.transitionPlanId,
+    deviceId: approval.deviceId,
+    profile: approval.profile,
+  })) assertString(value, field)
+  assertDigest(approval.planDigest, 'planDigest')
+  assertDigest(approval.fromManifestDigest, 'fromManifestDigest')
+  assertDigest(approval.toManifestDigest, 'toManifestDigest')
+  assertDigest(approval.fromReleaseDigest, 'fromReleaseDigest')
+  assertNullableDigest(approval.toReleaseDigest, 'toReleaseDigest')
+  const approvedAt = parseTime(approval.approvedAt, 'approvedAt')
+  const expiresAt = parseTime(approval.expiresAt, 'approval.expiresAt')
+  const nowAt = now instanceof Date ? now.getTime() : parseTime(now, 'now')
+  if (!Number.isFinite(nowAt)) throw new FleetProtocolError('invalid-time', 'now is invalid')
+  if (expiresAt <= approvedAt || approvedAt < Date.parse(plan.createdAt) || approvedAt >= Date.parse(plan.expiresAt)) {
+    throw new FleetProtocolError('approval-mismatch', 'approval time is outside the release rollback plan validity window')
+  }
+  if (nowAt >= Date.parse(plan.expiresAt)) throw new FleetProtocolError('plan-expired', 'release rollback plan has expired')
+  if (nowAt >= expiresAt) throw new FleetProtocolError('approval-expired', 'release rollback approval has expired')
+  if (approval.planId !== plan.planId || approval.planDigest !== plan.digest ||
+      approval.transitionPlanId !== plan.transitionPlanId || approval.deviceId !== plan.deviceId || approval.profile !== plan.profile ||
+      approval.fromManifestDigest !== plan.fromManifestDigest || approval.toManifestDigest !== plan.toManifestDigest ||
+      approval.fromReleaseDigest !== plan.fromReleaseDigest || approval.toReleaseDigest !== plan.toReleaseDigest) {
+    throw new FleetProtocolError('approval-mismatch', 'release rollback approval does not match its plan')
+  }
+  return { idempotencyKey: sha256Canonical({ planDigest: plan.digest, approval: JSON.parse(canonicalJson(approval)) as unknown }) }
+}
+
 export function validateFleetAppliedRelease(value: FleetAppliedRelease): void {
-  assertExactKeys(value, APPLIED_KEYS, 'applied release')
-  if (value.schemaVersion !== 1) throw new FleetProtocolError('invalid-protocol', 'unsupported applied release schema')
+  if (value.schemaVersion === 1) {
+    assertExactKeys(value, APPLIED_V1_KEYS, 'applied release')
+  } else if (value.schemaVersion === 2) {
+    assertExactKeys(value, APPLIED_V2_KEYS, 'applied release')
+    if (typeof value.transitionPlanId !== 'string' || !/^release-plan:[0-9a-f]{64}$/.test(value.transitionPlanId)) {
+      throw new FleetProtocolError('invalid-payload', 'applied release transitionPlanId is invalid')
+    }
+    assertDigest(value.transitionPlanDigest, 'transitionPlanDigest')
+    if (value.transitionPlanId !== 'release-plan:' + value.transitionPlanDigest) {
+      throw new FleetProtocolError('plan-integrity-failed', 'applied release transition binding is invalid')
+    }
+  } else {
+    throw new FleetProtocolError('invalid-protocol', 'unsupported applied release schema')
+  }
   assertIdentifier(value.deviceId, 'deviceId')
   assertIdentifier(value.profile, 'profile')
   assertIdentifier(value.releaseId, 'releaseId')

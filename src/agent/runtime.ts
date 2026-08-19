@@ -1,11 +1,15 @@
 import { spawn } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
 import { constants } from 'node:fs'
-import { link, lstat, mkdir, open, readFile, realpath, rename, rm } from 'node:fs/promises'
+import { link, lstat, mkdir, open, readFile, readdir, realpath, rename, rm } from 'node:fs/promises'
 import { dirname, isAbsolute, join, relative, sep } from 'node:path'
 import { parse as parseYaml } from 'yaml'
 import { digestInstalledArtifact } from '../host/artifacts.ts'
 import { parseFleetManifest } from '../host/core.ts'
+import {
+  validateRuntimeIdentity,
+  type FleetRuntimeIdentity,
+} from '../host/runtime-identity.ts'
 import type { FleetManifest } from '../shared.ts'
 import {
   assertMutationReadyConfig,
@@ -16,24 +20,51 @@ import {
 import { createAgentPlan } from './planner.ts'
 import {
   FleetProtocolError,
+  sha256Canonical,
   validateFleetPlan,
   validateFleetPlanApproval,
   type FleetPlan,
   type FleetPlanApproval,
 } from './protocol.ts'
 import { createReleasePlan } from './release-planner.ts'
+import { computeExecutionProfileHash } from '../worker/profile.ts'
 import {
+  FLEET_RELEASE_PROTOCOL_VERSION,
+  createFleetReleaseRollbackPlan,
   validateFleetAppliedRelease,
   validateFleetReleaseApproval,
   validateFleetReleasePlan,
+  validateFleetReleaseRollbackApproval,
+  validateFleetReleaseRollbackPlan,
   type FleetAppliedRelease,
   type FleetReleaseApproval,
   type FleetReleasePlan,
   type FleetReleasePluginBinding,
+  type FleetReleaseRollbackApproval,
+  type FleetReleaseRollbackPlan,
 } from './release-protocol.ts'
+import {
+  FLEET_RELEASE_RETENTION_PROTOCOL_VERSION,
+  createFleetReleaseRetentionPlan,
+  validateFleetReleaseRetentionApproval,
+  validateFleetReleaseRetentionPlan,
+  type FleetReleaseRetentionApproval,
+  type FleetReleaseRetentionEntry,
+  type FleetReleaseRetentionPlan,
+} from './release-retention.ts'
+import { inspectLaunchdServiceDefinition } from './service-definition.ts'
 
 const RUNTIME_MANIFEST_FILENAME = 'fleet.lock.yaml'
-const SNAPSHOT_FILES = ['package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'cordis.patch.yml', RUNTIME_MANIFEST_FILENAME] as const
+const SNAPSHOT_FILES = [
+  'package.json',
+  'pnpm-lock.yaml',
+  'pnpm-workspace.yaml',
+  'cordis.patch.yml',
+  'cordis.yml',
+  RUNTIME_MANIFEST_FILENAME,
+] as const
+const REBUILT_PROFILE_DIRECTORY = 'node_modules'
+const PROFILE_FILE_NAMES = new Set<string>(SNAPSHOT_FILES)
 const MAX_OUTPUT_BYTES = 1024 * 1024
 const TERMINATION_GRACE_MS = 2000
 const TERMINATION_CONFIRM_MS = 5000
@@ -93,11 +124,33 @@ export interface ReleaseAgentInspection {
   profile: string
   dshVersion: string
   manifestDigest: string
+  liveManifestDigest: string
+  desiredManifestDigest: string
+  observedRuntimeDigest: string
+  observedServiceDefinitionDigest: string | null
   profileHash: string
   currentRelease: Pick<FleetAppliedRelease, 'releaseId' | 'releaseVersion' | 'releaseDigest'> | null
   assignedRelease: { releaseId: string; releaseVersion: string; releaseDigest: string }
   changes: FleetReleasePlan['changes']
-  tasks: { enabled: boolean; workspaceIds: string[]; profiles: string[] }
+  tasks: {
+    enabled: boolean
+    timeoutMs: number | null
+    workspaceIds: string[]
+    profiles: string[]
+    executionProfiles: Array<{ profile: string; profileHash: string }>
+    policies: Array<{ policyId: string; policyDigest: string; permissionMode: 'read-only' | 'workspace-write' }>
+  }
+  retention: ReleaseRetentionInspection
+}
+
+export interface ReleaseRetentionInspection {
+  retainedCount: number
+  eligibleCount: number
+  orphanBackupCount: number
+  orphanStageCount: number
+  orphanFailedCount: number
+  orphanCount: number
+  invalidTransitionCount: number
 }
 
 export interface ReleaseActionRecord {
@@ -111,12 +164,70 @@ export interface ReleaseActionRecord {
   releaseId: string
   releaseVersion: string
   releaseDigest: string
+  fromManifestDigest: string
+  toManifestDigest: string
+  fromReleaseDigest: string | null
+  toReleaseDigest: string
+  rollbackDescriptorDigest: string
   stageProfile: string
   backupProfile: string
   state: AgentActionState
   updatedAt: string
   result?: 'success' | 'rolled-back' | 'manual-intervention'
   errorCode?: string
+}
+
+export interface ReleaseRollbackActionRecord {
+  planId: string
+  planDigest: string
+  transitionPlanId: string
+  approvalId: string
+  principalId: string
+  idempotencyKey: string
+  deviceId: string
+  profile: string
+  fromManifestDigest: string
+  toManifestDigest: string
+  fromReleaseDigest: string
+  toReleaseDigest: string | null
+  state: AgentActionState
+  updatedAt: string
+  result?: 'success' | 'manual-intervention'
+  errorCode?: string
+}
+
+export interface ReleaseRetentionActionRecord {
+  planId: string
+  planDigest: string
+  approvalId: string
+  principalId: string
+  idempotencyKey: string
+  deviceId: string
+  profile: string
+  currentTransitionPlanId: string | null
+  state: 'approved' | 'applying' | 'succeeded'
+  removedTransitionPlanIds: string[]
+  activeTransitionPlanId: string | null
+  activeBackupQuarantinePrepared: boolean
+  activeBackupRemoved: boolean
+  updatedAt: string
+  result: 'success' | null
+}
+
+interface ReleaseRollbackDescriptor {
+  schemaVersion: 1
+  transitionPlanId: string
+  transitionPlanDigest: string
+  deviceId: string
+  profile: string
+  fromManifestDigest: string
+  toManifestDigest: string
+  fromReleaseDigest: string | null
+  toReleaseDigest: string
+  fromProfileHash: string
+  backupProfile: string | null
+  previousAppliedRelease: FleetAppliedRelease | null
+  createdAt: string
 }
 
 interface ProfileManifest {
@@ -131,6 +242,12 @@ interface LoadedState {
   profileHash: string
   profileSnapshot: ProfileSnapshot
   dshVersion: string
+}
+
+interface ManagedReleaseRuntimeObservation {
+  runtimeIdentity: FleetRuntimeIdentity
+  observedRuntimeDigest: string
+  observedServiceDefinitionDigest: string | null
 }
 
 interface RunOptions {
@@ -376,6 +493,27 @@ async function readRegularOptional(path: string): Promise<string | null> {
   return (await readRegularFileSnapshot(path))?.source ?? null
 }
 
+async function validateProfileLayout(dir: string): Promise<void> {
+  const entries = await readdir(dir, { withFileTypes: true })
+  for (const entry of entries) {
+    const path = join(dir, entry.name)
+    if (entry.name === REBUILT_PROFILE_DIRECTORY) {
+      const info = await lstat(path)
+      if (info.isSymbolicLink() || !info.isDirectory()) {
+        throw new AgentRuntimeError('unsafe-profile-directory', 'profile node_modules must be a regular directory')
+      }
+      continue
+    }
+    if (!PROFILE_FILE_NAMES.has(entry.name)) {
+      throw new AgentRuntimeError('profile-layout-unsupported', 'profile contains unsupported top-level state')
+    }
+    const info = await lstat(path)
+    if (info.isSymbolicLink() || !info.isFile()) {
+      throw new AgentRuntimeError('unsafe-profile-file', 'profile state accepts regular files only')
+    }
+  }
+}
+
 async function readProfileSnapshot(config: FleetAgentConfig): Promise<ProfileSnapshot> {
   const dir = profileDir(config)
   let directoryPresent = true
@@ -388,6 +526,7 @@ async function readProfileSnapshot(config: FleetAgentConfig): Promise<ProfileSna
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
     directoryPresent = false
   }
+  if (directoryPresent) await validateProfileLayout(dir)
   const files = {} as ProfileFiles
   for (const name of SNAPSHOT_FILES) files[name] = await readRegularOptional(join(dir, name))
   return { directoryPresent, files, hash: sha256(JSON.stringify(files)) }
@@ -419,6 +558,11 @@ async function loadState(config: FleetAgentConfig, signal?: AbortSignal): Promis
     profileSnapshot: profile,
     dshVersion: await readDshVersion(config, signal),
   }
+}
+
+async function loadDesiredManifest(config: ReleaseReadyFleetAgentConfig): Promise<{ manifest: FleetManifest; manifestDigest: string; source: string }> {
+  const source = await readFile(config.desiredManifestPath, 'utf8')
+  return { manifest: parseFleetManifest(source), manifestDigest: sha256(source), source }
 }
 
 function planPath(config: FleetAgentConfig, planId: string): string {
@@ -783,11 +927,14 @@ async function stopDsh(config: FleetAgentConfig, signal?: AbortSignal): Promise<
       signal,
     })
   }
-  const deadline = Date.now() + 5000
+  const deadline = Date.now() + 10_000
   while (Date.now() < deadline) {
     throwIfAborted(signal)
     const active = (await Promise.all(ports.map(port => listenerPids(config, port, signal)))).flat()
-    if (active.length === 0) return
+    const launchdPid = config.restart.kind === 'launchd'
+      ? await currentLaunchdPid(config, signal)
+      : null
+    if (active.length === 0 && (config.restart.kind === 'screen' || launchdPid === null)) return
     await new Promise(resolve => setTimeout(resolve, 100))
   }
   if (config.restart.kind === 'screen') {
@@ -808,6 +955,30 @@ async function stopDsh(config: FleetAgentConfig, signal?: AbortSignal): Promise<
     if (active.length === 0) return
   }
   throw new AgentRuntimeError('restart-cleanup-failed', 'managed DSH listeners did not exit cleanly')
+}
+
+async function currentLaunchdPid(
+  config: FleetAgentConfig,
+  signal?: AbortSignal,
+): Promise<number | null> {
+  if (config.restart.kind !== 'launchd') return null
+  const result = await runFile(config.restart.launchctlBinary, ['print', config.restart.serviceTarget], {
+    env: controlledEnv(config),
+    timeoutMs: 10_000,
+    allowFailure: true,
+    signal,
+  })
+  if (result.code !== 0) return null
+  const matches = [...result.stdout.matchAll(/^\s*pid = ([0-9]+)\s*$/gm)]
+  if (matches.length === 0) return null
+  if (matches.length !== 1) {
+    throw new AgentRuntimeError('restart-cleanup-failed', 'launchd reported an ambiguous DSH process owner')
+  }
+  const pid = Number(matches[0]![1])
+  if (!Number.isSafeInteger(pid) || pid <= 0) {
+    throw new AgentRuntimeError('restart-cleanup-failed', 'launchd reported an invalid DSH process owner')
+  }
+  return pid
 }
 
 async function startDsh(config: FleetAgentConfig, signal?: AbortSignal): Promise<void> {
@@ -862,7 +1033,7 @@ async function verifyHealth(
   signal?: AbortSignal,
   expectedPluginIds: readonly string[] = [],
   expectedManifestPath?: string,
-): Promise<void> {
+): Promise<FleetRuntimeIdentity | null> {
   assertMutationReadyConfig(config)
   await runFile(config.dshBinary, ['--profile', config.profile, '--dump-config'], {
     env: controlledEnv(config),
@@ -884,6 +1055,7 @@ async function verifyHealth(
   let targetPending = targetIds.length > 0
   let runtimeFailed = false
   let manifestPathMismatch = false
+  let runtimeIdentityInvalid = false
   while (Date.now() < deadline) {
     throwIfAborted(signal)
     const rpcId = 'fleet-agent-health-' + randomUUID()
@@ -906,6 +1078,7 @@ async function verifyHealth(
               summary?: { failed?: unknown }
               plugins?: Array<{ id?: unknown; state?: unknown }>
               runtime?: { failedModules?: unknown }
+              runtimeIdentity?: unknown
             }
           }
         }
@@ -918,7 +1091,16 @@ async function verifyHealth(
           body.result.value?.summary?.failed === 0 && runtimeHealthy && !manifestPathMismatch
         const plugins = body.result?.value?.plugins ?? []
         targetPending = targetIds.some(id => plugins.find(item => item.id === id)?.state !== 'aligned')
-        if (fleetHealthy && !targetPending) return
+        let runtimeIdentity: FleetRuntimeIdentity | null = null
+        if (body.result?.value?.runtimeIdentity !== undefined) {
+          try {
+            validateRuntimeIdentity(body.result.value.runtimeIdentity)
+            runtimeIdentity = body.result.value.runtimeIdentity
+          } catch {
+            runtimeIdentityInvalid = true
+          }
+        }
+        if (fleetHealthy && !targetPending && !runtimeIdentityInvalid) return runtimeIdentity
       }
     } catch {
       throwIfAborted(signal)
@@ -928,8 +1110,89 @@ async function verifyHealth(
   }
   if (runtimeFailed) throw new AgentRuntimeError('runtime-modules-failed', 'DSH Loader reports failed runtime modules')
   if (manifestPathMismatch) throw new AgentRuntimeError('fleet-runtime-manifest-path-mismatch', 'Fleet runtime is not bound to the profile-local manifest')
+  if (runtimeIdentityInvalid) throw new AgentRuntimeError('runtime-identity-invalid', 'Fleet RPC returned an invalid runtime identity')
   if (targetPending) throw new AgentRuntimeError('plugin-not-active', 'approved plugin did not become active')
   throw new AgentRuntimeError('fleet-rpc-unhealthy', 'Fleet RPC reported an unhealthy runtime')
+}
+
+async function inspectManagedReleaseRuntime(
+  config: ReleaseReadyFleetAgentConfig,
+  signal?: AbortSignal,
+  options: {
+    allowLegacyLaunchdIdentity?: boolean
+    expectedPluginIds?: readonly string[]
+  } = {},
+): Promise<ManagedReleaseRuntimeObservation> {
+  const [rpcRuntimeIdentity, configuredDshVersion] = await Promise.all([
+    verifyHealth(config, undefined, signal, options.expectedPluginIds ?? [], runtimeManifestPath(config)),
+    readDshVersion(config, signal),
+  ])
+  if (config.restart.kind === 'screen') {
+    if (rpcRuntimeIdentity === null) {
+      throw new AgentRuntimeError('runtime-identity-unavailable', 'screen-managed releases require Fleet RPC runtime identity')
+    }
+    if (rpcRuntimeIdentity.dshVersion !== configuredDshVersion) {
+      throw new AgentRuntimeError('runtime-identity-mismatch', 'configured DSH and running DSH versions do not match')
+    }
+    return {
+      runtimeIdentity: rpcRuntimeIdentity,
+      observedRuntimeDigest: rpcRuntimeIdentity.runtimeDigest,
+      observedServiceDefinitionDigest: null,
+    }
+  }
+
+  const printed = await runFile(config.restart.launchctlBinary, ['print', config.restart.serviceTarget], {
+    env: controlledEnv(config),
+    timeoutMs: 10_000,
+    signal,
+  })
+  let service
+  try {
+    service = await inspectLaunchdServiceDefinition({
+      source: printed.stdout,
+      serviceTarget: config.restart.serviceTarget,
+      dshHome: config.dshHome,
+      host: config.restart.host,
+      port: config.restart.port,
+    })
+  } catch (error: unknown) {
+    throw new AgentRuntimeError(
+      'service-definition-invalid',
+      error instanceof Error ? error.message : 'launchd service definition is invalid',
+    )
+  }
+  const listenerPid = (await listenerPids(config, config.restart.port, signal))[0]
+  if (listenerPid === undefined || service.pid !== listenerPid) {
+    throw new AgentRuntimeError('restart-owner-mismatch', 'launchd service PID does not own the configured DSH port')
+  }
+  await verifyListenerOwner(config, listenerPid, config.restart.port, signal)
+  if (service.runtimeIdentity.dshVersion !== configuredDshVersion) {
+    throw new AgentRuntimeError('runtime-identity-mismatch', 'configured DSH and launchd DSH versions do not match')
+  }
+  if (rpcRuntimeIdentity === null) {
+    if (options.allowLegacyLaunchdIdentity !== true) {
+      throw new AgentRuntimeError('runtime-identity-unavailable', 'Fleet RPC did not report the running DSH identity')
+    }
+  } else if (rpcRuntimeIdentity.runtimeDigest !== service.runtimeIdentity.runtimeDigest) {
+    throw new AgentRuntimeError('runtime-identity-mismatch', 'Fleet RPC and launchd report different DSH runtimes')
+  }
+  return {
+    runtimeIdentity: service.runtimeIdentity,
+    observedRuntimeDigest: service.runtimeIdentity.runtimeDigest,
+    observedServiceDefinitionDigest: service.serviceDefinitionDigest,
+  }
+}
+
+function assertObservedReleaseRuntime(
+  observation: ManagedReleaseRuntimeObservation,
+  expected: Pick<FleetReleasePlan | FleetReleaseRollbackPlan,
+    'observedDshVersion' | 'observedRuntimeDigest' | 'observedServiceDefinitionDigest'>,
+): void {
+  if (observation.runtimeIdentity.dshVersion !== expected.observedDshVersion ||
+      observation.observedRuntimeDigest !== expected.observedRuntimeDigest ||
+      observation.observedServiceDefinitionDigest !== expected.observedServiceDefinitionDigest) {
+    throw new FleetProtocolError('approval-mismatch', 'running DSH or its service definition changed after the plan was created')
+  }
 }
 
 function installArgument(plan: FleetPlan): string {
@@ -1189,6 +1452,31 @@ function releaseActionPath(config: FleetAgentConfig, planId: string): string {
   return join(config.stateDir, 'release-actions', planId.slice('release-plan:'.length) + '.json')
 }
 
+function releaseRollbackDescriptorPath(config: FleetAgentConfig, transitionPlanId: string): string {
+  if (!/^release-plan:[0-9a-f]{64}$/.test(transitionPlanId)) throw new AgentRuntimeError('invalid-plan-id', 'release transition plan id is invalid')
+  return join(config.stateDir, 'release-rollbacks', transitionPlanId.slice('release-plan:'.length) + '.json')
+}
+
+function releaseRollbackPlanPath(config: FleetAgentConfig, planId: string): string {
+  if (!/^release-rollback-plan:[0-9a-f]{64}$/.test(planId)) throw new AgentRuntimeError('invalid-plan-id', 'release rollback plan id is invalid')
+  return join(config.stateDir, 'release-rollback-plans', planId.slice('release-rollback-plan:'.length) + '.json')
+}
+
+function releaseRollbackActionPath(config: FleetAgentConfig, planId: string): string {
+  if (!/^release-rollback-plan:[0-9a-f]{64}$/.test(planId)) throw new AgentRuntimeError('invalid-plan-id', 'release rollback plan id is invalid')
+  return join(config.stateDir, 'release-rollback-actions', planId.slice('release-rollback-plan:'.length) + '.json')
+}
+
+function releaseRetentionPlanPath(config: FleetAgentConfig, planId: string): string {
+  if (!/^release-retention-plan:[0-9a-f]{64}$/.test(planId)) throw new AgentRuntimeError('invalid-plan-id', 'release retention plan id is invalid')
+  return join(config.stateDir, 'release-retention-plans', planId.slice('release-retention-plan:'.length) + '.json')
+}
+
+function releaseRetentionActionPath(config: FleetAgentConfig, planId: string): string {
+  if (!/^release-retention-plan:[0-9a-f]{64}$/.test(planId)) throw new AgentRuntimeError('invalid-plan-id', 'release retention plan id is invalid')
+  return join(config.stateDir, 'release-retention-actions', planId.slice('release-retention-plan:'.length) + '.json')
+}
+
 function appliedReleasePath(config: FleetAgentConfig): string {
   return join(config.stateDir, 'releases', config.profile + '.json')
 }
@@ -1223,19 +1511,121 @@ export async function readAppliedRelease(config: FleetAgentConfig): Promise<Flee
   return value
 }
 
+const RELEASE_ROLLBACK_DESCRIPTOR_KEYS = [
+  'schemaVersion', 'transitionPlanId', 'transitionPlanDigest', 'deviceId', 'profile',
+  'fromManifestDigest', 'toManifestDigest', 'fromReleaseDigest', 'toReleaseDigest',
+  'fromProfileHash', 'backupProfile', 'previousAppliedRelease', 'createdAt',
+] as const
+
+function validateReleaseRollbackDescriptor(value: unknown): asserts value is ReleaseRollbackDescriptor {
+  const body = objectValue(value)
+  if (body === null || Object.keys(body).sort().join(',') !== [...RELEASE_ROLLBACK_DESCRIPTOR_KEYS].sort().join(',')) {
+    throw new AgentRuntimeError('rollback-descriptor-invalid', 'release rollback descriptor has unsupported or missing fields')
+  }
+  const createdAt = typeof body.createdAt === 'string' ? Date.parse(body.createdAt) : Number.NaN
+  if (body.schemaVersion !== 1 || typeof body.transitionPlanId !== 'string' || !/^release-plan:[0-9a-f]{64}$/.test(body.transitionPlanId) ||
+      typeof body.transitionPlanDigest !== 'string' || !/^[0-9a-f]{64}$/.test(body.transitionPlanDigest) ||
+      typeof body.deviceId !== 'string' || typeof body.profile !== 'string' ||
+      typeof body.fromManifestDigest !== 'string' || !/^[0-9a-f]{64}$/.test(body.fromManifestDigest) ||
+      typeof body.toManifestDigest !== 'string' || !/^[0-9a-f]{64}$/.test(body.toManifestDigest) ||
+      (body.fromReleaseDigest !== null && (typeof body.fromReleaseDigest !== 'string' || !/^[0-9a-f]{64}$/.test(body.fromReleaseDigest))) ||
+      typeof body.toReleaseDigest !== 'string' || !/^[0-9a-f]{64}$/.test(body.toReleaseDigest) ||
+      typeof body.fromProfileHash !== 'string' || !/^[0-9a-f]{64}$/.test(body.fromProfileHash) ||
+      (body.backupProfile !== null && (typeof body.backupProfile !== 'string' || !/^fleet-backup-[0-9a-f]{24}$/.test(body.backupProfile))) ||
+      !Number.isFinite(createdAt) || new Date(createdAt).toISOString() !== body.createdAt ||
+      (body.previousAppliedRelease !== null && typeof body.previousAppliedRelease !== 'object')) {
+    throw new AgentRuntimeError('rollback-descriptor-invalid', 'release rollback descriptor is invalid')
+  }
+  if (body.transitionPlanId !== 'release-plan:' + body.transitionPlanDigest) {
+    throw new AgentRuntimeError('rollback-descriptor-invalid', 'release rollback descriptor transition digest is invalid')
+  }
+  if (body.previousAppliedRelease !== null) validateFleetAppliedRelease(body.previousAppliedRelease as FleetAppliedRelease)
+}
+
+async function readReleaseRollbackDescriptor(config: FleetAgentConfig, transitionPlanId: string): Promise<ReleaseRollbackDescriptor | null> {
+  const value = await readJson<unknown>(releaseRollbackDescriptorPath(config, transitionPlanId))
+  if (value === null) return null
+  validateReleaseRollbackDescriptor(value)
+  if (value.deviceId !== config.deviceId || value.profile !== config.profile || value.transitionPlanId !== transitionPlanId) {
+    throw new AgentRuntimeError('rollback-descriptor-invalid', 'release rollback descriptor identity does not match this Agent')
+  }
+  return value
+}
+
+async function persistReleaseRollbackDescriptor(
+  config: FleetAgentConfig,
+  plan: FleetReleasePlan,
+  previousAppliedRelease: FleetAppliedRelease | null,
+): Promise<{ descriptor: ReleaseRollbackDescriptor; digest: string }> {
+  const descriptor: ReleaseRollbackDescriptor = {
+    schemaVersion: 1,
+    transitionPlanId: plan.planId,
+    transitionPlanDigest: plan.digest,
+    deviceId: plan.deviceId,
+    profile: plan.profile,
+    fromManifestDigest: plan.fromManifestDigest,
+    toManifestDigest: plan.toManifestDigest,
+    fromReleaseDigest: plan.fromReleaseDigest,
+    toReleaseDigest: plan.toReleaseDigest,
+    fromProfileHash: plan.profileHash,
+    backupProfile: plan.restartRequired ? releaseProfileNames(plan).backupProfile : null,
+    previousAppliedRelease,
+    createdAt: new Date().toISOString(),
+  }
+  validateReleaseRollbackDescriptor(descriptor)
+  const existing = await readReleaseRollbackDescriptor(config, plan.planId)
+  if (existing !== null) {
+    const comparable = { ...descriptor, createdAt: existing.createdAt }
+    if (sha256Canonical(existing) !== sha256Canonical(comparable)) {
+      throw new AgentRuntimeError('rollback-descriptor-conflict', 'release rollback descriptor does not match the approved transition')
+    }
+    return { descriptor: existing, digest: sha256Canonical(existing) }
+  }
+  await atomicJson(releaseRollbackDescriptorPath(config, plan.planId), descriptor)
+  return { descriptor, digest: sha256Canonical(descriptor) }
+}
+
+async function restoreAppliedReleaseMarker(config: FleetAgentConfig, previous: FleetAppliedRelease | null): Promise<void> {
+  if (previous === null) {
+    await ensureDurableDirectory(dirname(appliedReleasePath(config)))
+    await rm(appliedReleasePath(config), { force: true })
+    await syncDirectory(dirname(appliedReleasePath(config)))
+    return
+  }
+  validateFleetAppliedRelease(previous)
+  await atomicJson(appliedReleasePath(config), previous)
+}
+
 async function currentArtifactDigests(
   config: ReleaseReadyFleetAgentConfig,
   state: LoadedState,
 ): Promise<Record<string, string>> {
-  const releaseId = state.manifest.v2?.assignments[config.deviceId]?.[config.profile]
-  const release = releaseId === undefined ? undefined : state.manifest.v2?.profileReleases[releaseId]
-  const entries = await Promise.all((release?.plugins ?? []).filter(plugin => plugin.source.kind === 'artifact').map(async plugin => {
-    const actualSpec = state.dependencies[plugin.id]
-    if (actualSpec === undefined) return null
+  const entries = await Promise.all(Object.entries(state.dependencies).map(async ([pluginId, actualSpec]) => {
     const digest = await digestInstalledArtifact(profileDir(config), config.artifactStore, actualSpec)
-    return digest === undefined ? null : [plugin.id, digest] as const
+    return digest === undefined ? null : [pluginId, digest] as const
   }))
   return Object.fromEntries(entries.filter((entry): entry is readonly [string, string] => entry !== null))
+}
+
+async function assertReleaseRemovalOwnership(
+  config: ReleaseReadyFleetAgentConfig,
+  state: LoadedState,
+  plan: FleetReleasePlan,
+  appliedRelease: FleetAppliedRelease | null,
+): Promise<void> {
+  for (const change of plan.changes.filter(candidate => candidate.action === 'remove')) {
+    const previous = appliedRelease?.plugins.find(plugin => plugin.pluginId === change.pluginId)
+    const liveSpec = state.dependencies[change.pluginId]
+    if (previous === undefined || liveSpec === undefined) {
+      throw new AgentRuntimeError('release-ownership-conflict', 'retired plugin is no longer owned by the applied release marker')
+    }
+    const matches = previous.sourceKind === 'artifact'
+      ? await digestInstalledArtifact(profileDir(config), config.artifactStore, liveSpec) === previous.artifactDigest
+      : liveSpec === previous.exactSpec
+    if (!matches) {
+      throw new AgentRuntimeError('release-ownership-conflict', 'retired plugin binding no longer matches the applied release marker')
+    }
+  }
 }
 
 async function buildReleasePlan(
@@ -1244,17 +1634,21 @@ async function buildReleasePlan(
   signal?: AbortSignal,
 ): Promise<{ plan: FleetReleasePlan; state: LoadedState; appliedRelease: FleetAppliedRelease | null }> {
   const state = await loadState(config, signal)
+  const desired = await loadDesiredManifest(config)
   const appliedRelease = await readAppliedRelease(config)
-  const runtimeManifestSource = state.profileSnapshot.files[RUNTIME_MANIFEST_FILENAME]
+  const runtime = await inspectManagedReleaseRuntime(config, signal, { allowLegacyLaunchdIdentity: true })
   const plan = createReleasePlan({
-    manifest: state.manifest,
-    manifestDigest: state.manifestDigest,
-    runtimeManifestDigest: runtimeManifestSource === null ? null : sha256(runtimeManifestSource),
+    manifest: desired.manifest,
+    manifestDigest: desired.manifestDigest,
+    liveManifestDigest: state.manifestDigest,
+    runtimeManifestDigest: state.manifestDigest,
     dependencies: state.dependencies,
     artifactDigests: await currentArtifactDigests(config, state),
     appliedRelease,
     profileHash: state.profileHash,
-    observedDshVersion: state.dshVersion,
+    observedDshVersion: runtime.runtimeIdentity.dshVersion,
+    observedRuntimeDigest: runtime.observedRuntimeDigest,
+    observedServiceDefinitionDigest: runtime.observedServiceDefinitionDigest,
     now,
     deviceId: config.deviceId,
     profile: config.profile,
@@ -1270,6 +1664,11 @@ export async function inspectReleaseAgent(
 ): Promise<ReleaseAgentInspection> {
   assertReleaseReadyConfig(config)
   const { plan, appliedRelease } = await buildReleasePlan(config, now, signal)
+  const executionProfiles = await Promise.all([...(config.tasks?.profiles ?? [])].sort().map(async profile => ({
+    profile,
+    profileHash: await computeExecutionProfileHash(config.dshHome, profile),
+  })))
+  const retention = await releaseRetentionInspection(config)
   return {
     protocolVersion: 1,
     kind: 'profile-release',
@@ -1277,6 +1676,10 @@ export async function inspectReleaseAgent(
     profile: plan.profile,
     dshVersion: plan.observedDshVersion,
     manifestDigest: plan.manifestDigest,
+    liveManifestDigest: plan.fromManifestDigest,
+    desiredManifestDigest: plan.toManifestDigest,
+    observedRuntimeDigest: plan.observedRuntimeDigest,
+    observedServiceDefinitionDigest: plan.observedServiceDefinitionDigest,
     profileHash: plan.profileHash,
     currentRelease: appliedRelease === null ? null : {
       releaseId: appliedRelease.releaseId,
@@ -1291,9 +1694,20 @@ export async function inspectReleaseAgent(
     changes: plan.changes,
     tasks: {
       enabled: config.tasks?.enabled === true && config.a2a !== undefined,
+      timeoutMs: config.tasks?.timeoutMs ?? null,
       workspaceIds: Object.keys(config.tasks?.workspaces ?? {}).sort(),
       profiles: [...(config.tasks?.profiles ?? [])].sort(),
+      executionProfiles,
+      policies: (config.tasks?.policyIds ?? []).flatMap(policyId => {
+        const policy = config.tasks?.policies?.[policyId]
+        return policy === undefined ? [] : [{
+          policyId: policy.policyId,
+          policyDigest: policy.policyDigest,
+          permissionMode: policy.permissionMode,
+        }]
+      }).sort((left, right) => left.policyId.localeCompare(right.policyId)),
     },
+    retention,
   }
 }
 
@@ -1302,7 +1716,7 @@ export async function verifyReleaseAgentHealth(
   signal?: AbortSignal,
 ): Promise<void> {
   assertReleaseReadyConfig(config)
-  await verifyHealth(config, undefined, signal, [], runtimeManifestPath(config))
+  await inspectManagedReleaseRuntime(config, signal, { allowLegacyLaunchdIdentity: true })
 }
 
 export async function createStoredReleasePlan(
@@ -1325,6 +1739,18 @@ export async function createStoredReleasePlan(
 
 async function readReleaseAction(config: FleetAgentConfig, planId: string): Promise<ReleaseActionRecord | null> {
   return readJson<ReleaseActionRecord>(releaseActionPath(config, planId))
+}
+
+function assertReleaseActionPlan(record: ReleaseActionRecord, plan: FleetReleasePlan): void {
+  const names = releaseProfileNames(plan)
+  if (record.planId !== plan.planId || record.planDigest !== plan.digest || record.deviceId !== plan.deviceId ||
+      record.profile !== plan.profile || record.releaseId !== plan.releaseId || record.releaseVersion !== plan.releaseVersion ||
+      record.releaseDigest !== plan.toReleaseDigest || record.fromManifestDigest !== plan.fromManifestDigest ||
+      record.toManifestDigest !== plan.toManifestDigest || record.fromReleaseDigest !== plan.fromReleaseDigest ||
+      record.toReleaseDigest !== plan.toReleaseDigest || record.stageProfile !== names.stageProfile ||
+      record.backupProfile !== names.backupProfile || !/^[0-9a-f]{64}$/.test(record.rollbackDescriptorDigest)) {
+    throw new AgentRuntimeError('action-state-invalid', 'release action record does not match its transition plan')
+  }
 }
 
 async function saveReleaseAction(
@@ -1510,7 +1936,14 @@ async function removeChangedReleaseBindings(
   if (source === null) throw new AgentRuntimeError('profile-missing', 'staged release profile is missing')
   const parsed = JSON.parse(source) as ProfileManifest & Record<string, unknown>
   const dependencies = parsed.dependencies ?? {}
-  for (const id of removedIds) delete dependencies[id]
+  for (const id of removedIds) {
+    const change = plan.changes.find(candidate => candidate.pluginId === id)
+    const liveBinding = dependencies[id]
+    if (change === undefined || change.fromSpecDigest === null || liveBinding === undefined || sha256(liveBinding) !== change.fromSpecDigest) {
+      throw new AgentRuntimeError('release-ownership-conflict', 'live release binding no longer matches the approved previous binding')
+    }
+    delete dependencies[id]
+  }
   parsed.dependencies = dependencies
   const profile = parsed.dsh?.profile
   if (profile !== undefined) profile.bundles = (profile.bundles ?? []).filter(id => !removedIds.has(id))
@@ -1539,8 +1972,8 @@ async function stageRelease(
   if (await computeProfileHash(stageConfig) !== plan.profileHash) {
     throw new AgentRuntimeError('profile-stage-mismatch', 'staged profile does not match the approved source profile')
   }
-  const runtimeManifestSource = await readRegularOptional(config.manifestPath)
-  if (runtimeManifestSource === null || sha256(runtimeManifestSource) !== plan.manifestDigest) {
+  const runtimeManifestSource = await readRegularOptional(config.desiredManifestPath)
+  if (runtimeManifestSource === null || sha256(runtimeManifestSource) !== plan.toManifestDigest) {
     throw new AgentRuntimeError('release-runtime-manifest-mismatch', 'approved Fleet runtime manifest is missing or changed')
   }
   await rm(runtimeManifestPath(stageConfig), { force: true })
@@ -1605,7 +2038,7 @@ async function swapStagedRelease(config: ReleaseReadyFleetAgentConfig, plan: Fle
 
 async function persistAppliedRelease(config: FleetAgentConfig, plan: FleetReleasePlan): Promise<FleetAppliedRelease> {
   const applied: FleetAppliedRelease = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     deviceId: plan.deviceId,
     profile: plan.profile,
     releaseId: plan.releaseId,
@@ -1613,6 +2046,8 @@ async function persistAppliedRelease(config: FleetAgentConfig, plan: FleetReleas
     releaseDigest: plan.releaseDigest,
     plugins: plan.plugins,
     appliedAt: new Date().toISOString(),
+    transitionPlanId: plan.planId,
+    transitionPlanDigest: plan.digest,
   }
   validateFleetAppliedRelease(applied)
   await atomicJson(appliedReleasePath(config), applied)
@@ -1633,7 +2068,19 @@ async function rollbackRelease(
   const failedDir = join(profilesRoot, names.failedProfile)
   let current = (await saveReleaseActionBestEffort(config, record, 'rollback', { errorCode })).record
   try {
-    if (await regularDirectoryExists(backupDir)) {
+    const descriptor = await readReleaseRollbackDescriptor(config, plan.planId)
+    if (descriptor === null || descriptor.transitionPlanDigest !== plan.digest ||
+        sha256Canonical(descriptor) !== record.rollbackDescriptorDigest) {
+      throw new AgentRuntimeError('rollback-descriptor-invalid', 'release rollback descriptor is missing or does not match the transition')
+    }
+    const backupExists = await regularDirectoryExists(backupDir)
+    if (!backupExists && plan.restartRequired) {
+      const liveManifest = await readRegularOptional(runtimeManifestPath(config))
+      if (liveManifest === null || sha256(liveManifest) !== plan.fromManifestDigest || await computeProfileHash(config) !== plan.profileHash) {
+        throw new AgentRuntimeError('rollback-backup-missing', 'release backup is missing after the live profile changed')
+      }
+    }
+    if (backupExists) {
       try { await stopDsh(config) } catch {
         const active = (await listenerPids(config, config.restart.port))[0]
         if (active !== undefined) throw new AgentRuntimeError('restart-cleanup-failed', 'cannot stop the failed release for rollback')
@@ -1644,18 +2091,26 @@ async function rollbackRelease(
       await syncDirectory(profilesRoot)
     }
     await rm(stageDir, { recursive: true, force: true })
+    await restoreAppliedReleaseMarker(config, descriptor.previousAppliedRelease)
     current = await saveReleaseAction(config, current, 'rollback-restarting')
     await ensureServiceStarted(config)
     current = await saveReleaseAction(config, current, 'rollback-verifying')
-    await verifyHealth(config, undefined, undefined, [], runtimeManifestPath(config))
+    const restoredRuntime = await inspectManagedReleaseRuntime(config, undefined, {
+      allowLegacyLaunchdIdentity: true,
+      expectedPluginIds: descriptor.previousAppliedRelease?.plugins.map(plugin => plugin.pluginId) ?? [],
+    })
+    assertObservedReleaseRuntime(restoredRuntime, plan)
     await rm(failedDir, { recursive: true, force: true })
     await auditBestEffort(config, { type: 'profile-release/rolled-back', planId: plan.planId, releaseId: plan.releaseId, result: errorCode })
     return saveReleaseAction(config, current, 'rolled-back', { result: 'rolled-back', errorCode })
-  } catch {
+  } catch (rollbackError: unknown) {
+    const rollbackErrorCode = typeof (rollbackError as { code?: unknown }).code === 'string'
+      ? (rollbackError as { code: string }).code
+      : 'rollback-failed'
     await auditBestEffort(config, { type: 'profile-release/manual-intervention', planId: plan.planId, releaseId: plan.releaseId, result: errorCode })
     return (await saveReleaseActionBestEffort(config, current, 'manual-intervention', {
       result: 'manual-intervention',
-      errorCode: 'rollback-failed',
+      errorCode: rollbackErrorCode,
     })).record
   }
 }
@@ -1665,17 +2120,31 @@ async function recoverReleaseInterrupted(
   plan: FleetReleasePlan,
   record: ReleaseActionRecord,
 ): Promise<ReleaseActionRecord> {
+  const descriptor = await readReleaseRollbackDescriptor(config, plan.planId)
+  if (descriptor === null || descriptor.transitionPlanDigest !== plan.digest ||
+      sha256Canonical(descriptor) !== record.rollbackDescriptorDigest) {
+    return (await saveReleaseActionBestEffort(config, record, 'manual-intervention', {
+      result: 'manual-intervention', errorCode: 'rollback-descriptor-invalid',
+    })).record
+  }
   const applied = await readAppliedRelease(config)
   if (applied?.releaseDigest === plan.releaseDigest) {
+    if (descriptor.backupProfile !== null && !await regularDirectoryExists(join(dirname(profileDir(config)), descriptor.backupProfile))) {
+      return (await saveReleaseActionBestEffort(config, record, 'manual-intervention', {
+        result: 'manual-intervention', errorCode: 'rollback-backup-missing',
+      })).record
+    }
     try {
       await verifyReleaseProfileFiles(config, plan, config.profile)
       await ensureServiceStarted(config)
-      await verifyHealth(config, undefined, undefined, plan.plugins.map(plugin => plugin.pluginId), runtimeManifestPath(config))
+      const runtime = await inspectManagedReleaseRuntime(config, undefined, {
+        expectedPluginIds: plan.plugins.map(plugin => plugin.pluginId),
+      })
+      assertObservedReleaseRuntime(runtime, plan)
       const names = releaseProfileNames(plan)
       const profilesRoot = dirname(profileDir(config))
       await Promise.all([
         rm(join(profilesRoot, names.stageProfile), { recursive: true, force: true }),
-        rm(join(profilesRoot, names.backupProfile), { recursive: true, force: true }),
         rm(join(profilesRoot, names.failedProfile), { recursive: true, force: true }),
       ])
       return saveReleaseAction(config, record, 'succeeded', { result: 'success' })
@@ -1696,6 +2165,7 @@ async function applyStoredReleasePlanLocked(
   if (plan === null) throw new AgentRuntimeError('plan-not-found', 'approved release plan was not found')
   validateFleetReleasePlan(plan)
   const existing = await readReleaseAction(config, plan.planId)
+  if (existing !== null) assertReleaseActionPlan(existing, plan)
   let validation: ReturnType<typeof validateFleetReleaseApproval>
   try {
     validation = validateFleetReleaseApproval(plan, approval, now)
@@ -1716,10 +2186,17 @@ async function applyStoredReleasePlanLocked(
     return recoverReleaseInterrupted(config, plan, existing)
   }
   const current = await loadState(config, signal)
-  if (current.manifestDigest !== plan.manifestDigest || current.profileHash !== plan.profileHash || current.dshVersion !== plan.observedDshVersion) {
-    throw new FleetProtocolError('approval-mismatch', 'manifest, profile or DSH version changed after the release plan was created')
+  const desired = await loadDesiredManifest(config)
+  const currentApplied = await readAppliedRelease(config)
+  const currentRuntime = await inspectManagedReleaseRuntime(config, signal, { allowLegacyLaunchdIdentity: true })
+  if (current.manifestDigest !== plan.fromManifestDigest || desired.manifestDigest !== plan.toManifestDigest ||
+      current.profileHash !== plan.profileHash || current.dshVersion !== plan.observedDshVersion ||
+      (currentApplied?.releaseDigest ?? null) !== plan.fromReleaseDigest) {
+    throw new FleetProtocolError('approval-mismatch', 'live/desired manifest, applied release, profile or DSH version changed after the release plan was created')
   }
-  await verifyHealth(config, undefined, signal, [], runtimeManifestPath(config))
+  assertObservedReleaseRuntime(currentRuntime, plan)
+  await assertReleaseRemovalOwnership(config, current, plan, currentApplied)
+  const rollback = await persistReleaseRollbackDescriptor(config, plan, currentApplied)
   const names = releaseProfileNames(plan)
   let record: ReleaseActionRecord = {
     planId: plan.planId,
@@ -1732,6 +2209,11 @@ async function applyStoredReleasePlanLocked(
     releaseId: plan.releaseId,
     releaseVersion: plan.releaseVersion,
     releaseDigest: plan.releaseDigest,
+    fromManifestDigest: plan.fromManifestDigest,
+    toManifestDigest: plan.toManifestDigest,
+    fromReleaseDigest: plan.fromReleaseDigest,
+    toReleaseDigest: plan.toReleaseDigest,
+    rollbackDescriptorDigest: rollback.digest,
     stageProfile: names.stageProfile,
     backupProfile: names.backupProfile,
     state: 'approved',
@@ -1746,7 +2228,10 @@ async function applyStoredReleasePlanLocked(
   try {
     if (!plan.restartRequired) {
       await verifyReleaseProfileFiles(config, plan, config.profile)
-      await verifyHealth(config, undefined, signal, plan.plugins.map(plugin => plugin.pluginId), runtimeManifestPath(config))
+      const runtime = await inspectManagedReleaseRuntime(config, signal, {
+        expectedPluginIds: plan.plugins.map(plugin => plugin.pluginId),
+      })
+      assertObservedReleaseRuntime(runtime, plan)
       await persistAppliedRelease(config, plan)
       releaseCommitted = true
       record = await saveReleaseAction(config, record, 'succeeded', { result: 'success' })
@@ -1756,9 +2241,20 @@ async function applyStoredReleasePlanLocked(
     record = await saveReleaseAction(config, record, 'staging')
     await stageRelease(config, plan, current.profileSnapshot, signal)
     throwIfAborted(signal)
-    if (await computeProfileHash(config) !== plan.profileHash) {
-      throw new FleetProtocolError('approval-mismatch', 'live profile changed while the release was staged')
+    const [preSwapProfileHash, preSwapDshVersion, preSwapDesired, preSwapApplied] = await Promise.all([
+      computeProfileHash(config),
+      readDshVersion(config, signal),
+      loadDesiredManifest(config),
+      readAppliedRelease(config),
+    ])
+    if (preSwapProfileHash !== plan.profileHash || preSwapDshVersion !== plan.observedDshVersion ||
+        preSwapDesired.manifestDigest !== plan.toManifestDigest ||
+        (preSwapApplied?.releaseDigest ?? null) !== plan.fromReleaseDigest) {
+      throw new FleetProtocolError('approval-mismatch', 'live profile, DSH, desired manifest, or applied release changed while the release was staged')
     }
+    const preSwapRuntime = await inspectManagedReleaseRuntime(config, signal, { allowLegacyLaunchdIdentity: true })
+    assertObservedReleaseRuntime(preSwapRuntime, plan)
+    await assertReleaseRemovalOwnership(config, current, plan, preSwapApplied)
     record = await saveReleaseAction(config, record, 'staged')
     record = await saveReleaseAction(config, record, 'applying')
     await swapStagedRelease(config, plan, signal)
@@ -1768,14 +2264,15 @@ async function applyStoredReleasePlanLocked(
     throwIfAborted(signal)
     record = await saveReleaseAction(config, record, 'verifying')
     await verifyReleaseProfileFiles(config, plan, config.profile)
-    await verifyHealth(config, undefined, signal, plan.plugins.map(plugin => plugin.pluginId), runtimeManifestPath(config))
+    const restartedRuntime = await inspectManagedReleaseRuntime(config, signal, {
+      expectedPluginIds: plan.plugins.map(plugin => plugin.pluginId),
+    })
+    assertObservedReleaseRuntime(restartedRuntime, plan)
     throwIfAborted(signal)
     await persistAppliedRelease(config, plan)
     releaseCommitted = true
     record = await saveReleaseAction(config, record, 'succeeded', { result: 'success' })
     await auditBestEffort(config, { type: 'profile-release/applied', planId: plan.planId, releaseId: plan.releaseId, result: 'success' })
-    const profilesRoot = dirname(profileDir(config))
-    await rm(join(profilesRoot, names.backupProfile), { recursive: true, force: true }).catch(() => undefined)
     return record
   } catch (error: unknown) {
     if (releaseCommitted) return recoverReleaseInterrupted(config, plan, record)
@@ -1799,11 +2296,1000 @@ export async function readOrRecoverReleaseAction(config: FleetAgentConfig, planI
   assertReleaseReadyConfig(config)
   return withProfileLock(config, async () => {
     const record = await readReleaseAction(config, planId)
-    if (record === null || ['succeeded', 'rolled-back', 'manual-intervention'].includes(record.state)) return record
+    if (record === null) return null
     const plan = await readJson<FleetReleasePlan>(releasePlanPath(config, planId))
     if (plan === null) throw new AgentRuntimeError('plan-not-found', 'approved release plan was not found')
     validateFleetReleasePlan(plan)
+    assertReleaseActionPlan(record, plan)
+    if (['succeeded', 'rolled-back', 'manual-intervention'].includes(record.state)) return record
     return recoverReleaseInterrupted(config, plan, record)
+  })
+}
+
+function releaseRollbackForwardProfile(plan: FleetReleaseRollbackPlan): string {
+  return 'fleet-rollforward-' + plan.digest.slice(0, 24)
+}
+
+async function readReleaseRollbackAction(
+  config: FleetAgentConfig,
+  planId: string,
+): Promise<ReleaseRollbackActionRecord | null> {
+  return readJson<ReleaseRollbackActionRecord>(releaseRollbackActionPath(config, planId))
+}
+
+function assertReleaseRollbackActionPlan(record: ReleaseRollbackActionRecord, plan: FleetReleaseRollbackPlan): void {
+  if (record.planId !== plan.planId || record.planDigest !== plan.digest || record.transitionPlanId !== plan.transitionPlanId ||
+      record.deviceId !== plan.deviceId || record.profile !== plan.profile ||
+      record.fromManifestDigest !== plan.fromManifestDigest || record.toManifestDigest !== plan.toManifestDigest ||
+      record.fromReleaseDigest !== plan.fromReleaseDigest || record.toReleaseDigest !== plan.toReleaseDigest) {
+    throw new AgentRuntimeError('action-state-invalid', 'release rollback action record does not match its plan')
+  }
+}
+
+async function saveReleaseRollbackAction(
+  config: FleetAgentConfig,
+  record: ReleaseRollbackActionRecord,
+  state: AgentActionState,
+  fields: Partial<ReleaseRollbackActionRecord> = {},
+): Promise<ReleaseRollbackActionRecord> {
+  const next = { ...record, ...fields, state, updatedAt: new Date().toISOString() }
+  await atomicJson(releaseRollbackActionPath(config, record.planId), next)
+  return next
+}
+
+async function saveReleaseRollbackActionBestEffort(
+  config: FleetAgentConfig,
+  record: ReleaseRollbackActionRecord,
+  state: AgentActionState,
+  fields: Partial<ReleaseRollbackActionRecord> = {},
+): Promise<ReleaseRollbackActionRecord> {
+  const next = { ...record, ...fields, state, updatedAt: new Date().toISOString() }
+  try {
+    await atomicJson(releaseRollbackActionPath(config, record.planId), next)
+  } catch {
+    // The returned terminal state still tells the caller that durable recovery needs inspection.
+  }
+  return next
+}
+
+function assertRollbackDescriptorTransition(
+  descriptor: ReleaseRollbackDescriptor,
+  transition: FleetReleasePlan,
+): void {
+  if (descriptor.transitionPlanId !== transition.planId || descriptor.transitionPlanDigest !== transition.digest ||
+      descriptor.fromManifestDigest !== transition.fromManifestDigest || descriptor.toManifestDigest !== transition.toManifestDigest ||
+      descriptor.fromReleaseDigest !== transition.fromReleaseDigest || descriptor.toReleaseDigest !== transition.toReleaseDigest ||
+      descriptor.fromProfileHash !== transition.profileHash ||
+      descriptor.backupProfile !== (transition.restartRequired ? releaseProfileNames(transition).backupProfile : null) ||
+      (descriptor.previousAppliedRelease?.releaseDigest ?? null) !== transition.fromReleaseDigest) {
+    throw new AgentRuntimeError('rollback-descriptor-invalid', 'release rollback descriptor does not match its transition plan')
+  }
+}
+
+interface ReleaseRetentionTransitionMaterial {
+  transition: FleetReleasePlan
+  descriptor: ReleaseRollbackDescriptor
+  descriptorDigest: string
+}
+
+interface ReleaseRetentionDiscovery {
+  currentTransitionPlanId: string | null
+  retainedTransitionPlanIds: string[]
+  entries: FleetReleaseRetentionEntry[]
+  orphanBackupProfiles: string[]
+  orphanStageProfiles: string[]
+  orphanFailedProfiles: string[]
+  invalidTransitionCount: number
+}
+
+function releaseRetentionQuarantineProfile(plan: FleetReleaseRetentionPlan, transitionPlanId: string): string {
+  return 'fleet-failed-' + sha256Canonical({
+    kind: 'release-retention-quarantine',
+    planId: plan.planId,
+    transitionPlanId,
+  }).slice(0, 24)
+}
+
+async function readRealDirectoryEntries(path: string) {
+  try {
+    const info = await lstat(path)
+    if (info.isSymbolicLink() || !info.isDirectory()) {
+      throw new AgentRuntimeError('unsafe-state-directory', 'release retention state accepts real directories only')
+    }
+    return readdir(path, { withFileTypes: true })
+  } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
+    throw error
+  }
+}
+
+async function readRetentionTransitionMaterial(
+  config: ReleaseReadyFleetAgentConfig,
+  transitionPlanId: string,
+): Promise<ReleaseRetentionTransitionMaterial | null> {
+  const transition = await readJson<FleetReleasePlan>(releasePlanPath(config, transitionPlanId))
+  const descriptor = await readReleaseRollbackDescriptor(config, transitionPlanId)
+  const action = await readReleaseAction(config, transitionPlanId)
+  if (transition === null || descriptor === null || action === null) return null
+  validateFleetReleasePlan(transition)
+  if (transition.deviceId !== config.deviceId || transition.profile !== config.profile) {
+    throw new AgentRuntimeError('retention-transition-invalid', 'release retention transition belongs to another Agent')
+  }
+  assertRollbackDescriptorTransition(descriptor, transition)
+  assertReleaseActionPlan(action, transition)
+  const descriptorDigest = sha256Canonical(descriptor)
+  if (action.state !== 'succeeded' || action.result !== 'success' || action.rollbackDescriptorDigest !== descriptorDigest) {
+    throw new AgentRuntimeError('retention-transition-invalid', 'release retention requires a successful transition with its exact descriptor')
+  }
+  if (descriptor.backupProfile !== null) {
+    const backup = await profileManifestAndHash(config, descriptor.backupProfile)
+    if (backup.manifestDigest !== descriptor.fromManifestDigest || backup.profileHash !== descriptor.fromProfileHash) {
+      throw new AgentRuntimeError('retention-backup-mismatch', 'release backup no longer matches its transition descriptor')
+    }
+  }
+  return { transition, descriptor, descriptorDigest }
+}
+
+async function successfullyRolledBackTransitionIds(
+  config: ReleaseReadyFleetAgentConfig,
+): Promise<Set<string>> {
+  const result = new Set<string>()
+  const directory = join(config.stateDir, 'release-rollback-actions')
+  const entries = (await readRealDirectoryEntries(directory))
+    .filter(entry => /^[0-9a-f]{64}\.json$/.test(entry.name))
+    .sort((left, right) => left.name.localeCompare(right.name))
+  if (entries.length > 4096) {
+    throw new AgentRuntimeError('retention-inventory-limit', 'release rollback action inventory is too large')
+  }
+  for (const entry of entries) {
+    if (entry.isSymbolicLink() || !entry.isFile()) continue
+    const planId = 'release-rollback-plan:' + entry.name.slice(0, 64)
+    try {
+      const plan = await readJson<FleetReleaseRollbackPlan>(releaseRollbackPlanPath(config, planId))
+      const action = await readReleaseRollbackAction(config, planId)
+      if (plan === null || action === null) continue
+      validateFleetReleaseRollbackPlan(plan)
+      assertReleaseRollbackActionPlan(action, plan)
+      if (plan.deviceId === config.deviceId && plan.profile === config.profile &&
+          action.state === 'succeeded' && action.result === 'success') {
+        result.add(plan.transitionPlanId)
+      }
+    } catch {
+      // An invalid rollback record cannot retire a transition or hide invalid descriptor state.
+    }
+  }
+  const releaseActionDirectory = join(config.stateDir, 'release-actions')
+  const releaseActionEntries = (await readRealDirectoryEntries(releaseActionDirectory))
+    .filter(entry => /^[0-9a-f]{64}\.json$/.test(entry.name))
+    .sort((left, right) => left.name.localeCompare(right.name))
+  if (releaseActionEntries.length > 4096) {
+    throw new AgentRuntimeError('retention-inventory-limit', 'release action inventory is too large')
+  }
+  for (const entry of releaseActionEntries) {
+    if (entry.isSymbolicLink() || !entry.isFile()) continue
+    const transitionPlanId = 'release-plan:' + entry.name.slice(0, 64)
+    try {
+      const plan = await readJson<FleetReleasePlan>(releasePlanPath(config, transitionPlanId))
+      const action = await readReleaseAction(config, transitionPlanId)
+      const descriptor = await readReleaseRollbackDescriptor(config, transitionPlanId)
+      if (plan === null || action === null || descriptor === null) continue
+      validateFleetReleasePlan(plan)
+      assertReleaseActionPlan(action, plan)
+      assertRollbackDescriptorTransition(descriptor, plan)
+      if (plan.deviceId === config.deviceId && plan.profile === config.profile &&
+          action.state === 'rolled-back' && action.result === 'rolled-back' &&
+          action.rollbackDescriptorDigest === sha256Canonical(descriptor)) {
+        result.add(transitionPlanId)
+      }
+    } catch {
+      // An invalid automatic rollback record cannot retire a transition or hide descriptor drift.
+    }
+  }
+  return result
+}
+
+async function discoverReleaseRetention(
+  config: ReleaseReadyFleetAgentConfig,
+  strictChain: boolean,
+): Promise<ReleaseRetentionDiscovery> {
+  const materials = new Map<string, ReleaseRetentionTransitionMaterial>()
+  const legalBackupProfiles = new Set<string>()
+  const rolledBackTransitionPlanIds = await successfullyRolledBackTransitionIds(config)
+  let invalidTransitionCount = 0
+  const descriptorDirectory = join(config.stateDir, 'release-rollbacks')
+  const descriptorEntries = (await readRealDirectoryEntries(descriptorDirectory))
+    .filter(entry => /^[0-9a-f]{64}\.json$/.test(entry.name))
+    .sort((left, right) => left.name.localeCompare(right.name))
+  if (descriptorEntries.length > 4096) {
+    throw new AgentRuntimeError('retention-inventory-limit', 'release retention descriptor inventory is too large')
+  }
+  for (const entry of descriptorEntries) {
+    const transitionPlanId = 'release-plan:' + entry.name.slice(0, 64)
+    try {
+      if (entry.isSymbolicLink() || !entry.isFile()) throw new AgentRuntimeError('unsafe-state-file', 'release descriptor must be a regular file')
+      if (rolledBackTransitionPlanIds.has(transitionPlanId)) continue
+      const material = await readRetentionTransitionMaterial(config, transitionPlanId)
+      if (material === null) {
+        invalidTransitionCount += 1
+        continue
+      }
+      materials.set(transitionPlanId, material)
+      if (material.descriptor.backupProfile !== null) legalBackupProfiles.add(material.descriptor.backupProfile)
+    } catch {
+      invalidTransitionCount += 1
+    }
+  }
+
+  const activeStageProfiles = new Set<string>()
+  const activeFailedProfiles = new Set<string>()
+  const activeBackupProfiles = new Set<string>()
+  const actionDirectory = join(config.stateDir, 'release-actions')
+  const actionEntries = (await readRealDirectoryEntries(actionDirectory))
+    .filter(entry => /^[0-9a-f]{64}\.json$/.test(entry.name))
+    .sort((left, right) => left.name.localeCompare(right.name))
+  if (actionEntries.length > 4096) {
+    throw new AgentRuntimeError('retention-inventory-limit', 'release retention action inventory is too large')
+  }
+  for (const entry of actionEntries) {
+    if (entry.isSymbolicLink() || !entry.isFile()) continue
+    const transitionPlanId = 'release-plan:' + entry.name.slice(0, 64)
+    try {
+      const transition = await readJson<FleetReleasePlan>(releasePlanPath(config, transitionPlanId))
+      const action = await readReleaseAction(config, transitionPlanId)
+      if (transition === null || action === null) continue
+      validateFleetReleasePlan(transition)
+      assertReleaseActionPlan(action, transition)
+      if (!['succeeded', 'rolled-back', 'manual-intervention'].includes(action.state)) {
+        activeStageProfiles.add(action.stageProfile)
+        activeBackupProfiles.add(action.backupProfile)
+        activeFailedProfiles.add(releaseProfileNames(transition).failedProfile)
+      }
+    } catch {
+      // Invalid action state cannot authorize cleanup or suppress orphan inventory.
+    }
+  }
+
+  const retiredTransitionPlanIds = new Set<string>(rolledBackTransitionPlanIds)
+  const retentionActionDirectory = join(config.stateDir, 'release-retention-actions')
+  const retentionActionEntries = (await readRealDirectoryEntries(retentionActionDirectory))
+    .filter(entry => /^[0-9a-f]{64}\.json$/.test(entry.name))
+    .sort((left, right) => left.name.localeCompare(right.name))
+  if (retentionActionEntries.length > 4096) {
+    throw new AgentRuntimeError('retention-inventory-limit', 'release retention cleanup inventory is too large')
+  }
+  for (const entry of retentionActionEntries) {
+    if (entry.isSymbolicLink() || !entry.isFile()) continue
+    const planId = 'release-retention-plan:' + entry.name.slice(0, 64)
+    try {
+      const plan = await readJson<FleetReleaseRetentionPlan>(releaseRetentionPlanPath(config, planId))
+      if (plan === null) continue
+      validateFleetReleaseRetentionPlan(plan)
+      const action = await readReleaseRetentionAction(config, plan)
+      if (action === null) continue
+      if (action.state === 'succeeded') {
+        for (const transitionPlanId of action.removedTransitionPlanIds) retiredTransitionPlanIds.add(transitionPlanId)
+      } else if (action.activeTransitionPlanId !== null) {
+        activeFailedProfiles.add(releaseRetentionQuarantineProfile(plan, action.activeTransitionPlanId))
+      }
+    } catch {
+      // Invalid cleanup state cannot create a retirement tombstone or hide a quarantine orphan.
+    }
+  }
+
+  const applied = await readAppliedRelease(config)
+  const currentTransitionPlanId = applied?.schemaVersion === 2 ? applied.transitionPlanId! : null
+  const retainedTransitionPlanIds: string[] = []
+  const entries: FleetReleaseRetentionEntry[] = []
+  const seen = new Set<string>()
+  let marker = applied
+  let depth = 0
+  while (marker?.schemaVersion === 2) {
+    const transitionPlanId = marker.transitionPlanId!
+    if (seen.has(transitionPlanId) || seen.size >= 4096) {
+      if (strictChain) throw new AgentRuntimeError('retention-chain-invalid', 'release retention transition chain is cyclic or too deep')
+      invalidTransitionCount += 1
+      break
+    }
+    seen.add(transitionPlanId)
+    const material = materials.get(transitionPlanId)
+    if (material === undefined) {
+      if (depth > 0 && retiredTransitionPlanIds.has(transitionPlanId)) break
+      if (strictChain && depth < 2) {
+        throw new AgentRuntimeError('retention-chain-invalid', 'current or previous release transition has no valid rollback descriptor')
+      }
+      break
+    }
+    if (marker.deviceId !== config.deviceId || marker.profile !== config.profile ||
+        marker.transitionPlanDigest !== material.transition.digest || marker.releaseDigest !== material.transition.toReleaseDigest ||
+        marker.releaseId !== material.transition.releaseId || marker.releaseVersion !== material.transition.releaseVersion) {
+      if (strictChain) throw new AgentRuntimeError('retention-chain-invalid', 'applied release marker does not match its transition chain')
+      invalidTransitionCount += 1
+      break
+    }
+    if (depth < 2) {
+      retainedTransitionPlanIds.push(transitionPlanId)
+    } else {
+      entries.push({
+        transitionPlanId,
+        descriptorDigest: material.descriptorDigest,
+        backupProfile: material.descriptor.backupProfile,
+        backupManifestDigest: material.descriptor.backupProfile === null ? null : material.descriptor.fromManifestDigest,
+        backupProfileHash: material.descriptor.backupProfile === null ? null : material.descriptor.fromProfileHash,
+        reason: 'superseded',
+      })
+    }
+    marker = material.descriptor.previousAppliedRelease
+    depth += 1
+  }
+
+  const orphanBackupProfiles: string[] = []
+  const orphanStageProfiles: string[] = []
+  const orphanFailedProfiles: string[] = []
+  const profilesRoot = dirname(profileDir(config))
+  for (const entry of (await readRealDirectoryEntries(profilesRoot)).sort((left, right) => left.name.localeCompare(right.name))) {
+    if (/^fleet-backup-[0-9a-f]{24}$/.test(entry.name) &&
+        !legalBackupProfiles.has(entry.name) && !activeBackupProfiles.has(entry.name)) {
+      orphanBackupProfiles.push(entry.name)
+    } else if (/^fleet-stage-[0-9a-f]{24}$/.test(entry.name) && !activeStageProfiles.has(entry.name)) {
+      orphanStageProfiles.push(entry.name)
+    } else if (/^fleet-failed-[0-9a-f]{24}$/.test(entry.name) && !activeFailedProfiles.has(entry.name)) {
+      orphanFailedProfiles.push(entry.name)
+    }
+  }
+  return {
+    currentTransitionPlanId,
+    retainedTransitionPlanIds: retainedTransitionPlanIds.sort(),
+    entries: entries.sort((left, right) => left.transitionPlanId.localeCompare(right.transitionPlanId)),
+    orphanBackupProfiles,
+    orphanStageProfiles,
+    orphanFailedProfiles,
+    invalidTransitionCount,
+  }
+}
+
+async function releaseRetentionInspection(config: ReleaseReadyFleetAgentConfig): Promise<ReleaseRetentionInspection> {
+  const discovery = await discoverReleaseRetention(config, false)
+  const orphanCount = discovery.orphanBackupProfiles.length + discovery.orphanStageProfiles.length + discovery.orphanFailedProfiles.length
+  return {
+    retainedCount: discovery.retainedTransitionPlanIds.length,
+    eligibleCount: discovery.entries.length,
+    orphanBackupCount: discovery.orphanBackupProfiles.length,
+    orphanStageCount: discovery.orphanStageProfiles.length,
+    orphanFailedCount: discovery.orphanFailedProfiles.length,
+    orphanCount,
+    invalidTransitionCount: discovery.invalidTransitionCount,
+  }
+}
+
+async function buildReleaseRetentionPlan(
+  config: ReleaseReadyFleetAgentConfig,
+  createdAt: string,
+  expiresAt: string,
+): Promise<FleetReleaseRetentionPlan> {
+  const discovery = await discoverReleaseRetention(config, true)
+  return createFleetReleaseRetentionPlan({
+    protocolVersion: FLEET_RELEASE_RETENTION_PROTOCOL_VERSION,
+    kind: 'profile-release-retention',
+    deviceId: config.deviceId,
+    profile: config.profile,
+    currentTransitionPlanId: discovery.currentTransitionPlanId,
+    retainedTransitionPlanIds: discovery.retainedTransitionPlanIds,
+    entries: discovery.entries,
+    orphanBackupProfiles: discovery.orphanBackupProfiles,
+    orphanStageProfiles: discovery.orphanStageProfiles,
+    orphanFailedProfiles: discovery.orphanFailedProfiles,
+    createdAt,
+    expiresAt,
+  })
+}
+
+const RELEASE_RETENTION_ACTION_KEYS = [
+  'planId', 'planDigest', 'approvalId', 'principalId', 'idempotencyKey', 'deviceId', 'profile',
+  'currentTransitionPlanId', 'state', 'removedTransitionPlanIds', 'activeTransitionPlanId',
+  'activeBackupQuarantinePrepared', 'activeBackupRemoved', 'updatedAt', 'result',
+] as const
+
+function validateReleaseRetentionAction(
+  value: unknown,
+  plan: FleetReleaseRetentionPlan,
+): asserts value is ReleaseRetentionActionRecord {
+  const body = objectValue(value)
+  if (body === null || Object.keys(body).sort().join(',') !== [...RELEASE_RETENTION_ACTION_KEYS].sort().join(',')) {
+    throw new AgentRuntimeError('action-state-invalid', 'release retention action has unsupported or missing fields')
+  }
+  const updatedAt = typeof body.updatedAt === 'string' ? Date.parse(body.updatedAt) : Number.NaN
+  if (body.planId !== plan.planId || body.planDigest !== plan.digest || body.deviceId !== plan.deviceId ||
+      body.profile !== plan.profile || body.currentTransitionPlanId !== plan.currentTransitionPlanId ||
+      typeof body.approvalId !== 'string' || typeof body.principalId !== 'string' ||
+      typeof body.idempotencyKey !== 'string' || !/^[0-9a-f]{64}$/.test(body.idempotencyKey) ||
+      !['approved', 'applying', 'succeeded'].includes(body.state as string) ||
+      !Array.isArray(body.removedTransitionPlanIds) || body.removedTransitionPlanIds.some(id => typeof id !== 'string') ||
+      (body.activeTransitionPlanId !== null && typeof body.activeTransitionPlanId !== 'string') ||
+      typeof body.activeBackupQuarantinePrepared !== 'boolean' || typeof body.activeBackupRemoved !== 'boolean' ||
+      !Number.isFinite(updatedAt) || new Date(updatedAt).toISOString() !== body.updatedAt ||
+      (body.result !== null && body.result !== 'success')) {
+    throw new AgentRuntimeError('action-state-invalid', 'release retention action is invalid')
+  }
+  const entryIds = plan.entries.map(entry => entry.transitionPlanId)
+  const removed = body.removedTransitionPlanIds as string[]
+  if (new Set(removed).size !== removed.length || removed.some((id, index) => !entryIds.includes(id) || (index > 0 && id <= removed[index - 1]!)) ||
+      (body.activeTransitionPlanId !== null && (!entryIds.includes(body.activeTransitionPlanId as string) || removed.includes(body.activeTransitionPlanId as string))) ||
+      (body.activeTransitionPlanId === null && (body.activeBackupQuarantinePrepared === true || body.activeBackupRemoved === true)) ||
+      (body.activeBackupQuarantinePrepared === true && body.activeBackupRemoved === true) ||
+      (body.state === 'succeeded' && (body.result !== 'success' || removed.length !== entryIds.length || body.activeTransitionPlanId !== null)) ||
+      (body.state !== 'succeeded' && body.result !== null)) {
+    throw new AgentRuntimeError('action-state-invalid', 'release retention action progress is invalid')
+  }
+}
+
+async function readReleaseRetentionAction(
+  config: FleetAgentConfig,
+  plan: FleetReleaseRetentionPlan,
+): Promise<ReleaseRetentionActionRecord | null> {
+  const value = await readJson<unknown>(releaseRetentionActionPath(config, plan.planId))
+  if (value === null) return null
+  validateReleaseRetentionAction(value, plan)
+  return value
+}
+
+async function saveReleaseRetentionAction(
+  config: FleetAgentConfig,
+  value: ReleaseRetentionActionRecord,
+  fields: Partial<ReleaseRetentionActionRecord>,
+): Promise<ReleaseRetentionActionRecord> {
+  const next: ReleaseRetentionActionRecord = { ...value, ...fields, updatedAt: new Date().toISOString() }
+  await atomicJson(releaseRetentionActionPath(config, value.planId), next)
+  return next
+}
+
+function assertRetentionEntryDescriptor(
+  entry: FleetReleaseRetentionEntry,
+  descriptor: ReleaseRollbackDescriptor,
+): void {
+  if (descriptor.transitionPlanId !== entry.transitionPlanId || sha256Canonical(descriptor) !== entry.descriptorDigest ||
+      descriptor.backupProfile !== entry.backupProfile ||
+      (descriptor.backupProfile === null
+        ? entry.backupManifestDigest !== null || entry.backupProfileHash !== null
+        : descriptor.fromManifestDigest !== entry.backupManifestDigest || descriptor.fromProfileHash !== entry.backupProfileHash)) {
+    throw new AgentRuntimeError('retention-entry-mismatch', 'release retention entry no longer matches its descriptor')
+  }
+}
+
+async function executeReleaseRetention(
+  config: ReleaseReadyFleetAgentConfig,
+  plan: FleetReleaseRetentionPlan,
+  initial: ReleaseRetentionActionRecord,
+): Promise<ReleaseRetentionActionRecord> {
+  let record = initial
+  for (const entry of plan.entries) {
+    if (record.removedTransitionPlanIds.includes(entry.transitionPlanId)) continue
+    if (record.activeTransitionPlanId !== null && record.activeTransitionPlanId !== entry.transitionPlanId) {
+      throw new AgentRuntimeError('action-state-invalid', 'release retention action has ambiguous progress')
+    }
+    if (record.activeTransitionPlanId === null) {
+      const material = await readRetentionTransitionMaterial(config, entry.transitionPlanId)
+      if (material === null) throw new AgentRuntimeError('retention-entry-mismatch', 'release retention descriptor disappeared before cleanup')
+      assertRetentionEntryDescriptor(entry, material.descriptor)
+      record = await saveReleaseRetentionAction(config, record, {
+        state: 'applying', activeTransitionPlanId: entry.transitionPlanId,
+        activeBackupQuarantinePrepared: false, activeBackupRemoved: entry.backupProfile === null,
+      })
+    }
+    if (!record.activeBackupRemoved) {
+      const descriptor = await readReleaseRollbackDescriptor(config, entry.transitionPlanId)
+      if (descriptor === null) throw new AgentRuntimeError('retention-entry-mismatch', 'release retention descriptor disappeared before its backup')
+      assertRetentionEntryDescriptor(entry, descriptor)
+      if (entry.backupProfile === null || entry.backupManifestDigest === null || entry.backupProfileHash === null) {
+        throw new AgentRuntimeError('retention-entry-mismatch', 'release retention backup binding is incomplete')
+      }
+      const profilesRoot = dirname(profileDir(config))
+      const backupPath = join(profilesRoot, entry.backupProfile)
+      const quarantinePath = join(profilesRoot, releaseRetentionQuarantineProfile(plan, entry.transitionPlanId))
+      if (!record.activeBackupQuarantinePrepared) {
+        if (await regularDirectoryExists(quarantinePath)) {
+          throw new AgentRuntimeError('retention-layout-conflict', 'release retention quarantine path is unexpectedly occupied')
+        }
+        const backup = await profileManifestAndHash(config, entry.backupProfile)
+        if (backup.manifestDigest !== entry.backupManifestDigest || backup.profileHash !== entry.backupProfileHash) {
+          throw new AgentRuntimeError('retention-backup-mismatch', 'release retention backup changed after approval')
+        }
+        record = await saveReleaseRetentionAction(config, record, { activeBackupQuarantinePrepared: true })
+      }
+      const backupExists = await regularDirectoryExists(backupPath)
+      const quarantineExists = await regularDirectoryExists(quarantinePath)
+      if (backupExists && quarantineExists) {
+        throw new AgentRuntimeError('retention-layout-conflict', 'release retention backup and quarantine both exist')
+      }
+      if (backupExists) {
+        const backup = await profileManifestAndHash(config, entry.backupProfile)
+        if (backup.manifestDigest !== entry.backupManifestDigest || backup.profileHash !== entry.backupProfileHash) {
+          throw new AgentRuntimeError('retention-backup-mismatch', 'release retention backup changed before quarantine')
+        }
+        await rename(backupPath, quarantinePath)
+        await syncDirectory(profilesRoot)
+      }
+      if (await regularDirectoryExists(quarantinePath)) {
+        await rm(quarantinePath, { recursive: true })
+        await syncDirectory(profilesRoot)
+      }
+      record = await saveReleaseRetentionAction(config, record, {
+        activeBackupQuarantinePrepared: false, activeBackupRemoved: true,
+      })
+    } else if (entry.backupProfile !== null && (
+      await regularDirectoryExists(join(dirname(profileDir(config)), entry.backupProfile)) ||
+      await regularDirectoryExists(join(dirname(profileDir(config)), releaseRetentionQuarantineProfile(plan, entry.transitionPlanId)))
+    )) {
+      throw new AgentRuntimeError('action-state-invalid', 'a removed release backup or quarantine reappeared during retention')
+    }
+    const descriptor = await readReleaseRollbackDescriptor(config, entry.transitionPlanId)
+    if (descriptor !== null) {
+      assertRetentionEntryDescriptor(entry, descriptor)
+      await rm(releaseRollbackDescriptorPath(config, entry.transitionPlanId))
+      await syncDirectory(dirname(releaseRollbackDescriptorPath(config, entry.transitionPlanId)))
+    }
+    record = await saveReleaseRetentionAction(config, record, {
+      removedTransitionPlanIds: [...record.removedTransitionPlanIds, entry.transitionPlanId].sort(),
+      activeTransitionPlanId: null,
+      activeBackupQuarantinePrepared: false,
+      activeBackupRemoved: false,
+    })
+    await auditBestEffort(config, {
+      type: 'profile-release/retention-entry-removed', planId: plan.planId,
+      transitionPlanId: entry.transitionPlanId, backupProfile: entry.backupProfile,
+    })
+  }
+  record = await saveReleaseRetentionAction(config, record, { state: 'succeeded', result: 'success' })
+  await auditBestEffort(config, {
+    type: 'profile-release/retention-applied', planId: plan.planId,
+    removedTransitionPlanIds: record.removedTransitionPlanIds,
+  })
+  return record
+}
+
+export async function createStoredReleaseRetentionPlan(
+  config: FleetAgentConfig,
+  now = new Date(),
+): Promise<FleetReleaseRetentionPlan> {
+  assertReleaseReadyConfig(config)
+  return withProfileLock(config, async () => {
+    if (!Number.isFinite(now.getTime())) throw new AgentRuntimeError('invalid-time', 'release retention plan time is invalid')
+    const createdAt = now.toISOString()
+    const expiresAt = new Date(now.getTime() + Math.min(config.planTtlMs, 60 * 60 * 1000)).toISOString()
+    const plan = await buildReleaseRetentionPlan(config, createdAt, expiresAt)
+    await atomicJson(releaseRetentionPlanPath(config, plan.planId), plan)
+    await audit(config, {
+      type: 'profile-release/retention-plan-created', planId: plan.planId,
+      retainedCount: plan.retainedTransitionPlanIds.length, eligibleCount: plan.entries.length,
+      orphanCount: plan.orphanBackupProfiles.length + plan.orphanStageProfiles.length + plan.orphanFailedProfiles.length,
+    })
+    return plan
+  })
+}
+
+export async function applyStoredReleaseRetentionPlan(
+  config: FleetAgentConfig,
+  approval: FleetReleaseRetentionApproval,
+  now = new Date(),
+): Promise<ReleaseRetentionActionRecord> {
+  assertReleaseReadyConfig(config)
+  return withProfileLock(config, async () => {
+    const plan = await readJson<FleetReleaseRetentionPlan>(releaseRetentionPlanPath(config, approval.planId))
+    if (plan === null) throw new AgentRuntimeError('plan-not-found', 'approved release retention plan was not found')
+    validateFleetReleaseRetentionPlan(plan)
+    let existing = await readReleaseRetentionAction(config, plan)
+    const identity = validateFleetReleaseRetentionApproval(plan, approval, approval.approvedAt)
+    if (existing !== null) {
+      if (existing.idempotencyKey !== identity.idempotencyKey) {
+        throw new AgentRuntimeError('idempotency-conflict', 'release retention plan already has a different approval')
+      }
+      if (existing.state === 'succeeded') return existing
+      const current = await readAppliedRelease(config)
+      const currentTransitionPlanId = current?.schemaVersion === 2 ? current.transitionPlanId! : null
+      if (currentTransitionPlanId !== plan.currentTransitionPlanId) {
+        throw new AgentRuntimeError('retention-plan-stale', 'a new release invalidated the in-progress retention plan')
+      }
+      if (existing.state === 'approved' && existing.removedTransitionPlanIds.length === 0 && existing.activeTransitionPlanId === null) {
+        const recomputed = await buildReleaseRetentionPlan(config, plan.createdAt, plan.expiresAt)
+        if (recomputed.digest !== plan.digest) throw new AgentRuntimeError('retention-plan-stale', 'release retention state changed after approval')
+      }
+      return executeReleaseRetention(config, plan, existing)
+    }
+    validateFleetReleaseRetentionApproval(plan, approval, now)
+    const recomputed = await buildReleaseRetentionPlan(config, plan.createdAt, plan.expiresAt)
+    if (recomputed.digest !== plan.digest) throw new AgentRuntimeError('retention-plan-stale', 'release retention state changed after the plan was created')
+    existing = {
+      planId: plan.planId,
+      planDigest: plan.digest,
+      approvalId: approval.approvalId,
+      principalId: approval.principalId,
+      idempotencyKey: identity.idempotencyKey,
+      deviceId: plan.deviceId,
+      profile: plan.profile,
+      currentTransitionPlanId: plan.currentTransitionPlanId,
+      state: 'approved',
+      removedTransitionPlanIds: [],
+      activeTransitionPlanId: null,
+      activeBackupQuarantinePrepared: false,
+      activeBackupRemoved: false,
+      updatedAt: new Date().toISOString(),
+      result: null,
+    }
+    await atomicJson(releaseRetentionActionPath(config, plan.planId), existing)
+    await audit(config, {
+      type: 'profile-release/retention-approved', planId: plan.planId,
+      approvalId: approval.approvalId, principalId: approval.principalId,
+    })
+    return executeReleaseRetention(config, plan, existing)
+  })
+}
+
+export async function readReleaseRetentionActionStatus(
+  config: FleetAgentConfig,
+  planId: string,
+): Promise<ReleaseRetentionActionRecord | null> {
+  assertReleaseReadyConfig(config)
+  return withProfileLock(config, async () => {
+    const plan = await readJson<FleetReleaseRetentionPlan>(releaseRetentionPlanPath(config, planId))
+    if (plan === null) throw new AgentRuntimeError('plan-not-found', 'release retention plan was not found')
+    validateFleetReleaseRetentionPlan(plan)
+    return readReleaseRetentionAction(config, plan)
+  })
+}
+
+async function readRollbackTransition(
+  config: ReleaseReadyFleetAgentConfig,
+  transitionPlanId: string,
+): Promise<{ transition: FleetReleasePlan; descriptor: ReleaseRollbackDescriptor }> {
+  const transition = await readJson<FleetReleasePlan>(releasePlanPath(config, transitionPlanId))
+  if (transition === null) throw new AgentRuntimeError('plan-not-found', 'release transition plan was not found')
+  validateFleetReleasePlan(transition)
+  if (transition.deviceId !== config.deviceId || transition.profile !== config.profile) {
+    throw new AgentRuntimeError('rollback-descriptor-invalid', 'release transition identity does not match this Agent')
+  }
+  const descriptor = await readReleaseRollbackDescriptor(config, transition.planId)
+  if (descriptor === null) throw new AgentRuntimeError('rollback-not-available', 'release transition has no durable rollback descriptor')
+  assertRollbackDescriptorTransition(descriptor, transition)
+  return { transition, descriptor }
+}
+
+function assertRollbackPlanDescriptor(
+  plan: FleetReleaseRollbackPlan,
+  transition: FleetReleasePlan,
+  descriptor: ReleaseRollbackDescriptor,
+): void {
+  if (transition.digest !== plan.transitionPlanDigest || transition.deviceId !== plan.deviceId || transition.profile !== plan.profile ||
+      descriptor.toManifestDigest !== plan.fromManifestDigest || descriptor.fromManifestDigest !== plan.toManifestDigest ||
+      descriptor.toReleaseDigest !== plan.fromReleaseDigest || descriptor.fromReleaseDigest !== plan.toReleaseDigest ||
+      descriptor.fromProfileHash !== plan.toProfileHash) {
+    throw new AgentRuntimeError('rollback-descriptor-invalid', 'release rollback plan no longer matches its transition descriptor')
+  }
+}
+
+async function profileManifestAndHash(
+  config: ReleaseReadyFleetAgentConfig,
+  profile: string,
+): Promise<{ manifestDigest: string; profileHash: string }> {
+  const targetConfig = configForProfile(config, profile)
+  if (!await regularDirectoryExists(profileDir(targetConfig))) {
+    throw new AgentRuntimeError('rollback-target-mismatch', 'rollback profile directory is missing')
+  }
+  const source = await readRegularOptional(runtimeManifestPath(targetConfig))
+  if (source === null) throw new AgentRuntimeError('release-runtime-manifest-mismatch', 'rollback profile has no Fleet runtime manifest')
+  parseFleetManifest(source)
+  return { manifestDigest: sha256(source), profileHash: await computeProfileHash(targetConfig) }
+}
+
+function releaseDigestOf(applied: FleetAppliedRelease | null): string | null {
+  return applied?.releaseDigest ?? null
+}
+
+async function assertRollbackSourceState(
+  config: ReleaseReadyFleetAgentConfig,
+  plan: FleetReleaseRollbackPlan,
+  descriptor: ReleaseRollbackDescriptor,
+  signal?: AbortSignal,
+): Promise<FleetAppliedRelease | null> {
+  const current = await loadState(config, signal)
+  const currentApplied = await readAppliedRelease(config)
+  const runtime = await inspectManagedReleaseRuntime(config, signal)
+  if (current.manifestDigest !== plan.fromManifestDigest || current.profileHash !== plan.fromProfileHash ||
+      current.dshVersion !== plan.observedDshVersion || releaseDigestOf(currentApplied) !== plan.fromReleaseDigest) {
+    throw new AgentRuntimeError('release-ownership-conflict', 'live release no longer matches the approved rollback source')
+  }
+  assertObservedReleaseRuntime(runtime, plan)
+  if (descriptor.backupProfile !== null) {
+    const backup = await profileManifestAndHash(config, descriptor.backupProfile)
+    if (backup.manifestDigest !== plan.toManifestDigest || backup.profileHash !== plan.toProfileHash) {
+      throw new AgentRuntimeError('rollback-target-mismatch', 'retained release backup no longer matches the approved rollback target')
+    }
+  }
+  return currentApplied
+}
+
+async function assertRollbackTargetProfile(
+  config: ReleaseReadyFleetAgentConfig,
+  plan: FleetReleaseRollbackPlan,
+  descriptor: ReleaseRollbackDescriptor,
+): Promise<void> {
+  const target = await profileManifestAndHash(config, config.profile)
+  if (target.manifestDigest !== plan.toManifestDigest || target.profileHash !== plan.toProfileHash) {
+    throw new AgentRuntimeError('rollback-target-mismatch', 'restored release profile does not match the approved rollback target')
+  }
+  await restoreAppliedReleaseMarker(config, descriptor.previousAppliedRelease)
+  const restored = await readAppliedRelease(config)
+  if (releaseDigestOf(restored) !== plan.toReleaseDigest) {
+    throw new AgentRuntimeError('rollback-target-mismatch', 'restored applied release marker does not match the approved rollback target')
+  }
+  await ensureServiceStarted(config)
+  const runtime = await inspectManagedReleaseRuntime(config, undefined, {
+    allowLegacyLaunchdIdentity: true,
+    expectedPluginIds: descriptor.previousAppliedRelease?.plugins.map(plugin => plugin.pluginId) ?? [],
+  })
+  assertObservedReleaseRuntime(runtime, plan)
+}
+
+async function rollbackCurrentReleaseAfterFailure(
+  config: ReleaseReadyFleetAgentConfig,
+  plan: FleetReleaseRollbackPlan,
+  descriptor: ReleaseRollbackDescriptor,
+  currentApplied: FleetAppliedRelease | null,
+): Promise<void> {
+  if (descriptor.backupProfile !== null) {
+    const profilesRoot = dirname(profileDir(config))
+    const liveDir = profileDir(config)
+    const backupDir = join(profilesRoot, descriptor.backupProfile)
+    const forwardDir = join(profilesRoot, releaseRollbackForwardProfile(plan))
+    if (await regularDirectoryExists(forwardDir)) {
+      try { await stopDsh(config) } catch {
+        const active = (await listenerPids(config, config.restart.port))[0]
+        if (active !== undefined) throw new AgentRuntimeError('restart-cleanup-failed', 'cannot stop the failed rollback target')
+      }
+      if (await regularDirectoryExists(backupDir)) {
+        throw new AgentRuntimeError('rollback-layout-conflict', 'rollback backup path is unexpectedly occupied')
+      }
+      if (await regularDirectoryExists(liveDir)) await rename(liveDir, backupDir)
+      await rename(forwardDir, liveDir)
+      await syncDirectory(profilesRoot)
+    }
+  }
+  await restoreAppliedReleaseMarker(config, currentApplied)
+  await ensureServiceStarted(config)
+  const runtime = await inspectManagedReleaseRuntime(config, undefined, {
+    expectedPluginIds: currentApplied?.plugins.map(plugin => plugin.pluginId) ?? [],
+  })
+  assertObservedReleaseRuntime(runtime, plan)
+}
+
+async function executeStoredReleaseRollback(
+  config: ReleaseReadyFleetAgentConfig,
+  plan: FleetReleaseRollbackPlan,
+  descriptor: ReleaseRollbackDescriptor,
+  record: ReleaseRollbackActionRecord,
+  signal?: AbortSignal,
+): Promise<ReleaseRollbackActionRecord> {
+  let currentApplied: FleetAppliedRelease | null
+  try {
+    currentApplied = await assertRollbackSourceState(config, plan, descriptor, signal)
+  } catch (error: unknown) {
+    const errorCode = typeof (error as { code?: unknown }).code === 'string'
+      ? (error as { code: string }).code
+      : 'release-rollback-failed'
+    return saveReleaseRollbackActionBestEffort(config, record, 'manual-intervention', {
+      result: 'manual-intervention', errorCode,
+    })
+  }
+  let currentRecord = await saveReleaseRollbackAction(config, record, 'applying')
+  try {
+    if (descriptor.backupProfile !== null) {
+      const profilesRoot = dirname(profileDir(config))
+      const liveDir = profileDir(config)
+      const backupDir = join(profilesRoot, descriptor.backupProfile)
+      const forwardDir = join(profilesRoot, releaseRollbackForwardProfile(plan))
+      await rm(forwardDir, { recursive: true, force: true })
+      await stopDsh(config, signal)
+      throwIfAborted(signal)
+      await rename(liveDir, forwardDir)
+      await syncDirectory(profilesRoot)
+      try {
+        await rename(backupDir, liveDir)
+        await syncDirectory(profilesRoot)
+      } catch (error: unknown) {
+        await rename(forwardDir, liveDir)
+        await syncDirectory(profilesRoot)
+        await startDsh(config)
+        throw error
+      }
+    }
+    currentRecord = await saveReleaseRollbackAction(config, currentRecord, 'restarting')
+    await ensureServiceStarted(config)
+    throwIfAborted(signal)
+    currentRecord = await saveReleaseRollbackAction(config, currentRecord, 'verifying')
+    await assertRollbackTargetProfile(config, plan, descriptor)
+    throwIfAborted(signal)
+    if (descriptor.backupProfile !== null) {
+      await rm(join(dirname(profileDir(config)), releaseRollbackForwardProfile(plan)), { recursive: true, force: true })
+    }
+    currentRecord = await saveReleaseRollbackAction(config, currentRecord, 'succeeded', { result: 'success' })
+    await auditBestEffort(config, {
+      type: 'profile-release/rollback-applied', planId: plan.planId, transitionPlanId: plan.transitionPlanId, result: 'success',
+    })
+    return currentRecord
+  } catch (error: unknown) {
+    const errorCode = typeof (error as { code?: unknown }).code === 'string'
+      ? (error as { code: string }).code
+      : 'release-rollback-failed'
+    try {
+      await rollbackCurrentReleaseAfterFailure(config, plan, descriptor, currentApplied)
+    } catch {
+      return saveReleaseRollbackActionBestEffort(config, currentRecord, 'manual-intervention', {
+        result: 'manual-intervention', errorCode: 'rollback-recovery-failed',
+      })
+    }
+    await auditBestEffort(config, {
+      type: 'profile-release/rollback-failed', planId: plan.planId, transitionPlanId: plan.transitionPlanId, result: errorCode,
+    })
+    return saveReleaseRollbackActionBestEffort(config, currentRecord, 'manual-intervention', {
+      result: 'manual-intervention', errorCode,
+    })
+  }
+}
+
+export async function createStoredReleaseRollbackPlan(
+  config: FleetAgentConfig,
+  transitionPlanId: string,
+  now = new Date(),
+  signal?: AbortSignal,
+): Promise<FleetReleaseRollbackPlan> {
+  assertReleaseReadyConfig(config)
+  return withProfileLock(config, async () => {
+    const { transition, descriptor } = await readRollbackTransition(config, transitionPlanId)
+    const transitionAction = await readReleaseAction(config, transition.planId)
+    if (transitionAction?.state !== 'succeeded' || transitionAction.result !== 'success') {
+      throw new AgentRuntimeError('rollback-not-available', 'only a successfully applied release transition can be rolled back')
+    }
+    const current = await loadState(config, signal)
+    const applied = await readAppliedRelease(config)
+    const runtime = await inspectManagedReleaseRuntime(config, signal)
+    if (current.manifestDigest !== descriptor.toManifestDigest || releaseDigestOf(applied) !== descriptor.toReleaseDigest) {
+      throw new AgentRuntimeError('release-ownership-conflict', 'live release no longer belongs to the requested transition')
+    }
+    if (descriptor.backupProfile !== null) {
+      const backup = await profileManifestAndHash(config, descriptor.backupProfile)
+      if (backup.manifestDigest !== descriptor.fromManifestDigest || backup.profileHash !== descriptor.fromProfileHash) {
+        throw new AgentRuntimeError('rollback-target-mismatch', 'retained release backup no longer matches the transition source')
+      }
+    } else if (current.profileHash !== descriptor.fromProfileHash) {
+      throw new AgentRuntimeError('rollback-target-mismatch', 'marker-only rollback profile no longer matches the transition source')
+    }
+    if (!Number.isFinite(now.getTime())) throw new AgentRuntimeError('invalid-time', 'rollback plan time is invalid')
+    const createdAt = now.toISOString()
+    const plan = createFleetReleaseRollbackPlan({
+      protocolVersion: FLEET_RELEASE_PROTOCOL_VERSION,
+      kind: 'profile-release-rollback',
+      transitionPlanId: transition.planId,
+      transitionPlanDigest: transition.digest,
+      deviceId: transition.deviceId,
+      profile: transition.profile,
+      fromManifestDigest: transition.toManifestDigest,
+      toManifestDigest: transition.fromManifestDigest,
+      fromReleaseDigest: transition.toReleaseDigest,
+      toReleaseDigest: transition.fromReleaseDigest,
+      fromProfileHash: current.profileHash,
+      toProfileHash: descriptor.fromProfileHash,
+      observedDshVersion: runtime.runtimeIdentity.dshVersion,
+      observedRuntimeDigest: runtime.observedRuntimeDigest,
+      observedServiceDefinitionDigest: runtime.observedServiceDefinitionDigest,
+      createdAt,
+      expiresAt: new Date(now.getTime() + config.planTtlMs).toISOString(),
+    })
+    await atomicJson(releaseRollbackPlanPath(config, plan.planId), plan)
+    await audit(config, {
+      type: 'profile-release/rollback-plan-created', planId: plan.planId, transitionPlanId: transition.planId,
+    })
+    return plan
+  })
+}
+
+async function recoverStoredReleaseRollback(
+  config: ReleaseReadyFleetAgentConfig,
+  plan: FleetReleaseRollbackPlan,
+  record: ReleaseRollbackActionRecord,
+): Promise<ReleaseRollbackActionRecord> {
+  const { transition, descriptor } = await readRollbackTransition(config, plan.transitionPlanId)
+  assertRollbackPlanDescriptor(plan, transition, descriptor)
+  const liveDir = profileDir(config)
+  const forwardDir = join(dirname(liveDir), releaseRollbackForwardProfile(plan))
+  if (!await regularDirectoryExists(liveDir) && await regularDirectoryExists(forwardDir)) {
+    await rename(forwardDir, liveDir)
+    await syncDirectory(dirname(liveDir))
+  }
+  try {
+    const current = await loadState(config)
+    const applied = await readAppliedRelease(config)
+    if (current.manifestDigest === plan.toManifestDigest && current.profileHash === plan.toProfileHash) {
+      if (releaseDigestOf(applied) !== plan.fromReleaseDigest && releaseDigestOf(applied) !== plan.toReleaseDigest) {
+        throw new AgentRuntimeError('release-ownership-conflict', 'applied release marker no longer belongs to this rollback action')
+      }
+      await assertRollbackTargetProfile(config, plan, descriptor)
+      await rm(forwardDir, { recursive: true, force: true })
+      return saveReleaseRollbackAction(config, record, 'succeeded', { result: 'success' })
+    }
+    if (current.manifestDigest === plan.fromManifestDigest && current.profileHash === plan.fromProfileHash &&
+        releaseDigestOf(applied) === plan.fromReleaseDigest) {
+      return executeStoredReleaseRollback(config, plan, descriptor, record)
+    }
+  } catch {
+    // Ambiguous disk or service state must not be guessed into another profile swap.
+  }
+  return saveReleaseRollbackActionBestEffort(config, record, 'manual-intervention', {
+    result: 'manual-intervention', errorCode: 'rollback-recovery-ambiguous',
+  })
+}
+
+export async function applyStoredReleaseRollbackPlan(
+  config: FleetAgentConfig,
+  approval: FleetReleaseRollbackApproval,
+  now = new Date(),
+  signal?: AbortSignal,
+): Promise<ReleaseRollbackActionRecord> {
+  assertReleaseReadyConfig(config)
+  return withProfileLock(config, async () => {
+    const plan = await readJson<FleetReleaseRollbackPlan>(releaseRollbackPlanPath(config, approval.planId))
+    if (plan === null) throw new AgentRuntimeError('plan-not-found', 'approved release rollback plan was not found')
+    validateFleetReleaseRollbackPlan(plan)
+    const existing = await readReleaseRollbackAction(config, plan.planId)
+    if (existing !== null) assertReleaseRollbackActionPlan(existing, plan)
+    const identity = validateFleetReleaseRollbackApproval(plan, approval, approval.approvedAt)
+    if (existing !== null) {
+      if (existing.idempotencyKey !== identity.idempotencyKey) {
+        throw new AgentRuntimeError('idempotency-conflict', 'release rollback plan already has a different approval')
+      }
+      if (existing.state === 'succeeded' || existing.state === 'manual-intervention') return existing
+      return recoverStoredReleaseRollback(config, plan, existing)
+    }
+    const validation = validateFleetReleaseRollbackApproval(plan, approval, now)
+    const { transition, descriptor } = await readRollbackTransition(config, plan.transitionPlanId)
+    assertRollbackPlanDescriptor(plan, transition, descriptor)
+    await assertRollbackSourceState(config, plan, descriptor, signal)
+    let record: ReleaseRollbackActionRecord = {
+      planId: plan.planId,
+      planDigest: plan.digest,
+      transitionPlanId: plan.transitionPlanId,
+      approvalId: approval.approvalId,
+      principalId: approval.principalId,
+      idempotencyKey: validation.idempotencyKey,
+      deviceId: plan.deviceId,
+      profile: plan.profile,
+      fromManifestDigest: plan.fromManifestDigest,
+      toManifestDigest: plan.toManifestDigest,
+      fromReleaseDigest: plan.fromReleaseDigest,
+      toReleaseDigest: plan.toReleaseDigest,
+      state: 'approved',
+      updatedAt: new Date().toISOString(),
+    }
+    record = await saveReleaseRollbackAction(config, record, 'approved')
+    await audit(config, {
+      type: 'profile-release/rollback-approved', planId: plan.planId, transitionPlanId: plan.transitionPlanId,
+      approvalId: approval.approvalId, principalId: approval.principalId,
+    })
+    return executeStoredReleaseRollback(config, plan, descriptor, record, signal)
+  })
+}
+
+export async function readOrRecoverReleaseRollbackAction(
+  config: FleetAgentConfig,
+  planId: string,
+): Promise<ReleaseRollbackActionRecord | null> {
+  assertReleaseReadyConfig(config)
+  return withProfileLock(config, async () => {
+    const record = await readReleaseRollbackAction(config, planId)
+    if (record === null) return null
+    const plan = await readJson<FleetReleaseRollbackPlan>(releaseRollbackPlanPath(config, planId))
+    if (plan === null) throw new AgentRuntimeError('plan-not-found', 'release rollback plan was not found')
+    validateFleetReleaseRollbackPlan(plan)
+    assertReleaseRollbackActionPlan(record, plan)
+    if (record.state === 'succeeded' || record.state === 'manual-intervention') return record
+    return recoverStoredReleaseRollback(config, plan, record)
   })
 }
 
@@ -1830,6 +3316,22 @@ export function safeRuntimeError(error: unknown): { code: string; message: strin
     'health-timeout': 'DSH did not become healthy before timeout',
     'plugin-not-active': 'plugin did not become active; profile was rolled back',
     'runtime-modules-failed': 'DSH runtime has failed modules; profile was rolled back',
+    'profile-layout-unsupported': 'profile contains unsupported top-level state and cannot be changed safely',
+    'release-ownership-conflict': 'live release binding is no longer owned by the approved transition',
+    'rollback-not-available': 'the release transition has no usable rollback state',
+    'rollback-target-mismatch': 'the retained rollback target no longer matches the approved state',
+    'rollback-descriptor-invalid': 'the durable rollback descriptor is missing or invalid',
+    'rollback-backup-missing': 'the retained release backup is missing',
+    'rollback-recovery-ambiguous': 'release rollback recovery requires manual intervention',
+    'retention-chain-invalid': 'current release retention chain is incomplete or invalid',
+    'retention-transition-invalid': 'release transition is not eligible for retention cleanup',
+    'retention-backup-mismatch': 'release backup changed and cannot be removed safely',
+    'retention-entry-mismatch': 'release retention entry no longer matches its durable descriptor',
+    'retention-plan-stale': 'release retention state changed after the plan was created',
+    'retention-layout-conflict': 'release retention backup and quarantine layout is unsafe',
+    'retention-inventory-limit': 'release retention inventory is too large to inspect safely',
+    'idempotency-conflict': 'the release action already has a different approval',
+    'action-state-invalid': 'the stored release action no longer matches its approved plan',
   }
   return { code, message: messages[code] ?? 'fleet agent request failed' }
 }

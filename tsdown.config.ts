@@ -16,6 +16,11 @@ export default defineConfig([
     deps: { alwaysBundle: ['semver', 'yaml'], onlyBundle: ['semver', 'yaml'] },
   },
   {
+    name: 'dsh-fleet/worker', entry: { worker: 'src/worker/index.ts' }, outDir: 'dist-worker',
+    format: 'esm', platform: 'node', target: 'es2023', fixedExtension: false, dts: false, clean: false,
+    deps: { alwaysBundle: ['semver'], onlyBundle: ['semver'] },
+  },
+  {
     name: 'dsh-fleet/bootstrap', entry: { bootstrap: 'src/bootstrap/cli.ts' }, outDir: 'dist-bootstrap',
     format: 'esm', platform: 'node', target: 'es2023', fixedExtension: false, dts: false, clean: false,
     deps: { alwaysBundle: ['semver', 'yaml'], onlyBundle: ['semver', 'yaml'] },

@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 import { createRequire } from "node:module";
-import { createHash, createPublicKey, generateKeyPairSync } from "node:crypto";
+import { createHash, createPublicKey, generateKeyPairSync, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { lstat, mkdir, open, rm } from "node:fs/promises";
-import { isAbsolute, join, normalize } from "node:path";
+import { chmod, lstat, mkdir, open, readdir, readlink, rename, rm, rmdir, symlink, unlink } from "node:fs/promises";
+import { basename, dirname, isAbsolute, join, normalize } from "node:path";
 //#region \0rolldown/runtime.js
 var __commonJSMin = (cb, mod) => () => (mod || (cb((mod = { exports: {} }).exports, mod), cb = null), mod.exports);
 var __require = /* #__PURE__ */ (() => createRequire(import.meta.url))();
@@ -1413,7 +1413,7 @@ var FleetProtocolError = class extends Error {
 		this.code = code;
 	}
 };
-function isRecord$3(value) {
+function isRecord$4(value) {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function canonicalize(value, seen) {
@@ -1430,7 +1430,7 @@ function canonicalize(value, seen) {
 		seen.delete(value);
 		return encoded;
 	}
-	if (isRecord$3(value)) {
+	if (isRecord$4(value)) {
 		const prototype = Object.getPrototypeOf(value);
 		if (prototype !== Object.prototype && prototype !== null) throw new FleetProtocolError("invalid-payload", "canonical JSON accepts only plain objects");
 		if (seen.has(value)) throw new FleetProtocolError("invalid-payload", "canonical JSON rejects cycles");
@@ -1461,6 +1461,9 @@ function normalizeDeviceId(value, field = "deviceId") {
 	return deviceId;
 }
 //#endregion
+//#region src/worker/context.ts
+const MAX_TASK_TOOL_ARGUMENT_BYTES = 16384;
+//#endregion
 //#region src/a2a/protocol.ts
 const FLEET_A2A_KINDS = [
 	"task.submit",
@@ -1468,11 +1471,22 @@ const FLEET_A2A_KINDS = [
 	"task.cancel",
 	"task.progress",
 	"task.result",
+	"task.approval.request",
+	"task.approval.decision",
 	"approval.request",
 	"approval.decision",
 	"handoff",
 	"receipt"
 ];
+const FEDERATION_ADVISORY_KINDS = /* @__PURE__ */ new Set([
+	"approval.request",
+	"approval.decision",
+	"handoff",
+	"receipt"
+]);
+function isFleetFederationAdvisoryKind(kind) {
+	return FEDERATION_ADVISORY_KINDS.has(kind);
+}
 var FleetA2AError = class extends Error {
 	code;
 	constructor(code, message) {
@@ -1489,6 +1503,337 @@ function a2aKeyId(key) {
 		format: "der"
 	});
 	return "ed25519:" + sha256Canonical({ der: Buffer.from(der).toString("base64") });
+}
+const TASK_POLICY_IDS = ["readonly-v1", "workspace-write-ask-v1"];
+const SAFE_READ_TOOLS = [
+	"glob",
+	"grep",
+	"read",
+	"read_image"
+];
+const APPROVAL_REQUIRED_TOOLS = [
+	"bash",
+	"edit",
+	"pwsh",
+	"web_fetch",
+	"web_search",
+	"write"
+];
+const HARD_DENIED_TOOLS = [
+	"cordis_define",
+	"cordis_inspect_list",
+	"cordis_inspect_query",
+	"cordis_inspect_self",
+	"cordis_run",
+	"cordis_stop",
+	"cordis_undefine",
+	"create_goal",
+	"followup_task",
+	"interrupt_agent",
+	"job_kill",
+	"job_list",
+	"job_output",
+	"list_agents",
+	"ralph",
+	"report",
+	"run_code",
+	"send_message",
+	"skill",
+	"spawn_agent",
+	"str_replace_editor",
+	"todo_write",
+	"update_goal",
+	"wait_agent",
+	"workflow"
+];
+function calculateTaskPolicyDigest(policy) {
+	return sha256Canonical(policy);
+}
+function defineTaskPolicy(input) {
+	const body = Object.freeze({
+		schemaVersion: 1,
+		policyId: input.policyId,
+		permissionMode: input.permissionMode,
+		workspaceScope: "configured-workspace",
+		defaultDecision: "deny",
+		safeTools: Object.freeze([...SAFE_READ_TOOLS]),
+		approvalRequiredTools: Object.freeze([...input.approvalRequiredTools]),
+		hardDeniedTools: Object.freeze([...HARD_DENIED_TOOLS]),
+		allowBackground: false,
+		maxArgumentsBytes: MAX_TASK_TOOL_ARGUMENT_BYTES
+	});
+	return Object.freeze({
+		...body,
+		policyDigest: calculateTaskPolicyDigest(body)
+	});
+}
+const LOCAL_TASK_POLICIES = Object.freeze({
+	"readonly-v1": defineTaskPolicy({
+		policyId: "readonly-v1",
+		permissionMode: "read-only",
+		approvalRequiredTools: []
+	}),
+	"workspace-write-ask-v1": defineTaskPolicy({
+		policyId: "workspace-write-ask-v1",
+		permissionMode: "workspace-write",
+		approvalRequiredTools: APPROVAL_REQUIRED_TOOLS
+	})
+});
+function isRecord$3(value) {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function nonEmpty$1(value, field) {
+	if (typeof value !== "string" || value.trim().length === 0) throw new TypeError(field + " must be a non-empty string");
+	return value.trim();
+}
+function absolutePath(value, field) {
+	const path = nonEmpty$1(value, field);
+	if (!isAbsolute(path) || normalize(path) !== path || path.includes("\0")) throw new TypeError(field + " must be a normalized absolute path");
+	return path;
+}
+function boundedInt(value, field, fallback, min, max) {
+	if (value === void 0) return fallback;
+	if (typeof value !== "number" || !Number.isSafeInteger(value) || value < min || value > max) throw new TypeError(`${field} must be an integer from ${min} to ${max}`);
+	return value;
+}
+function exactKeys$2(value, allowed, field) {
+	const extra = Object.keys(value).filter((key) => !allowed.includes(key));
+	if (extra.length > 0) throw new TypeError(field + " contains unsupported fields: " + extra.sort().join(", "));
+}
+function parseRestart(value) {
+	if (!isRecord$3(value)) throw new TypeError("restart must be an object");
+	const kind = nonEmpty$1(value.kind, "restart.kind");
+	if (kind === "none") {
+		exactKeys$2(value, ["kind"], "restart");
+		return { kind: "none" };
+	}
+	if (kind !== "screen" && kind !== "launchd") throw new TypeError("restart.kind must be none, screen or launchd");
+	exactKeys$2(value, kind === "screen" ? [
+		"kind",
+		"screenBinary",
+		"lsofBinary",
+		"psBinary",
+		"ownerMarkers",
+		"sessionName",
+		"host",
+		"port",
+		"managedPorts"
+	] : [
+		"kind",
+		"launchctlBinary",
+		"lsofBinary",
+		"psBinary",
+		"ownerMarkers",
+		"serviceTarget",
+		"host",
+		"port",
+		"managedPorts"
+	], "restart");
+	const host = nonEmpty$1(value.host, "restart.host");
+	if (host !== "127.0.0.1" && host !== "localhost" && host !== "::1") throw new TypeError("restart.host must be loopback");
+	if (!Array.isArray(value.ownerMarkers) || value.ownerMarkers.length === 0 || value.ownerMarkers.length > 8 || value.ownerMarkers.some((marker) => typeof marker !== "string" || marker.trim() !== marker || marker.length === 0 || marker.length > 240 || /[\r\n\0]/.test(marker))) throw new TypeError("restart.ownerMarkers must contain 1 to 8 fixed command fragments");
+	const port = boundedInt(value.port, "restart.port", 0, 1024, 65535);
+	const rawManagedPorts = value.managedPorts ?? [port];
+	if (!Array.isArray(rawManagedPorts) || rawManagedPorts.length === 0 || rawManagedPorts.length > 16 || rawManagedPorts.some((item) => typeof item !== "number" || !Number.isSafeInteger(item) || item < 1024 || item > 65535) || new Set(rawManagedPorts).size !== rawManagedPorts.length || !rawManagedPorts.includes(port)) throw new TypeError("restart.managedPorts must be 1 to 16 unique ports including restart.port");
+	const common = {
+		lsofBinary: absolutePath(value.lsofBinary, "restart.lsofBinary"),
+		psBinary: absolutePath(value.psBinary, "restart.psBinary"),
+		ownerMarkers: value.ownerMarkers,
+		host,
+		port,
+		managedPorts: rawManagedPorts
+	};
+	if (kind === "screen") {
+		const sessionName = nonEmpty$1(value.sessionName, "restart.sessionName");
+		if (!/^[A-Za-z0-9._-]+$/.test(sessionName)) throw new TypeError("restart.sessionName contains unsupported characters");
+		return {
+			kind: "screen",
+			screenBinary: absolutePath(value.screenBinary, "restart.screenBinary"),
+			sessionName,
+			...common
+		};
+	}
+	const serviceTarget = nonEmpty$1(value.serviceTarget, "restart.serviceTarget");
+	if (!/^(?:gui|user)\/[1-9][0-9]*\/[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(serviceTarget)) throw new TypeError("restart.serviceTarget must be a fixed gui/UID/label or user/UID/label target");
+	return {
+		kind: "launchd",
+		launchctlBinary: absolutePath(value.launchctlBinary, "restart.launchctlBinary"),
+		serviceTarget,
+		...common
+	};
+}
+function parseHealth(value) {
+	if (value === void 0) return {
+		timeoutMs: 45e3,
+		requireFleetRpc: false
+	};
+	if (!isRecord$3(value)) throw new TypeError("health must be an object");
+	exactKeys$2(value, [
+		"url",
+		"timeoutMs",
+		"requireFleetRpc"
+	], "health");
+	let url;
+	if (value.url !== void 0) {
+		url = nonEmpty$1(value.url, "health.url");
+		const parsed = new URL(url);
+		if (parsed.protocol !== "http:" || parsed.hostname !== "127.0.0.1" && parsed.hostname !== "localhost" && parsed.hostname !== "[::1]") throw new TypeError("health.url must be a loopback http URL");
+		if (parsed.username !== "" || parsed.password !== "") throw new TypeError("health.url must not contain credentials");
+	}
+	const requireFleetRpc = value.requireFleetRpc ?? false;
+	if (typeof requireFleetRpc !== "boolean") throw new TypeError("health.requireFleetRpc must be boolean");
+	if (requireFleetRpc && url === void 0) throw new TypeError("health.requireFleetRpc needs health.url");
+	return {
+		...url === void 0 ? {} : { url },
+		timeoutMs: boundedInt(value.timeoutMs, "health.timeoutMs", 45e3, 3e3, 12e4),
+		requireFleetRpc
+	};
+}
+function safeIdentifier$1(value, field) {
+	const id = nonEmpty$1(value, field);
+	if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(id)) throw new TypeError(field + " contains unsupported characters");
+	return id;
+}
+function parseA2A(value) {
+	if (value === void 0) return void 0;
+	if (!isRecord$3(value)) throw new TypeError("a2a must be an object");
+	exactKeys$2(value, [
+		"teamId",
+		"principalId",
+		"privateKeyPath",
+		"trustStorePath",
+		"maxMessageTtlMs"
+	], "a2a");
+	return {
+		teamId: safeIdentifier$1(value.teamId, "a2a.teamId"),
+		principalId: safeIdentifier$1(value.principalId, "a2a.principalId"),
+		privateKeyPath: absolutePath(value.privateKeyPath, "a2a.privateKeyPath"),
+		trustStorePath: absolutePath(value.trustStorePath, "a2a.trustStorePath"),
+		maxMessageTtlMs: boundedInt(value.maxMessageTtlMs, "a2a.maxMessageTtlMs", 9e5, 6e4, 864e5)
+	};
+}
+function parseTasks(value) {
+	if (value === void 0) return void 0;
+	if (!isRecord$3(value)) throw new TypeError("tasks must be an object");
+	exactKeys$2(value, [
+		"enabled",
+		"workspaces",
+		"profiles",
+		"timeoutMs",
+		"maxOutputBytes",
+		"maxConcurrent",
+		"policyIds"
+	], "tasks");
+	if (typeof value.enabled !== "boolean") throw new TypeError("tasks.enabled must be boolean");
+	if (!isRecord$3(value.workspaces)) throw new TypeError("tasks.workspaces must be an object");
+	const workspaces = {};
+	for (const [rawId, path] of Object.entries(value.workspaces)) {
+		const id = safeIdentifier$1(rawId, "tasks workspace id");
+		workspaces[id] = absolutePath(path, "tasks.workspaces." + id);
+	}
+	if (value.enabled && Object.keys(workspaces).length === 0) throw new TypeError("enabled tasks require at least one workspace");
+	if (!Array.isArray(value.profiles) || value.profiles.length === 0 || value.profiles.length > 16 || value.profiles.some((profile) => typeof profile !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(profile)) || new Set(value.profiles).size !== value.profiles.length) throw new TypeError("tasks.profiles must contain 1 to 16 unique safe profile ids");
+	const rawPolicyIds = value.policyIds ?? ["readonly-v1"];
+	if (!Array.isArray(rawPolicyIds) || rawPolicyIds.length === 0 || rawPolicyIds.length > TASK_POLICY_IDS.length || rawPolicyIds.some((policyId) => typeof policyId !== "string" || !TASK_POLICY_IDS.includes(policyId)) || new Set(rawPolicyIds).size !== rawPolicyIds.length) throw new TypeError("tasks.policyIds must contain unique installed task policy ids");
+	const policyIds = [...rawPolicyIds];
+	const policies = {};
+	for (const policyId of policyIds) policies[policyId] = LOCAL_TASK_POLICIES[policyId];
+	return {
+		enabled: value.enabled,
+		workspaces,
+		profiles: value.profiles,
+		timeoutMs: boundedInt(value.timeoutMs, "tasks.timeoutMs", 36e5, 6e4, 216e5),
+		maxOutputBytes: boundedInt(value.maxOutputBytes, "tasks.maxOutputBytes", 1048576, 4096, 1048576),
+		maxConcurrent: boundedInt(value.maxConcurrent, "tasks.maxConcurrent", 1, 1, 4),
+		policyIds,
+		policies: Object.freeze(policies)
+	};
+}
+function parseAgentConfig(value) {
+	if (!isRecord$3(value)) throw new TypeError("agent config must be an object");
+	exactKeys$2(value, [
+		"schemaVersion",
+		"deviceId",
+		"manifestPath",
+		"desiredManifestPath",
+		"dshHome",
+		"dshBinary",
+		"pnpmBinary",
+		"profile",
+		"stateDir",
+		"planTtlMs",
+		"restart",
+		"health",
+		"artifactStore",
+		"tarBinary",
+		"a2a",
+		"tasks"
+	], "agent config");
+	if (value.schemaVersion !== 1 && value.schemaVersion !== 2) throw new TypeError("agent config schemaVersion must equal 1 or 2");
+	const profile = nonEmpty$1(value.profile, "profile");
+	if (!/^[A-Za-z0-9._-]+$/.test(profile)) throw new TypeError("profile contains unsupported characters");
+	const dshHome = absolutePath(value.dshHome, "dshHome");
+	const configuredManifestPath = absolutePath(value.manifestPath, "manifestPath");
+	const profileManifestPath = join(dshHome, "profiles", profile, "fleet.lock.yaml");
+	let manifestPath = configuredManifestPath;
+	let desiredManifestPath;
+	if (value.schemaVersion === 2) {
+		if (value.desiredManifestPath === void 0) {
+			manifestPath = profileManifestPath;
+			desiredManifestPath = configuredManifestPath;
+		} else {
+			desiredManifestPath = absolutePath(value.desiredManifestPath, "desiredManifestPath");
+			if (configuredManifestPath !== profileManifestPath) throw new TypeError("schemaVersion 2 manifestPath must be the profile-local live Fleet manifest");
+		}
+	} else if (value.desiredManifestPath !== void 0) throw new TypeError("schemaVersion 1 must not define desiredManifestPath");
+	const artifactStore = value.artifactStore === void 0 ? void 0 : absolutePath(value.artifactStore, "artifactStore");
+	const tarBinary = value.tarBinary === void 0 ? void 0 : absolutePath(value.tarBinary, "tarBinary");
+	if (value.schemaVersion === 2 && (artifactStore === void 0 || tarBinary === void 0)) throw new TypeError("schemaVersion 2 requires artifactStore and tarBinary");
+	const a2a = parseA2A(value.a2a);
+	const tasks = parseTasks(value.tasks);
+	if (tasks?.enabled === true && a2a === void 0) throw new TypeError("enabled tasks require a2a identity and trust configuration");
+	return {
+		schemaVersion: value.schemaVersion,
+		deviceId: normalizeDeviceId(value.deviceId),
+		manifestPath,
+		...desiredManifestPath === void 0 ? {} : { desiredManifestPath },
+		dshHome,
+		dshBinary: absolutePath(value.dshBinary, "dshBinary"),
+		pnpmBinary: absolutePath(value.pnpmBinary, "pnpmBinary"),
+		profile,
+		stateDir: absolutePath(value.stateDir, "stateDir"),
+		planTtlMs: boundedInt(value.planTtlMs, "planTtlMs", 6e5, 6e4, 36e5),
+		restart: parseRestart(value.restart),
+		health: parseHealth(value.health),
+		...artifactStore === void 0 ? {} : { artifactStore },
+		...tarBinary === void 0 ? {} : { tarBinary },
+		...a2a === void 0 ? {} : { a2a },
+		...tasks === void 0 ? {} : { tasks }
+	};
+}
+function assertReleaseReadyConfig(config) {
+	assertMutationReadyConfig(config);
+	const expectedManifestPath = join(config.dshHome, "profiles", config.profile, "fleet.lock.yaml");
+	if (config.schemaVersion !== 2 || config.artifactStore === void 0 || config.tarBinary === void 0 || config.desiredManifestPath === void 0 || config.manifestPath !== expectedManifestPath) throw mutationConfigError("atomic profile releases require schemaVersion 2, a profile-local live manifest, a desired manifest, artifactStore and tarBinary");
+}
+function assertA2AReadyConfig(config) {
+	if (config.schemaVersion !== 2 || config.a2a === void 0 || config.tasks === void 0) throw mutationConfigError("A2A requires schemaVersion 2 with identity, trust and task policy");
+	if (config.tasks.policyIds === void 0 || config.tasks.policies === void 0) throw mutationConfigError("A2A task execution requires resolved local task policies");
+}
+function mutationConfigError(message) {
+	return Object.assign(new TypeError(message), { code: "unsafe-mutation-config" });
+}
+function assertMutationReadyConfig(config) {
+	if (config.restart.kind === "none") throw mutationConfigError("mutation requires a configured DSH restart");
+	if (config.health.url === void 0 || config.health.requireFleetRpc !== true) throw mutationConfigError("mutation requires a loopback health URL with Fleet RPC verification");
+	let health;
+	try {
+		health = new URL(config.health.url);
+	} catch {
+		throw mutationConfigError("mutation health URL is invalid");
+	}
+	if (health.protocol !== "http:" || health.hostname !== "127.0.0.1" && health.hostname !== "localhost" && health.hostname !== "[::1]" || health.username !== "" || health.password !== "") throw mutationConfigError("mutation health URL must be credential-free loopback HTTP");
+	if ((health.port === "" ? 80 : Number(health.port)) !== config.restart.port) throw mutationConfigError("mutation health URL must verify the configured restart port");
 }
 //#endregion
 //#region node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/nodes/identity.js
@@ -8150,42 +8495,42 @@ function strings$1(value, field) {
 	if (!Array.isArray(value) || value.some((item) => typeof item !== "string" || item.trim().length === 0)) throw new TypeError(field + " must be an array of non-empty strings");
 	return value.map((item) => item.trim());
 }
-function nonEmpty$1(value, field) {
+function nonEmpty(value, field) {
 	if (typeof value !== "string" || value.trim().length === 0) throw new TypeError(field + " must be a non-empty string");
 	return value.trim();
 }
-function exactKeys$2(value, allowed, field) {
+function exactKeys$1(value, allowed, field) {
 	const extras = Object.keys(value).filter((key) => !allowed.includes(key));
 	if (extras.length > 0) throw new TypeError(field + " contains unsupported fields: " + extras.sort().join(", "));
 }
-function safeIdentifier$1(value, field) {
-	const id = nonEmpty$1(value, field);
+function safeIdentifier(value, field) {
+	const id = nonEmpty(value, field);
 	if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(id)) throw new TypeError(field + " must be 1 to 64 ASCII letters, digits, dots, underscores or hyphens");
 	return id;
 }
 function safePackageName(value, field) {
-	const id = nonEmpty$1(value, field);
+	const id = nonEmpty(value, field);
 	if (id.length > 214 || id !== id.toLowerCase() || !/^(?:@[a-z0-9][a-z0-9._~-]*\/)?[a-z0-9][a-z0-9._~-]*$/.test(id)) throw new TypeError(field + " must be one literal lowercase npm package name");
 	return id;
 }
 function exactSemver(value, field) {
-	const version = nonEmpty$1(value, field);
+	const version = nonEmpty(value, field);
 	if ((0, import_semver.valid)(version) !== version) throw new TypeError(field + " must be an exact semantic version");
 	return version;
 }
 function sha256Digest(value, field) {
-	const digest = nonEmpty$1(value, field);
+	const digest = nonEmpty(value, field);
 	if (!/^[0-9a-f]{64}$/.test(digest)) throw new TypeError(field + " must be a lowercase SHA-256 digest");
 	return digest;
 }
 function parseDevice(value, field) {
 	if (!isRecord$2(value)) throw new TypeError(field + " must be an object");
-	const assignedTo = value.assignedTo === void 0 ? void 0 : nonEmpty$1(value.assignedTo, field + ".assignedTo");
+	const assignedTo = value.assignedTo === void 0 ? void 0 : nonEmpty(value.assignedTo, field + ".assignedTo");
 	const labels = strings$1(value.labels, field + ".labels");
 	return {
 		...assignedTo === void 0 ? {} : { assignedTo },
-		class: nonEmpty$1(value.class, field + ".class"),
-		channel: nonEmpty$1(value.channel, field + ".channel"),
+		class: nonEmpty(value.class, field + ".class"),
+		channel: nonEmpty(value.channel, field + ".channel"),
 		...labels === void 0 ? {} : { labels }
 	};
 }
@@ -8218,13 +8563,13 @@ function parsePlugin(value, index) {
 			...channels === void 0 ? {} : { channels }
 		};
 	}
-	const id = nonEmpty$1(value.id, field + ".id");
+	const id = nonEmpty(value.id, field + ".id");
 	const hasSpec = value.spec !== void 0;
 	const hasSource = value.source !== void 0 || value.revision !== void 0;
 	if (hasSpec === hasSource) throw new TypeError(field + " must specify exactly one of spec or source");
-	const spec = hasSpec ? nonEmpty$1(value.spec, field + ".spec") : void 0;
-	const source = hasSource ? nonEmpty$1(value.source, field + ".source") : void 0;
-	const revision = value.revision === void 0 ? void 0 : nonEmpty$1(value.revision, field + ".revision");
+	const spec = hasSpec ? nonEmpty(value.spec, field + ".spec") : void 0;
+	const source = hasSource ? nonEmpty(value.source, field + ".source") : void 0;
+	const revision = value.revision === void 0 ? void 0 : nonEmpty(value.revision, field + ".revision");
 	return {
 		id,
 		spec: spec ?? dependencySpec(source, revision, field),
@@ -8239,15 +8584,15 @@ function parsePlugin(value, index) {
 }
 function parseReleaseSource(value, field, visibility) {
 	if (!isRecord$2(value)) throw new TypeError(field + " must be an object");
-	const kind = nonEmpty$1(value.kind, field + ".kind");
+	const kind = nonEmpty(value.kind, field + ".kind");
 	if (kind === "npm") {
-		exactKeys$2(value, [
+		exactKeys$1(value, [
 			"kind",
 			"version",
 			"integrity"
 		], field);
 		if (visibility !== "public") throw new TypeError(field + " private plugins must use content-addressed artifact sources");
-		const integrity = value.integrity === void 0 ? void 0 : nonEmpty$1(value.integrity, field + ".integrity");
+		const integrity = value.integrity === void 0 ? void 0 : nonEmpty(value.integrity, field + ".integrity");
 		if (integrity !== void 0 && !/^sha512-[A-Za-z0-9+/]+={0,2}$/.test(integrity)) throw new TypeError(field + ".integrity must be one SHA-512 Subresource Integrity value");
 		return {
 			kind: "npm",
@@ -8256,15 +8601,15 @@ function parseReleaseSource(value, field, visibility) {
 		};
 	}
 	if (kind === "github") {
-		exactKeys$2(value, [
+		exactKeys$1(value, [
 			"kind",
 			"repository",
 			"revision"
 		], field);
 		if (visibility !== "public") throw new TypeError(field + " private plugins must use content-addressed artifact sources");
-		const repository = nonEmpty$1(value.repository, field + ".repository");
+		const repository = nonEmpty(value.repository, field + ".repository");
 		if (!/^[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?\/[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/.test(repository)) throw new TypeError(field + ".repository must be owner/repository without a URL or revision");
-		const revision = nonEmpty$1(value.revision, field + ".revision");
+		const revision = nonEmpty(value.revision, field + ".revision");
 		if (!/^[0-9a-f]{40}$/.test(revision)) throw new TypeError(field + ".revision must be a lowercase 40-character commit SHA");
 		return {
 			kind: "github",
@@ -8273,7 +8618,7 @@ function parseReleaseSource(value, field, visibility) {
 		};
 	}
 	if (kind === "artifact") {
-		exactKeys$2(value, [
+		exactKeys$1(value, [
 			"kind",
 			"digest",
 			"version"
@@ -8289,7 +8634,7 @@ function parseReleaseSource(value, field, visibility) {
 }
 function parseReleasePlugin(value, field) {
 	if (!isRecord$2(value)) throw new TypeError(field + " must be an object");
-	exactKeys$2(value, [
+	exactKeys$1(value, [
 		"id",
 		"visibility",
 		"source",
@@ -8306,15 +8651,15 @@ function parseReleasePlugin(value, field) {
 }
 function parseProfileRelease(id, value, field) {
 	if (!isRecord$2(value)) throw new TypeError(field + " must be an object");
-	exactKeys$2(value, [
+	exactKeys$1(value, [
 		"id",
 		"version",
 		"profile",
 		"dshRange",
 		"plugins"
 	], field);
-	if (value.id !== void 0 && safeIdentifier$1(value.id, field + ".id") !== id) throw new TypeError(field + ".id must match its profileReleases key");
-	const dshRange = nonEmpty$1(value.dshRange, field + ".dshRange");
+	if (value.id !== void 0 && safeIdentifier(value.id, field + ".id") !== id) throw new TypeError(field + ".id must match its profileReleases key");
+	const dshRange = nonEmpty(value.dshRange, field + ".dshRange");
 	if ((0, import_semver.validRange)(dshRange) === null) throw new TypeError(field + ".dshRange must be a valid semantic-version range");
 	if (!Array.isArray(value.plugins) || value.plugins.length === 0) throw new TypeError(field + ".plugins must be a non-empty array");
 	const plugins = value.plugins.map((plugin, index) => parseReleasePlugin(plugin, `${field}.plugins[${index}]`));
@@ -8326,7 +8671,7 @@ function parseProfileRelease(id, value, field) {
 	return {
 		id,
 		version: exactSemver(value.version, field + ".version"),
-		profile: safeIdentifier$1(value.profile, field + ".profile"),
+		profile: safeIdentifier(value.profile, field + ".profile"),
 		dshRange,
 		plugins
 	};
@@ -8353,7 +8698,7 @@ function releasePluginSpec(plugin) {
 	};
 }
 function parseManifestV2(raw, team, devices) {
-	exactKeys$2(raw, [
+	exactKeys$1(raw, [
 		"schemaVersion",
 		"team",
 		"devices",
@@ -8363,7 +8708,7 @@ function parseManifestV2(raw, team, devices) {
 	if (!isRecord$2(raw.profileReleases)) throw new TypeError("profileReleases must be an object");
 	const profileReleases = {};
 	for (const [rawId, value] of Object.entries(raw.profileReleases)) {
-		const id = safeIdentifier$1(rawId, "profile release id");
+		const id = safeIdentifier(rawId, "profile release id");
 		profileReleases[id] = parseProfileRelease(id, value, "profileReleases." + id);
 	}
 	if (Object.keys(profileReleases).length === 0) throw new TypeError("profileReleases must not be empty");
@@ -8376,8 +8721,8 @@ function parseManifestV2(raw, team, devices) {
 		if (!isRecord$2(value) || Object.keys(value).length === 0) throw new TypeError("assignments." + deviceId + " must be a non-empty profile-to-release object");
 		const deviceAssignments = {};
 		for (const [rawProfile, rawReleaseId] of Object.entries(value)) {
-			const profile = safeIdentifier$1(rawProfile, `assignments.${deviceId} profile`);
-			const releaseId = safeIdentifier$1(rawReleaseId, `assignments.${deviceId}.${profile}`);
+			const profile = safeIdentifier(rawProfile, `assignments.${deviceId} profile`);
+			const releaseId = safeIdentifier(rawReleaseId, `assignments.${deviceId}.${profile}`);
 			const release = profileReleases[releaseId];
 			if (release === void 0) throw new TypeError(`assignments.${deviceId}.${profile} references unknown release ${JSON.stringify(releaseId)}`);
 			if (release.profile !== profile) throw new TypeError(`assignments.${deviceId}.${profile} references release for profile ${JSON.stringify(release.profile)}`);
@@ -8411,14 +8756,14 @@ function parseFleetManifest(source) {
 	if (!isRecord$2(raw)) throw new TypeError("fleet manifest must be an object");
 	if (raw.schemaVersion !== 1 && raw.schemaVersion !== 2) throw new TypeError("schemaVersion must equal 1 or 2");
 	if (!isRecord$2(raw.team)) throw new TypeError("team must be an object");
-	if (raw.schemaVersion === 2) exactKeys$2(raw.team, ["id", "name"], "team");
-	const teamId = nonEmpty$1(raw.team.id, "team.id");
-	const teamName = raw.team.name === void 0 ? void 0 : nonEmpty$1(raw.team.name, "team.name");
+	if (raw.schemaVersion === 2) exactKeys$1(raw.team, ["id", "name"], "team");
+	const teamId = nonEmpty(raw.team.id, "team.id");
+	const teamName = raw.team.name === void 0 ? void 0 : nonEmpty(raw.team.name, "team.name");
 	if (!isRecord$2(raw.devices)) throw new TypeError("devices must be an object");
 	const devices = {};
 	for (const [id, value] of Object.entries(raw.devices)) {
 		const deviceId = normalizeDeviceId(id, "device id");
-		if (raw.schemaVersion === 2 && isRecord$2(value)) exactKeys$2(value, [
+		if (raw.schemaVersion === 2 && isRecord$2(value)) exactKeys$1(value, [
 			"assignedTo",
 			"class",
 			"channel",
@@ -8461,246 +8806,11 @@ function targetsDevice(plugin, deviceId, device) {
 	return true;
 }
 //#endregion
-//#region src/agent/config.ts
-function isRecord$1(value) {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-function nonEmpty(value, field) {
-	if (typeof value !== "string" || value.trim().length === 0) throw new TypeError(field + " must be a non-empty string");
-	return value.trim();
-}
-function absolutePath(value, field) {
-	const path = nonEmpty(value, field);
-	if (!isAbsolute(path) || normalize(path) !== path || path.includes("\0")) throw new TypeError(field + " must be a normalized absolute path");
-	return path;
-}
-function boundedInt(value, field, fallback, min, max) {
-	if (value === void 0) return fallback;
-	if (typeof value !== "number" || !Number.isSafeInteger(value) || value < min || value > max) throw new TypeError(`${field} must be an integer from ${min} to ${max}`);
-	return value;
-}
-function exactKeys$1(value, allowed, field) {
-	const extra = Object.keys(value).filter((key) => !allowed.includes(key));
-	if (extra.length > 0) throw new TypeError(field + " contains unsupported fields: " + extra.sort().join(", "));
-}
-function parseRestart(value) {
-	if (!isRecord$1(value)) throw new TypeError("restart must be an object");
-	const kind = nonEmpty(value.kind, "restart.kind");
-	if (kind === "none") {
-		exactKeys$1(value, ["kind"], "restart");
-		return { kind: "none" };
-	}
-	if (kind !== "screen" && kind !== "launchd") throw new TypeError("restart.kind must be none, screen or launchd");
-	exactKeys$1(value, kind === "screen" ? [
-		"kind",
-		"screenBinary",
-		"lsofBinary",
-		"psBinary",
-		"ownerMarkers",
-		"sessionName",
-		"host",
-		"port",
-		"managedPorts"
-	] : [
-		"kind",
-		"launchctlBinary",
-		"lsofBinary",
-		"psBinary",
-		"ownerMarkers",
-		"serviceTarget",
-		"host",
-		"port",
-		"managedPorts"
-	], "restart");
-	const host = nonEmpty(value.host, "restart.host");
-	if (host !== "127.0.0.1" && host !== "localhost" && host !== "::1") throw new TypeError("restart.host must be loopback");
-	if (!Array.isArray(value.ownerMarkers) || value.ownerMarkers.length === 0 || value.ownerMarkers.length > 8 || value.ownerMarkers.some((marker) => typeof marker !== "string" || marker.trim() !== marker || marker.length === 0 || marker.length > 240 || /[\r\n\0]/.test(marker))) throw new TypeError("restart.ownerMarkers must contain 1 to 8 fixed command fragments");
-	const port = boundedInt(value.port, "restart.port", 0, 1024, 65535);
-	const rawManagedPorts = value.managedPorts ?? [port];
-	if (!Array.isArray(rawManagedPorts) || rawManagedPorts.length === 0 || rawManagedPorts.length > 16 || rawManagedPorts.some((item) => typeof item !== "number" || !Number.isSafeInteger(item) || item < 1024 || item > 65535) || new Set(rawManagedPorts).size !== rawManagedPorts.length || !rawManagedPorts.includes(port)) throw new TypeError("restart.managedPorts must be 1 to 16 unique ports including restart.port");
-	const common = {
-		lsofBinary: absolutePath(value.lsofBinary, "restart.lsofBinary"),
-		psBinary: absolutePath(value.psBinary, "restart.psBinary"),
-		ownerMarkers: value.ownerMarkers,
-		host,
-		port,
-		managedPorts: rawManagedPorts
-	};
-	if (kind === "screen") {
-		const sessionName = nonEmpty(value.sessionName, "restart.sessionName");
-		if (!/^[A-Za-z0-9._-]+$/.test(sessionName)) throw new TypeError("restart.sessionName contains unsupported characters");
-		return {
-			kind: "screen",
-			screenBinary: absolutePath(value.screenBinary, "restart.screenBinary"),
-			sessionName,
-			...common
-		};
-	}
-	const serviceTarget = nonEmpty(value.serviceTarget, "restart.serviceTarget");
-	if (!/^(?:gui|user)\/[1-9][0-9]*\/[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(serviceTarget)) throw new TypeError("restart.serviceTarget must be a fixed gui/UID/label or user/UID/label target");
-	return {
-		kind: "launchd",
-		launchctlBinary: absolutePath(value.launchctlBinary, "restart.launchctlBinary"),
-		serviceTarget,
-		...common
-	};
-}
-function parseHealth(value) {
-	if (value === void 0) return {
-		timeoutMs: 45e3,
-		requireFleetRpc: false
-	};
-	if (!isRecord$1(value)) throw new TypeError("health must be an object");
-	exactKeys$1(value, [
-		"url",
-		"timeoutMs",
-		"requireFleetRpc"
-	], "health");
-	let url;
-	if (value.url !== void 0) {
-		url = nonEmpty(value.url, "health.url");
-		const parsed = new URL(url);
-		if (parsed.protocol !== "http:" || parsed.hostname !== "127.0.0.1" && parsed.hostname !== "localhost" && parsed.hostname !== "[::1]") throw new TypeError("health.url must be a loopback http URL");
-		if (parsed.username !== "" || parsed.password !== "") throw new TypeError("health.url must not contain credentials");
-	}
-	const requireFleetRpc = value.requireFleetRpc ?? false;
-	if (typeof requireFleetRpc !== "boolean") throw new TypeError("health.requireFleetRpc must be boolean");
-	if (requireFleetRpc && url === void 0) throw new TypeError("health.requireFleetRpc needs health.url");
-	return {
-		...url === void 0 ? {} : { url },
-		timeoutMs: boundedInt(value.timeoutMs, "health.timeoutMs", 45e3, 3e3, 12e4),
-		requireFleetRpc
-	};
-}
-function safeIdentifier(value, field) {
-	const id = nonEmpty(value, field);
-	if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(id)) throw new TypeError(field + " contains unsupported characters");
-	return id;
-}
-function parseA2A(value) {
-	if (value === void 0) return void 0;
-	if (!isRecord$1(value)) throw new TypeError("a2a must be an object");
-	exactKeys$1(value, [
-		"teamId",
-		"principalId",
-		"privateKeyPath",
-		"trustStorePath",
-		"maxMessageTtlMs"
-	], "a2a");
-	return {
-		teamId: safeIdentifier(value.teamId, "a2a.teamId"),
-		principalId: safeIdentifier(value.principalId, "a2a.principalId"),
-		privateKeyPath: absolutePath(value.privateKeyPath, "a2a.privateKeyPath"),
-		trustStorePath: absolutePath(value.trustStorePath, "a2a.trustStorePath"),
-		maxMessageTtlMs: boundedInt(value.maxMessageTtlMs, "a2a.maxMessageTtlMs", 9e5, 6e4, 864e5)
-	};
-}
-function parseTasks(value) {
-	if (value === void 0) return void 0;
-	if (!isRecord$1(value)) throw new TypeError("tasks must be an object");
-	exactKeys$1(value, [
-		"enabled",
-		"workspaces",
-		"profiles",
-		"timeoutMs",
-		"maxOutputBytes",
-		"maxConcurrent"
-	], "tasks");
-	if (typeof value.enabled !== "boolean") throw new TypeError("tasks.enabled must be boolean");
-	if (!isRecord$1(value.workspaces)) throw new TypeError("tasks.workspaces must be an object");
-	const workspaces = {};
-	for (const [rawId, path] of Object.entries(value.workspaces)) {
-		const id = safeIdentifier(rawId, "tasks workspace id");
-		workspaces[id] = absolutePath(path, "tasks.workspaces." + id);
-	}
-	if (value.enabled && Object.keys(workspaces).length === 0) throw new TypeError("enabled tasks require at least one workspace");
-	if (!Array.isArray(value.profiles) || value.profiles.length === 0 || value.profiles.length > 16 || value.profiles.some((profile) => typeof profile !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(profile)) || new Set(value.profiles).size !== value.profiles.length) throw new TypeError("tasks.profiles must contain 1 to 16 unique safe profile ids");
-	return {
-		enabled: value.enabled,
-		workspaces,
-		profiles: value.profiles,
-		timeoutMs: boundedInt(value.timeoutMs, "tasks.timeoutMs", 36e5, 6e4, 216e5),
-		maxOutputBytes: boundedInt(value.maxOutputBytes, "tasks.maxOutputBytes", 1048576, 4096, 1048576),
-		maxConcurrent: boundedInt(value.maxConcurrent, "tasks.maxConcurrent", 1, 1, 4)
-	};
-}
-function parseAgentConfig(value) {
-	if (!isRecord$1(value)) throw new TypeError("agent config must be an object");
-	exactKeys$1(value, [
-		"schemaVersion",
-		"deviceId",
-		"manifestPath",
-		"dshHome",
-		"dshBinary",
-		"pnpmBinary",
-		"profile",
-		"stateDir",
-		"planTtlMs",
-		"restart",
-		"health",
-		"artifactStore",
-		"tarBinary",
-		"a2a",
-		"tasks"
-	], "agent config");
-	if (value.schemaVersion !== 1 && value.schemaVersion !== 2) throw new TypeError("agent config schemaVersion must equal 1 or 2");
-	const profile = nonEmpty(value.profile, "profile");
-	if (!/^[A-Za-z0-9._-]+$/.test(profile)) throw new TypeError("profile contains unsupported characters");
-	const artifactStore = value.artifactStore === void 0 ? void 0 : absolutePath(value.artifactStore, "artifactStore");
-	const tarBinary = value.tarBinary === void 0 ? void 0 : absolutePath(value.tarBinary, "tarBinary");
-	if (value.schemaVersion === 2 && (artifactStore === void 0 || tarBinary === void 0)) throw new TypeError("schemaVersion 2 requires artifactStore and tarBinary");
-	const a2a = parseA2A(value.a2a);
-	const tasks = parseTasks(value.tasks);
-	if (tasks?.enabled === true && a2a === void 0) throw new TypeError("enabled tasks require a2a identity and trust configuration");
-	return {
-		schemaVersion: value.schemaVersion,
-		deviceId: normalizeDeviceId(value.deviceId),
-		manifestPath: absolutePath(value.manifestPath, "manifestPath"),
-		dshHome: absolutePath(value.dshHome, "dshHome"),
-		dshBinary: absolutePath(value.dshBinary, "dshBinary"),
-		pnpmBinary: absolutePath(value.pnpmBinary, "pnpmBinary"),
-		profile,
-		stateDir: absolutePath(value.stateDir, "stateDir"),
-		planTtlMs: boundedInt(value.planTtlMs, "planTtlMs", 6e5, 6e4, 36e5),
-		restart: parseRestart(value.restart),
-		health: parseHealth(value.health),
-		...artifactStore === void 0 ? {} : { artifactStore },
-		...tarBinary === void 0 ? {} : { tarBinary },
-		...a2a === void 0 ? {} : { a2a },
-		...tasks === void 0 ? {} : { tasks }
-	};
-}
-function assertReleaseReadyConfig(config) {
-	assertMutationReadyConfig(config);
-	if (config.schemaVersion !== 2 || config.artifactStore === void 0 || config.tarBinary === void 0) throw mutationConfigError("atomic profile releases require schemaVersion 2 with artifactStore and tarBinary");
-}
-function assertA2AReadyConfig(config) {
-	if (config.schemaVersion !== 2 || config.a2a === void 0 || config.tasks === void 0) throw mutationConfigError("A2A requires schemaVersion 2 with identity, trust and task policy");
-}
-function mutationConfigError(message) {
-	return Object.assign(new TypeError(message), { code: "unsafe-mutation-config" });
-}
-function assertMutationReadyConfig(config) {
-	if (config.restart.kind === "none") throw mutationConfigError("mutation requires a configured DSH restart");
-	if (config.health.url === void 0 || config.health.requireFleetRpc !== true) throw mutationConfigError("mutation requires a loopback health URL with Fleet RPC verification");
-	let health;
-	try {
-		health = new URL(config.health.url);
-	} catch {
-		throw mutationConfigError("mutation health URL is invalid");
-	}
-	if (health.protocol !== "http:" || health.hostname !== "127.0.0.1" && health.hostname !== "localhost" && health.hostname !== "[::1]" || health.username !== "" || health.password !== "") throw mutationConfigError("mutation health URL must be credential-free loopback HTTP");
-	if ((health.port === "" ? 80 : Number(health.port)) !== config.restart.port) throw mutationConfigError("mutation health URL must verify the configured restart port");
-}
-//#endregion
 //#region src/bootstrap/team-pack.ts
-const FEDERATION_KINDS = /* @__PURE__ */ new Set([
-	"handoff",
-	"approval.request",
-	"approval.decision",
-	"receipt"
-]);
-function isRecord(value) {
+function compareCanonicalIds(left, right) {
+	return left < right ? -1 : left > right ? 1 : 0;
+}
+function isRecord$1(value) {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function exactKeys(value, allowed, field) {
@@ -8732,6 +8842,90 @@ function exactVersion(value, field) {
 	if ((0, import_semver.valid)(version) !== version) throw new TypeError(field + " must be an exact semantic version");
 	return version;
 }
+function routePath(value, field) {
+	const path = text(value, field, 1024);
+	if (!isAbsolute(path) || normalize(path) !== path || !/^\/[A-Za-z0-9._/-]+$/.test(path)) throw new TypeError(field + " must be a normalized absolute path without shell metacharacters");
+	return path;
+}
+function parseRoute(value) {
+	if (!isRecord$1(value)) throw new TypeError("route must be an object");
+	const transport = text(value.transport, "route.transport", 16);
+	if (transport !== "local" && transport !== "ssh") throw new TypeError("route.transport must be local or ssh");
+	exactKeys(value, transport === "local" ? [
+		"transport",
+		"nodeBinary",
+		"agentPath",
+		"configPath"
+	] : [
+		"transport",
+		"sshHost",
+		"nodeBinary",
+		"agentPath",
+		"configPath"
+	], "route");
+	const common = {
+		nodeBinary: routePath(value.nodeBinary, "route.nodeBinary"),
+		agentPath: routePath(value.agentPath, "route.agentPath"),
+		configPath: routePath(value.configPath, "route.configPath")
+	};
+	if (transport === "local") return {
+		transport,
+		...common
+	};
+	const sshHost = text(value.sshHost, "route.sshHost", 253);
+	if (sshHost.startsWith("-") || !/^[A-Za-z0-9._-]+$/.test(sshHost)) throw new TypeError("route.sshHost must be a configured host alias");
+	return {
+		transport,
+		sshHost,
+		...common
+	};
+}
+function parseGenerationRoutes(source) {
+	let value;
+	try {
+		value = JSON.parse(source);
+	} catch {
+		throw new TypeError("routes.json must contain JSON");
+	}
+	if (!isRecord$1(value)) throw new TypeError("routes.json must be an object");
+	exactKeys(value, [
+		"schemaVersion",
+		"teamId",
+		"routes"
+	], "routes.json");
+	if (value.schemaVersion !== 1 || !Array.isArray(value.routes) || value.routes.length === 0) throw new TypeError("routes.json schema or routes are invalid");
+	const routes = value.routes.map((entry, index) => {
+		const field = `routes[${index}]`;
+		if (!isRecord$1(entry)) throw new TypeError(field + " must be an object");
+		const deviceId = identifier$1(entry.deviceId, field + ".deviceId");
+		const { deviceId: _deviceId, ...routeValue } = entry;
+		return {
+			deviceId,
+			...parseRoute(routeValue)
+		};
+	});
+	const deviceIds = routes.map((route) => route.deviceId);
+	if (new Set(deviceIds).size !== deviceIds.length) throw new TypeError("routes.json device ids must be unique");
+	if (deviceIds.some((deviceId, index) => index > 0 && compareCanonicalIds(deviceIds[index - 1], deviceId) >= 0)) throw new TypeError("routes.json routes must be sorted by device id");
+	return {
+		schemaVersion: 1,
+		teamId: identifier$1(value.teamId, "routes.json teamId"),
+		routes
+	};
+}
+function createGenerationRoutes(instantiated) {
+	const first = instantiated.devices[0];
+	if (first === void 0) throw new TypeError("generation routes require at least one device");
+	const value = {
+		schemaVersion: 1,
+		teamId: first.overlay.team.id,
+		routes: instantiated.devices.map((device) => ({
+			deviceId: device.deviceId,
+			...device.overlay.route
+		}))
+	};
+	return JSON.stringify(value, null, 2) + "\n";
+}
 function strings(value, field) {
 	if (!Array.isArray(value) || value.length === 0 || value.some((item) => typeof item !== "string")) throw new TypeError(field + " must be a non-empty string array");
 	const values = value.map((item, index) => identifier$1(item, `${field}[${index}]`));
@@ -8746,8 +8940,9 @@ function runtimeModules(value, field) {
 	return values;
 }
 function trustEntry(value, field, federationOnly) {
-	if (!isRecord(value)) throw new TypeError(field + " must be an object");
+	if (!isRecord$1(value)) throw new TypeError(field + " must be an object");
 	exactKeys(value, [
+		"teamId",
 		"keyId",
 		"principalId",
 		"deviceId",
@@ -8756,7 +8951,7 @@ function trustEntry(value, field, federationOnly) {
 	], field);
 	const allowedKinds = value.allowedKinds;
 	if (!Array.isArray(allowedKinds) || allowedKinds.length === 0 || allowedKinds.some((kind) => typeof kind !== "string" || !FLEET_A2A_KINDS.includes(kind))) throw new TypeError(field + ".allowedKinds is invalid");
-	if (federationOnly && allowedKinds.some((kind) => !FEDERATION_KINDS.has(kind))) throw new TypeError(field + " public federation anchors cannot grant task execution");
+	if (federationOnly && allowedKinds.some((kind) => !isFleetFederationAdvisoryKind(kind))) throw new TypeError(field + " public federation anchors cannot grant task execution");
 	if (new Set(allowedKinds).size !== allowedKinds.length) throw new TypeError(field + ".allowedKinds must not contain duplicates");
 	const keyId = text(value.keyId, field + ".keyId", 80);
 	if (!/^ed25519:[0-9a-f]{64}$/.test(keyId)) throw new TypeError(field + ".keyId is invalid");
@@ -8769,6 +8964,7 @@ function trustEntry(value, field, federationOnly) {
 	}
 	if (derivedKeyId !== keyId) throw new TypeError(field + ".keyId does not match publicKeyPem");
 	return {
+		teamId: identifier$1(value.teamId, field + ".teamId"),
 		keyId,
 		principalId: identifier$1(value.principalId, field + ".principalId"),
 		deviceId: identifier$1(value.deviceId, field + ".deviceId"),
@@ -8778,7 +8974,7 @@ function trustEntry(value, field, federationOnly) {
 }
 function parseTeamPack(source) {
 	const raw = (0, import_dist.parse)(source);
-	if (!isRecord(raw)) throw new TypeError("team pack must be an object");
+	if (!isRecord$1(raw)) throw new TypeError("team pack must be an object");
 	exactKeys(raw, [
 		"schemaVersion",
 		"pack",
@@ -8788,20 +8984,20 @@ function parseTeamPack(source) {
 		"trustAnchors"
 	], "team pack");
 	if (raw.schemaVersion !== 1) throw new TypeError("team pack schemaVersion must equal 1");
-	if (!isRecord(raw.pack) || !isRecord(raw.profile) || !isRecord(raw.taskPolicy)) throw new TypeError("team pack sections must be objects");
+	if (!isRecord$1(raw.pack) || !isRecord$1(raw.profile) || !isRecord$1(raw.taskPolicy)) throw new TypeError("team pack sections must be objects");
 	exactKeys(raw.pack, ["id", "version"], "pack");
 	exactKeys(raw.profile, ["id", "dshRange"], "profile");
 	exactKeys(raw.taskPolicy, ["profiles", "workspaceIds"], "taskPolicy");
 	if (!Array.isArray(raw.publicPlugins) || raw.publicPlugins.length === 0) throw new TypeError("publicPlugins must be a non-empty array");
 	const publicPlugins = raw.publicPlugins.map((value, index) => {
 		const field = `publicPlugins[${index}]`;
-		if (!isRecord(value)) throw new TypeError(field + " must be an object");
+		if (!isRecord$1(value)) throw new TypeError(field + " must be an object");
 		exactKeys(value, [
 			"id",
 			"source",
 			"runtimeModules"
 		], field);
-		if (!isRecord(value.source)) throw new TypeError(field + ".source must be an object");
+		if (!isRecord$1(value.source)) throw new TypeError(field + ".source must be an object");
 		const kind = text(value.source.kind, field + ".source.kind");
 		let source;
 		if (kind === "npm") {
@@ -8863,18 +9059,19 @@ function parseTeamPack(source) {
 }
 function parseTeamOverlay(source) {
 	const raw = (0, import_dist.parse)(source);
-	if (!isRecord(raw)) throw new TypeError("team overlay must be an object");
+	if (!isRecord$1(raw)) throw new TypeError("team overlay must be an object");
 	exactKeys(raw, [
 		"schemaVersion",
 		"team",
 		"device",
+		"route",
 		"release",
 		"privatePlugins",
 		"workspacePaths",
 		"trustedPeers",
 		"agent"
 	], "team overlay");
-	if (raw.schemaVersion !== 1 || !isRecord(raw.team) || !isRecord(raw.device) || !isRecord(raw.release) || !isRecord(raw.workspacePaths) || !isRecord(raw.agent)) throw new TypeError("team overlay schema or sections are invalid");
+	if (raw.schemaVersion !== 1 || !isRecord$1(raw.team) || !isRecord$1(raw.device) || !isRecord$1(raw.release) || !isRecord$1(raw.workspacePaths) || !isRecord$1(raw.agent)) throw new TypeError("team overlay schema or sections are invalid");
 	exactKeys(raw.team, ["id", "name"], "team");
 	exactKeys(raw.device, [
 		"id",
@@ -8888,7 +9085,7 @@ function parseTeamOverlay(source) {
 	if (!Array.isArray(privatePluginsRaw)) throw new TypeError("privatePlugins must be an array");
 	const privatePlugins = privatePluginsRaw.map((value, index) => {
 		const field = `privatePlugins[${index}]`;
-		if (!isRecord(value)) throw new TypeError(field + " must be an object");
+		if (!isRecord$1(value)) throw new TypeError(field + " must be an object");
 		exactKeys(value, [
 			"id",
 			"version",
@@ -8905,6 +9102,8 @@ function parseTeamOverlay(source) {
 			...modules === void 0 ? {} : { runtimeModules: modules }
 		};
 	});
+	const privatePluginIds = privatePlugins.map((plugin) => plugin.id);
+	if (new Set(privatePluginIds).size !== privatePluginIds.length) throw new TypeError("privatePlugins ids must be unique");
 	const workspacePaths = {};
 	for (const [rawId, path] of Object.entries(raw.workspacePaths)) {
 		const id = identifier$1(rawId, "workspace id");
@@ -8926,16 +9125,19 @@ function parseTeamOverlay(source) {
 		"maxMessageTtlMs",
 		"tasks"
 	], "agent");
-	if (!isRecord(raw.agent.tasks)) throw new TypeError("agent.tasks must be an object");
+	if (!isRecord$1(raw.agent.tasks)) throw new TypeError("agent.tasks must be an object");
 	exactKeys(raw.agent.tasks, [
 		"enabled",
 		"timeoutMs",
 		"maxOutputBytes",
-		"maxConcurrent"
+		"maxConcurrent",
+		"policyIds"
 	], "agent.tasks");
 	const teamId = identifier$1(raw.team.id, "team.id");
 	const deviceId = identifier$1(raw.device.id, "device.id");
 	const principalId = identifier$1(raw.device.assignedTo, "device.assignedTo");
+	const trustedPeers = raw.trustedPeers.map((entry, index) => trustEntry(entry, `trustedPeers[${index}]`, false));
+	for (const peer of trustedPeers) if (peer.teamId !== teamId && peer.allowedKinds.some((kind) => !isFleetFederationAdvisoryKind(kind))) throw new TypeError("foreign trustedPeers can grant advisory federation messages only");
 	const probe = parseAgentConfig({
 		schemaVersion: 2,
 		deviceId,
@@ -8963,7 +9165,8 @@ function parseTeamOverlay(source) {
 			profiles: ["bootstrap"],
 			timeoutMs: raw.agent.tasks.timeoutMs,
 			maxOutputBytes: raw.agent.tasks.maxOutputBytes,
-			maxConcurrent: raw.agent.tasks.maxConcurrent
+			maxConcurrent: raw.agent.tasks.maxConcurrent,
+			policyIds: raw.agent.tasks.policyIds
 		}
 	});
 	assertReleaseReadyConfig(probe);
@@ -8980,13 +9183,14 @@ function parseTeamOverlay(source) {
 			class: identifier$1(raw.device.class, "device.class"),
 			channel: "stable"
 		},
+		route: parseRoute(raw.route),
 		release: {
 			id: identifier$1(raw.release.id, "release.id"),
 			version: exactVersion(raw.release.version, "release.version")
 		},
 		privatePlugins,
 		workspacePaths,
-		trustedPeers: raw.trustedPeers.map((entry, index) => trustEntry(entry, `trustedPeers[${index}]`, false)),
+		trustedPeers,
 		agent: {
 			dshHome: probe.dshHome,
 			dshBinary: probe.dshBinary,
@@ -9002,7 +9206,8 @@ function parseTeamOverlay(source) {
 				enabled: probe.tasks.enabled,
 				timeoutMs: probe.tasks.timeoutMs,
 				maxOutputBytes: probe.tasks.maxOutputBytes,
-				maxConcurrent: probe.tasks.maxConcurrent
+				maxConcurrent: probe.tasks.maxConcurrent,
+				policyIds: probe.tasks.policyIds
 			}
 		}
 	};
@@ -9012,10 +9217,11 @@ function absoluteOutputPath(value, field) {
 	return value;
 }
 function createTeamAgentConfig(pack, overlay, paths) {
-	const config = parseAgentConfig({
+	const parsed = parseAgentConfig({
 		schemaVersion: 2,
 		deviceId: overlay.device.id,
 		manifestPath: absoluteOutputPath(paths.manifestPath, "manifestPath"),
+		...paths.desiredManifestPath === void 0 ? {} : { desiredManifestPath: absoluteOutputPath(paths.desiredManifestPath, "desiredManifestPath") },
 		dshHome: overlay.agent.dshHome,
 		dshBinary: overlay.agent.dshBinary,
 		pnpmBinary: overlay.agent.pnpmBinary,
@@ -9039,25 +9245,68 @@ function createTeamAgentConfig(pack, overlay, paths) {
 			profiles: pack.taskPolicy.profiles,
 			timeoutMs: overlay.agent.tasks.timeoutMs,
 			maxOutputBytes: overlay.agent.tasks.maxOutputBytes,
-			maxConcurrent: overlay.agent.tasks.maxConcurrent
+			maxConcurrent: overlay.agent.tasks.maxConcurrent,
+			policyIds: overlay.agent.tasks.policyIds
 		}
 	});
-	assertReleaseReadyConfig(config);
-	assertA2AReadyConfig(config);
+	assertReleaseReadyConfig(parsed);
+	assertA2AReadyConfig(parsed);
+	const { policies: _resolvedPolicies, ...serializableTasks } = parsed.tasks;
+	const config = {
+		...parsed,
+		tasks: serializableTasks
+	};
 	return JSON.stringify(config, null, 2) + "\n";
 }
 function instantiateTeamPack(pack, overlay) {
+	const instantiated = instantiateTeamPackSet(pack, [overlay]);
+	const device = instantiated.devices[0];
+	if (device === void 0) throw new TypeError("team pack set did not produce a device");
+	return {
+		manifestYaml: instantiated.manifestYaml,
+		trustStoreJson: device.trustStoreJson,
+		taskPolicy: device.taskPolicy
+	};
+}
+function assertWorkspaceInstantiation(pack, overlay) {
 	const workspaceIds = Object.keys(overlay.workspacePaths).sort();
 	const expectedWorkspaceIds = [...pack.taskPolicy.workspaceIds].sort();
 	if (workspaceIds.length !== expectedWorkspaceIds.length || workspaceIds.some((id, index) => id !== expectedWorkspaceIds[index])) throw new TypeError("overlay workspacePaths must exactly instantiate the pack workspaceIds");
+}
+function assertStableSources(pack, overlay) {
+	if (overlay.device.channel !== "stable") throw new TypeError("device.channel must be stable");
+	const publicPluginIds = /* @__PURE__ */ new Set();
+	for (const plugin of pack.publicPlugins) {
+		if (publicPluginIds.has(plugin.id)) throw new TypeError("publicPlugins ids must be unique");
+		publicPluginIds.add(plugin.id);
+		if (plugin.source.kind === "npm") {
+			if ((0, import_semver.valid)(plugin.source.version) !== plugin.source.version || !/^sha512-[A-Za-z0-9+/]+={0,2}$/.test(plugin.source.integrity)) throw new TypeError("public npm plugin source must use an exact version and sha512 integrity: " + plugin.id);
+		} else if (!/^[0-9a-f]{40}$/.test(plugin.source.revision)) throw new TypeError("public GitHub plugin source must use a lowercase 40-character SHA: " + plugin.id);
+	}
+	const privatePluginIds = /* @__PURE__ */ new Set();
+	for (const plugin of overlay.privatePlugins) {
+		if (privatePluginIds.has(plugin.id)) throw new TypeError("privatePlugins ids must be unique");
+		privatePluginIds.add(plugin.id);
+		if ((0, import_semver.valid)(plugin.version) !== plugin.version || !/^[0-9a-f]{64}$/.test(plugin.digest)) throw new TypeError("private plugin source must use an exact version and lowercase SHA-256: " + plugin.id);
+	}
+}
+function releaseForOverlay(pack, overlay) {
 	const publicIds = new Set(pack.publicPlugins.map((plugin) => plugin.id));
 	for (const plugin of overlay.privatePlugins) if (publicIds.has(plugin.id)) throw new TypeError("private plugin id conflicts with a public pack plugin: " + plugin.id);
-	const releasePlugins = [...pack.publicPlugins.map((plugin) => ({
+	const releasePlugins = [...[...pack.publicPlugins].sort((left, right) => compareCanonicalIds(left.id, right.id)).map((plugin) => ({
 		id: plugin.id,
 		visibility: "public",
-		source: plugin.source,
-		...plugin.runtimeModules === void 0 ? {} : { runtimeModules: plugin.runtimeModules }
-	})), ...overlay.privatePlugins.map((plugin) => ({
+		source: plugin.source.kind === "npm" ? {
+			kind: "npm",
+			version: plugin.source.version,
+			integrity: plugin.source.integrity
+		} : {
+			kind: "github",
+			repository: plugin.source.repository,
+			revision: plugin.source.revision
+		},
+		...plugin.runtimeModules === void 0 ? {} : { runtimeModules: [...plugin.runtimeModules].sort() }
+	})), ...[...overlay.privatePlugins].sort((left, right) => compareCanonicalIds(left.id, right.id)).map((plugin) => ({
 		id: plugin.id,
 		visibility: "private",
 		source: {
@@ -9065,26 +9314,16 @@ function instantiateTeamPack(pack, overlay) {
 			version: plugin.version,
 			digest: plugin.digest
 		},
-		...plugin.runtimeModules === void 0 ? {} : { runtimeModules: plugin.runtimeModules }
+		...plugin.runtimeModules === void 0 ? {} : { runtimeModules: [...plugin.runtimeModules].sort() }
 	}))];
-	const manifestObject = {
-		schemaVersion: 2,
-		team: overlay.team,
-		devices: { [overlay.device.id]: {
-			assignedTo: overlay.device.assignedTo,
-			class: overlay.device.class,
-			channel: overlay.device.channel
-		} },
-		profileReleases: { [overlay.release.id]: {
-			version: overlay.release.version,
-			profile: pack.profile.id,
-			dshRange: pack.profile.dshRange,
-			plugins: releasePlugins
-		} },
-		assignments: { [overlay.device.id]: { [pack.profile.id]: overlay.release.id } }
+	return {
+		version: overlay.release.version,
+		profile: pack.profile.id,
+		dshRange: pack.profile.dshRange,
+		plugins: releasePlugins
 	};
-	const manifestYaml = (0, import_dist.stringify)(manifestObject, { lineWidth: 0 });
-	parseFleetManifest(manifestYaml);
+}
+function deviceTrustAndPolicy(pack, overlay) {
 	const trustEntries = [...pack.trustAnchors, ...overlay.trustedPeers];
 	const keys = /* @__PURE__ */ new Set();
 	for (const entry of trustEntries) {
@@ -9092,9 +9331,8 @@ function instantiateTeamPack(pack, overlay) {
 		keys.add(entry.keyId);
 	}
 	return {
-		manifestYaml,
 		trustStoreJson: JSON.stringify({
-			schemaVersion: 1,
+			schemaVersion: 2,
 			teamId: overlay.team.id,
 			entries: trustEntries
 		}, null, 2) + "\n",
@@ -9104,8 +9342,228 @@ function instantiateTeamPack(pack, overlay) {
 		}
 	};
 }
+function instantiateTeamPackSet(pack, overlays) {
+	if (overlays.length === 0) throw new TypeError("team pack set requires at least one device overlay");
+	const orderedOverlays = [...overlays].sort((left, right) => compareCanonicalIds(left.device.id, right.device.id));
+	const canonicalTeam = orderedOverlays[0]?.team;
+	if (canonicalTeam === void 0) throw new TypeError("team pack set requires at least one device overlay");
+	const seenDevices = /* @__PURE__ */ new Set();
+	const releases = /* @__PURE__ */ new Map();
+	const devices = [];
+	for (const overlay of orderedOverlays) {
+		if (overlay.team.id !== canonicalTeam.id || overlay.team.name !== canonicalTeam.name) throw new TypeError("all overlays must use the exact same team id and name");
+		if (seenDevices.has(overlay.device.id)) throw new TypeError("duplicate device id: " + overlay.device.id);
+		seenDevices.add(overlay.device.id);
+		assertWorkspaceInstantiation(pack, overlay);
+		assertStableSources(pack, overlay);
+		const release = releaseForOverlay(pack, overlay);
+		const existingRelease = releases.get(overlay.release.id);
+		if (existingRelease !== void 0 && JSON.stringify(existingRelease) !== JSON.stringify(release)) throw new TypeError("release id has conflicting definitions: " + overlay.release.id);
+		if (existingRelease === void 0) releases.set(overlay.release.id, release);
+		devices.push({
+			deviceId: overlay.device.id,
+			releaseId: overlay.release.id,
+			overlay,
+			...deviceTrustAndPolicy(pack, overlay)
+		});
+	}
+	const manifestDevices = Object.fromEntries(devices.map((device) => [device.deviceId, {
+		assignedTo: device.overlay.device.assignedTo,
+		class: device.overlay.device.class,
+		channel: device.overlay.device.channel
+	}]));
+	const manifestReleases = Object.fromEntries([...releases.entries()].sort(([left], [right]) => compareCanonicalIds(left, right)));
+	const assignments = Object.fromEntries(devices.map((device) => [device.deviceId, { [pack.profile.id]: device.releaseId }]));
+	const manifestObject = {
+		schemaVersion: 2,
+		team: {
+			id: canonicalTeam.id,
+			...canonicalTeam.name === void 0 ? {} : { name: canonicalTeam.name }
+		},
+		devices: manifestDevices,
+		profileReleases: manifestReleases,
+		assignments
+	};
+	const manifestYaml = (0, import_dist.stringify)(manifestObject, { lineWidth: 0 });
+	parseFleetManifest(manifestYaml);
+	return {
+		manifestYaml,
+		devices
+	};
+}
 //#endregion
 //#region src/bootstrap/runtime.ts
+const GENERATION_RECORD_NAME = "generation.json";
+const ROUTES_NAME = "routes.json";
+const ACTIVATION_JOURNAL_NAME = "activation-journal.json";
+const GENERATION_LIFECYCLE_LOCK_NAME = ".generation-lifecycle.lock";
+const GENERATION_LIFECYCLE_LOCK_RECORD_NAME = "owner.json";
+const GENERATION_LIFECYCLE_RECLAIM_RECORD_NAME = "reclaim.json";
+const REQUIRED_GENERATION_FILES = [
+	"agent.config.json",
+	"agent.mjs",
+	"fleet.lock.yaml",
+	"launcher.mjs",
+	ROUTES_NAME,
+	"task-policy.json",
+	"trust-store.json",
+	"worker.mjs"
+];
+const OPTIONAL_GENERATION_FILES = ["bootstrap.mjs"];
+const MAX_GENERATION_FILE_BYTES = 67108864;
+const GENERATION_LAUNCHER_SOURCE = `#!/usr/bin/env node
+import { spawn } from 'node:child_process'
+import { createHash } from 'node:crypto'
+import { constants } from 'node:fs'
+import { lstat, open, readlink } from 'node:fs/promises'
+import { basename, dirname, isAbsolute, join, normalize } from 'node:path'
+
+function fail(message) {
+  throw new Error('Fleet generation launcher refused: ' + message)
+}
+
+async function privateFile(path, expectedMode) {
+  let handle
+  try {
+    handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW)
+    const info = await handle.stat()
+    if (!info.isFile() || info.isSymbolicLink()) fail('generation member must be a regular file')
+    if ((info.mode & 0o777) !== expectedMode) fail('generation member mode mismatch')
+    if (typeof process.getuid === 'function' && info.uid !== process.getuid()) fail('generation member owner mismatch')
+    const contents = await handle.readFile()
+    return { contents, bytes: info.size, mode: info.mode & 0o777 }
+  } finally {
+    await handle?.close()
+  }
+}
+
+function verifyFileRecord(record, name, file) {
+  const expected = record.files?.[name]
+  if (typeof expected !== 'object' || expected === null || Array.isArray(expected) ||
+      expected.bytes !== file.bytes || expected.mode !== file.mode ||
+      typeof expected.sha256 !== 'string' ||
+      createHash('sha256').update(file.contents).digest('hex') !== expected.sha256) {
+    fail('generation member integrity mismatch: ' + name)
+  }
+}
+
+function canonicalJson(value) {
+  if (value === null || typeof value === 'string' || typeof value === 'boolean' || typeof value === 'number') {
+    if (typeof value === 'number' && !Number.isFinite(value)) fail('generation.json contains a non-finite number')
+    return JSON.stringify(value)
+  }
+  if (Array.isArray(value)) return '[' + value.map(canonicalJson).join(',') + ']'
+  if (typeof value === 'object') {
+    return '{' + Object.keys(value).sort().map(key => JSON.stringify(key) + ':' + canonicalJson(value[key])).join(',') + '}'
+  }
+  fail('generation.json is not canonical JSON')
+}
+
+async function main() {
+  const argv = process.argv.slice(2)
+  if (argv.length !== 3 || argv[0] !== '--config' || typeof argv[1] !== 'string' ||
+      !isAbsolute(argv[1]) || normalize(argv[1]) !== argv[1] || basename(argv[1]) !== 'agent.config.json' ||
+      basename(dirname(argv[1])) !== 'current' || typeof argv[2] !== 'string' || !/^[a-z][a-z0-9-]{0,63}$/.test(argv[2])) {
+    fail('Host route must use exactly --config <root>/current/agent.config.json <command>')
+  }
+  const currentPath = dirname(argv[1])
+  const rootPath = dirname(currentPath)
+  const expectedLauncherPath = join(currentPath, 'launcher.mjs')
+  const entryPath = process.argv[1]
+  const resolvedLauncherPrefix = join(rootPath, 'generations') + '/'
+  if (typeof entryPath !== 'string' || !isAbsolute(entryPath) || normalize(entryPath) !== entryPath ||
+      !(entryPath === expectedLauncherPath ||
+        (entryPath.startsWith(resolvedLauncherPrefix) && basename(entryPath) === 'launcher.mjs'))) {
+    fail('entrypoint does not belong to the configured generation root')
+  }
+  const rootInfo = await lstat(rootPath)
+  if (!rootInfo.isDirectory() || rootInfo.isSymbolicLink() || (rootInfo.mode & 0o777) !== 0o700 ||
+      (typeof process.getuid === 'function' && rootInfo.uid !== process.getuid())) {
+    fail('generation root is not owner-controlled')
+  }
+  const currentInfo = await lstat(currentPath)
+  if (!currentInfo.isSymbolicLink() || (typeof process.getuid === 'function' && currentInfo.uid !== process.getuid())) {
+    fail('current must be an owner-controlled symbolic link')
+  }
+  const currentTarget = await readlink(currentPath)
+  const match = /^generations\\/([A-Za-z0-9][A-Za-z0-9._-]{0,63})$/.exec(currentTarget)
+  if (match === null) fail('current must be one relative generations/<id> target')
+  const generationId = match[1]
+  const generationsPath = join(rootPath, 'generations')
+  const generationPath = join(generationsPath, generationId)
+  const generationsInfo = await lstat(generationsPath)
+  if (!generationsInfo.isDirectory() || generationsInfo.isSymbolicLink() || (generationsInfo.mode & 0o777) !== 0o700 ||
+      (typeof process.getuid === 'function' && generationsInfo.uid !== process.getuid())) {
+    fail('generations directory is not owner-controlled')
+  }
+  const generationInfo = await lstat(generationPath)
+  if (!generationInfo.isDirectory() || generationInfo.isSymbolicLink() || (generationInfo.mode & 0o777) !== 0o500 ||
+      (typeof process.getuid === 'function' && generationInfo.uid !== process.getuid())) {
+    fail('generation directory is not immutable and owner-controlled')
+  }
+  const recordFile = await privateFile(join(generationPath, 'generation.json'), 0o400)
+  let record
+  try { record = JSON.parse(recordFile.contents.toString('utf8')) } catch { fail('generation.json is invalid') }
+  if (record?.generationId !== generationId || typeof record.files !== 'object' || record.files === null) {
+    fail('generation.json does not bind this generation')
+  }
+  const { generationDigest, ...generationBody } = record
+  if (typeof generationDigest !== 'string' ||
+      createHash('sha256').update(canonicalJson(generationBody)).digest('hex') !== generationDigest) {
+    fail('generation.json digest does not match')
+  }
+  const members = {
+    'agent.mjs': await privateFile(join(generationPath, 'agent.mjs'), 0o500),
+    'agent.config.json': await privateFile(join(generationPath, 'agent.config.json'), 0o400),
+    'worker.mjs': await privateFile(join(generationPath, 'worker.mjs'), 0o500),
+    'launcher.mjs': await privateFile(join(generationPath, 'launcher.mjs'), 0o500),
+  }
+  for (const [name, file] of Object.entries(members)) verifyFileRecord(record, name, file)
+  let agentConfig
+  try { agentConfig = JSON.parse(members['agent.config.json'].contents.toString('utf8')) } catch { fail('agent.config.json is invalid') }
+  if (agentConfig?.desiredManifestPath !== join(generationPath, 'fleet.lock.yaml')) {
+    fail('agent.config.json does not bind this generation')
+  }
+  const generationAfter = await lstat(generationPath)
+  if (generationAfter.dev !== generationInfo.dev || generationAfter.ino !== generationInfo.ino ||
+      !generationAfter.isDirectory() || generationAfter.isSymbolicLink() || (generationAfter.mode & 0o777) !== 0o500) {
+    fail('generation was replaced while being verified')
+  }
+
+  const child = spawn(process.execPath, [
+    join(generationPath, 'agent.mjs'), '--config', join(generationPath, 'agent.config.json'), argv[2],
+  ], { stdio: 'inherit', env: process.env })
+  const forward = signal => {
+    try { child.kill(signal) } catch {}
+  }
+  const onSigint = () => forward('SIGINT')
+  const onSigterm = () => forward('SIGTERM')
+  process.on('SIGINT', onSigint)
+  process.on('SIGTERM', onSigterm)
+  const result = await new Promise((resolve, reject) => {
+    child.once('error', reject)
+    child.once('close', (code, signal) => resolve({ code, signal }))
+  })
+  process.off('SIGINT', onSigint)
+  process.off('SIGTERM', onSigterm)
+  process.exitCode = result.code ?? (result.signal === 'SIGINT' ? 130 : result.signal === 'SIGTERM' ? 143 : 1)
+}
+
+try {
+  await main()
+} catch (error) {
+  process.stderr.write((error instanceof Error ? error.message : 'Fleet generation launcher failed') + '\\n')
+  process.exitCode = 70
+}
+`;
+function isRecord(value) {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function exactObjectKeys(value, keys, field) {
+	const actual = Object.keys(value).sort();
+	const expected = [...keys].sort();
+	if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) throw new TypeError(field + " has unsupported or missing fields");
+}
 function identifier(value, field) {
 	if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(value)) throw new TypeError(field + " is invalid");
 	return value;
@@ -9113,6 +9571,14 @@ function identifier(value, field) {
 function safeAbsolutePath(value, field) {
 	if (!isAbsolute(value) || normalize(value) !== value || value.includes("\0")) throw new TypeError(field + " must be a normalized absolute path");
 	return value;
+}
+function canonicalNow(value) {
+	const date = value === void 0 ? /* @__PURE__ */ new Date() : value instanceof Date ? new Date(value.getTime()) : new Date(value);
+	if (!Number.isFinite(date.getTime())) throw new TypeError("now must be a valid timestamp");
+	return date.toISOString();
+}
+function sha256(contents) {
+	return createHash("sha256").update(contents).digest("hex");
 }
 async function ensurePrivateDirectory(path) {
 	await mkdir(path, {
@@ -9124,13 +9590,36 @@ async function ensurePrivateDirectory(path) {
 	if ((info.mode & 63) !== 0) throw new TypeError("bootstrap output directory must be owner-only (0700)");
 	if (typeof process.getuid === "function" && info.uid !== process.getuid()) throw new TypeError("bootstrap output directory must be owned by the current user");
 }
-async function readRegularFile(path, privateFile = false) {
+async function assertPrivateDirectory(path, field) {
+	const info = await lstat(path);
+	if (!info.isDirectory() || info.isSymbolicLink()) throw new TypeError(field + " must be a real directory");
+	if ((info.mode & 63) !== 0) throw new TypeError(field + " must be owner-only");
+	if (typeof process.getuid === "function" && info.uid !== process.getuid()) throw new TypeError(field + " must be owned by the current user");
+}
+async function readRegularBuffer(path, field, ownerOnly) {
+	let handle;
+	try {
+		handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+		const info = await handle.stat();
+		if (!info.isFile()) throw new TypeError(field + " must be a regular file");
+		if (info.size > MAX_GENERATION_FILE_BYTES) throw new TypeError(field + " exceeds the generation file size limit");
+		if (ownerOnly && (info.mode & 63) !== 0) throw new TypeError(field + " must be owner-only");
+		if (typeof process.getuid === "function" && info.uid !== process.getuid()) throw new TypeError(field + " must be owned by the current user");
+		return await handle.readFile();
+	} catch (error) {
+		if (error.code === "ELOOP") throw new TypeError(field + " must not be a symbolic link");
+		throw error;
+	} finally {
+		await handle?.close();
+	}
+}
+async function readRegularFile(path, privateLabel) {
 	let handle;
 	try {
 		handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
 		const info = await handle.stat();
 		if (!info.isFile()) throw new TypeError("bootstrap inputs must be regular files");
-		if (privateFile && (info.mode & 63) !== 0) throw new TypeError("bootstrap private key must be owner-only (0600)");
+		if (privateLabel !== void 0 && (info.mode & 63) !== 0) throw new TypeError(privateLabel + " must be owner-only (0600)");
 		if (typeof process.getuid === "function" && info.uid !== process.getuid()) throw new TypeError("bootstrap inputs must be owned by the current user");
 		return await handle.readFile("utf8");
 	} catch (error) {
@@ -9148,14 +9637,24 @@ async function assertMissing(paths) {
 		if (error.code !== "ENOENT") throw error;
 	}
 }
-async function writeExclusive(path, contents) {
+async function writeExclusive(path, contents, mode = 384) {
 	let handle;
 	try {
-		handle = await open(path, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW, 384);
-		await handle.writeFile(contents, "utf8");
+		handle = await open(path, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW, mode);
+		if (typeof contents === "string") await handle.writeFile(contents, "utf8");
+		else await handle.writeFile(contents);
 		await handle.sync();
 	} finally {
 		await handle?.close();
+	}
+}
+async function syncDirectory(path) {
+	const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+	try {
+		if (!(await handle.stat()).isDirectory()) throw new TypeError("durability target must be a directory");
+		await handle.sync();
+	} finally {
+		await handle.close();
 	}
 }
 function parseInvite(value) {
@@ -9182,6 +9681,46 @@ function parseInvite(value) {
 	};
 	if (a2aKeyId(invite.publicKeyPem) !== invite.keyId) throw new TypeError("identity invite key id does not match its public key");
 	return invite;
+}
+async function validateIdentity(identityDirectory, overlay) {
+	await assertPrivateDirectory(identityDirectory, "identityDirectory");
+	const privateKeyPath = join(identityDirectory, "identity.private.pem");
+	const invitePath = join(identityDirectory, "identity.invite.json");
+	const privateKeyPem = await readRegularFile(privateKeyPath, "bootstrap private key");
+	const invite = parseInvite(JSON.parse(await readRegularFile(invitePath)));
+	if (invite.teamId !== overlay.team.id || invite.principalId !== overlay.device.assignedTo || invite.deviceId !== overlay.device.id) throw new TypeError("identity invite does not match the overlay team, principal and device");
+	if (a2aKeyId(privateKeyPem) !== invite.keyId) throw new TypeError("identity private key does not match the invite");
+	if (a2aKeyId(createPublicKey(privateKeyPem).export({
+		type: "spki",
+		format: "pem"
+	}).toString()) !== a2aKeyId(invite.publicKeyPem)) throw new TypeError("identity private and public keys do not match");
+	return privateKeyPath;
+}
+async function loadTeamPackSet(input) {
+	const packPath = safeAbsolutePath(input.packPath, "packPath");
+	if (!Array.isArray(input.overlayPaths) || input.overlayPaths.length === 0) throw new TypeError("overlayPaths must contain at least one overlay");
+	const overlayPaths = input.overlayPaths.map((path, index) => safeAbsolutePath(path, `overlayPaths[${index}]`));
+	if (new Set(overlayPaths).size !== overlayPaths.length) throw new TypeError("overlayPaths must not contain duplicates");
+	const pack = parseTeamPack(await readRegularFile(packPath));
+	return {
+		pack,
+		instantiated: instantiateTeamPackSet(pack, await Promise.all(overlayPaths.map(async (path) => parseTeamOverlay(await readRegularFile(path, "bootstrap overlay")))))
+	};
+}
+function planFromSet(pack, instantiated) {
+	return {
+		teamId: instantiated.devices[0]?.overlay.team.id ?? "",
+		packId: pack.pack.id,
+		packVersion: pack.pack.version,
+		profileId: pack.profile.id,
+		manifestYaml: instantiated.manifestYaml,
+		manifestDigest: createHash("sha256").update(instantiated.manifestYaml, "utf8").digest("hex"),
+		devices: instantiated.devices.map((device) => ({
+			deviceId: device.deviceId,
+			releaseId: device.releaseId,
+			releaseVersion: device.overlay.release.version
+		}))
+	};
 }
 async function createBootstrapIdentity(input) {
 	const outputDirectory = safeAbsolutePath(input.outputDirectory, "outputDirectory");
@@ -9233,17 +9772,8 @@ async function renderBootstrapBundle(input) {
 	const overlayPath = safeAbsolutePath(input.overlayPath, "overlayPath");
 	await ensurePrivateDirectory(outputDirectory);
 	const pack = parseTeamPack(await readRegularFile(packPath));
-	const overlay = parseTeamOverlay(await readRegularFile(overlayPath));
-	const privateKeyPath = join(identityDirectory, "identity.private.pem");
-	const invitePath = join(identityDirectory, "identity.invite.json");
-	const privateKeyPem = await readRegularFile(privateKeyPath, true);
-	const invite = parseInvite(JSON.parse(await readRegularFile(invitePath)));
-	if (invite.teamId !== overlay.team.id || invite.principalId !== overlay.device.assignedTo || invite.deviceId !== overlay.device.id) throw new TypeError("identity invite does not match the overlay team, principal and device");
-	if (a2aKeyId(privateKeyPem) !== invite.keyId) throw new TypeError("identity private key does not match the invite");
-	if (a2aKeyId(createPublicKey(privateKeyPem).export({
-		type: "spki",
-		format: "pem"
-	}).toString()) !== a2aKeyId(invite.publicKeyPem)) throw new TypeError("identity private and public keys do not match");
+	const overlay = parseTeamOverlay(await readRegularFile(overlayPath, "bootstrap overlay"));
+	const privateKeyPath = await validateIdentity(identityDirectory, overlay);
 	const manifestPath = join(outputDirectory, "fleet.lock.yaml");
 	const trustStorePath = join(outputDirectory, "trust-store.json");
 	const taskPolicyPath = join(outputDirectory, "task-policy.json");
@@ -9287,49 +9817,983 @@ async function renderBootstrapBundle(input) {
 		manifestDigest: createHash("sha256").update(instantiated.manifestYaml, "utf8").digest("hex")
 	};
 }
+async function planBootstrapSet(input) {
+	const { pack, instantiated } = await loadTeamPackSet(input);
+	return planFromSet(pack, instantiated);
+}
+async function renderBootstrapSet(input) {
+	const outputDirectory = safeAbsolutePath(input.outputDirectory, "outputDirectory");
+	const identityDirectory = safeAbsolutePath(input.identityDirectory, "identityDirectory");
+	const deviceId = normalizeDeviceId(input.deviceId);
+	const { pack, instantiated } = await loadTeamPackSet(input);
+	const plan = planFromSet(pack, instantiated);
+	const device = instantiated.devices.find((candidate) => candidate.deviceId === deviceId);
+	if (device === void 0) throw new TypeError("deviceId is not present in the overlay set: " + deviceId);
+	const privateKeyPath = await validateIdentity(identityDirectory, device.overlay);
+	await ensurePrivateDirectory(outputDirectory);
+	const manifestPath = join(outputDirectory, "fleet.lock.yaml");
+	const trustStorePath = join(outputDirectory, "trust-store.json");
+	const taskPolicyPath = join(outputDirectory, "task-policy.json");
+	const agentConfigPath = join(outputDirectory, "agent.config.json");
+	const outputs = [
+		manifestPath,
+		trustStorePath,
+		taskPolicyPath,
+		agentConfigPath
+	];
+	await assertMissing(outputs);
+	const contents = [
+		instantiated.manifestYaml,
+		device.trustStoreJson,
+		JSON.stringify(device.taskPolicy, null, 2) + "\n",
+		createTeamAgentConfig(pack, device.overlay, {
+			manifestPath,
+			trustStorePath,
+			privateKeyPath
+		})
+	];
+	const created = [];
+	try {
+		for (let index = 0; index < outputs.length; index += 1) {
+			const path = outputs[index];
+			const content = contents[index];
+			if (path === void 0 || content === void 0) throw new TypeError("bootstrap output set is incomplete");
+			await writeExclusive(path, content);
+			created.push(path);
+		}
+	} catch (error) {
+		await Promise.all(created.map((path) => rm(path, { force: true })));
+		throw error;
+	}
+	return {
+		deviceId: device.deviceId,
+		releaseId: device.releaseId,
+		manifestPath,
+		trustStorePath,
+		taskPolicyPath,
+		agentConfigPath,
+		manifestDigest: plan.manifestDigest
+	};
+}
+function generationDirectory(rootDirectory, generationId) {
+	return join(rootDirectory, "generations", generationId);
+}
+async function ensureGenerationRoot(rootDirectory, create) {
+	const root = safeAbsolutePath(rootDirectory, "rootDirectory");
+	if (create) await ensurePrivateDirectory(root);
+	else await assertPrivateDirectory(root, "generation root");
+	const generations = join(root, "generations");
+	if (create) await ensurePrivateDirectory(generations);
+	else await assertPrivateDirectory(generations, "generations directory");
+	return root;
+}
+function generationFileMode(name) {
+	return name.endsWith(".mjs") ? 320 : 256;
+}
+function generationFileRecord(contents, mode) {
+	const bytes = typeof contents === "string" ? Buffer.byteLength(contents, "utf8") : contents.byteLength;
+	return {
+		sha256: sha256(contents),
+		bytes,
+		mode
+	};
+}
+function generationRoutesWithLauncher(instantiated) {
+	const routes = parseGenerationRoutes(createGenerationRoutes(instantiated));
+	const launcherRoutes = {
+		...routes,
+		routes: routes.routes.map((route) => {
+			const routeDirectory = dirname(route.configPath);
+			if (basename(routeDirectory) !== "current" || basename(route.configPath) !== "agent.config.json" || dirname(route.agentPath) !== routeDirectory || basename(route.agentPath) !== "agent.mjs" && basename(route.agentPath) !== "launcher.mjs") throw new TypeError("generation routes must pair current/launcher.mjs with current/agent.config.json");
+			return {
+				...route,
+				agentPath: join(routeDirectory, "launcher.mjs")
+			};
+		})
+	};
+	const source = JSON.stringify(launcherRoutes, null, 2) + "\n";
+	parseGenerationRoutes(source);
+	return source;
+}
+async function cleanupGeneration(path, created) {
+	try {
+		await chmod(path, 448);
+	} catch {}
+	for (const file of [...created].reverse()) try {
+		await unlink(file);
+	} catch {}
+	try {
+		await rmdir(path);
+	} catch {}
+}
+async function assembleBootstrapGeneration(input) {
+	const rootDirectory = safeAbsolutePath(input.rootDirectory, "rootDirectory");
+	const generationId = identifier(input.generationId, "generationId");
+	const identityDirectory = safeAbsolutePath(input.identityDirectory, "identityDirectory");
+	const deviceId = normalizeDeviceId(input.deviceId);
+	const agentBundlePath = safeAbsolutePath(input.agentBundlePath, "agentBundlePath");
+	const workerBundlePath = safeAbsolutePath(input.workerBundlePath, "workerBundlePath");
+	const bootstrapBundlePath = input.bootstrapBundlePath === void 0 ? void 0 : safeAbsolutePath(input.bootstrapBundlePath, "bootstrapBundlePath");
+	const createdAt = canonicalNow(input.now);
+	const { pack, instantiated } = await loadTeamPackSet(input);
+	const plan = planFromSet(pack, instantiated);
+	const device = instantiated.devices.find((candidate) => candidate.deviceId === deviceId);
+	if (device === void 0) throw new TypeError("deviceId is not present in the overlay set: " + deviceId);
+	const privateKeyPath = await validateIdentity(identityDirectory, device.overlay);
+	const expectedCurrentAgent = join(rootDirectory, "current", "agent.mjs");
+	const expectedCurrentLauncher = join(rootDirectory, "current", "launcher.mjs");
+	const expectedCurrentConfig = join(rootDirectory, "current", "agent.config.json");
+	if (device.overlay.route.agentPath !== expectedCurrentAgent && device.overlay.route.agentPath !== expectedCurrentLauncher || device.overlay.route.configPath !== expectedCurrentConfig) throw new TypeError("selected device route must target current/launcher.mjs (or legacy current/agent.mjs) and current/agent.config.json under rootDirectory");
+	const agentBundle = await readRegularBuffer(agentBundlePath, "agent bundle", false);
+	const workerBundle = await readRegularBuffer(workerBundlePath, "worker bundle", false);
+	const bootstrapBundle = bootstrapBundlePath === void 0 ? void 0 : await readRegularBuffer(bootstrapBundlePath, "bootstrap bundle", false);
+	const root = await ensureGenerationRoot(rootDirectory, true);
+	const generationsPath = join(root, "generations");
+	const generationPath = generationDirectory(root, generationId);
+	try {
+		await mkdir(generationPath, { mode: 448 });
+	} catch (error) {
+		if (error.code === "EEXIST") throw new TypeError("generation assemble refuses to overwrite an existing generation: " + generationId);
+		throw error;
+	}
+	const created = [];
+	try {
+		const desiredManifestPath = join(generationPath, "fleet.lock.yaml");
+		const liveManifestPath = join(device.overlay.agent.dshHome, "profiles", pack.profile.id, "fleet.lock.yaml");
+		const routesJson = generationRoutesWithLauncher(instantiated);
+		const contents = {
+			"agent.config.json": createTeamAgentConfig(pack, device.overlay, {
+				manifestPath: liveManifestPath,
+				desiredManifestPath,
+				trustStorePath: join(generationPath, "trust-store.json"),
+				privateKeyPath
+			}),
+			"agent.mjs": agentBundle,
+			"fleet.lock.yaml": instantiated.manifestYaml,
+			"launcher.mjs": GENERATION_LAUNCHER_SOURCE,
+			[ROUTES_NAME]: routesJson,
+			"task-policy.json": JSON.stringify(device.taskPolicy, null, 2) + "\n",
+			"trust-store.json": device.trustStoreJson,
+			"worker.mjs": workerBundle,
+			...bootstrapBundle === void 0 ? {} : { "bootstrap.mjs": bootstrapBundle }
+		};
+		const files = {};
+		for (const name of Object.keys(contents).sort()) {
+			const content = contents[name];
+			if (content === void 0) throw new TypeError("generation content is incomplete");
+			const mode = generationFileMode(name);
+			const path = join(generationPath, name);
+			await writeExclusive(path, content, mode);
+			created.push(path);
+			files[name] = generationFileRecord(content, mode);
+		}
+		const body = {
+			schemaVersion: 1,
+			generationId,
+			createdAt,
+			teamId: plan.teamId,
+			packId: plan.packId,
+			packVersion: plan.packVersion,
+			profileId: plan.profileId,
+			deviceId,
+			manifestDigest: plan.manifestDigest,
+			liveManifestPath,
+			desiredManifestPath,
+			files
+		};
+		const record = {
+			...body,
+			generationDigest: sha256Canonical(body)
+		};
+		const recordPath = join(generationPath, GENERATION_RECORD_NAME);
+		await writeExclusive(recordPath, JSON.stringify(record, null, 2) + "\n", 256);
+		created.push(recordPath);
+		await syncDirectory(generationPath);
+		await chmod(generationPath, 320);
+		await syncDirectory(generationsPath);
+		return {
+			generationId,
+			generationPath,
+			generationDigest: record.generationDigest,
+			manifestDigest: record.manifestDigest,
+			deviceId,
+			files
+		};
+	} catch (error) {
+		await cleanupGeneration(generationPath, created);
+		throw error;
+	}
+}
+function recordText(value, field, maxLength = 1024) {
+	if (typeof value !== "string" || value.length === 0 || value !== value.trim() || value.length > maxLength || /[\r\n\0]/.test(value)) throw new TypeError(field + " must be a bounded trimmed string");
+	return value;
+}
+function recordDigest(value, field) {
+	if (typeof value !== "string" || !/^[0-9a-f]{64}$/.test(value)) throw new TypeError(field + " must be a lowercase SHA-256 digest");
+	return value;
+}
+function recordTime(value, field) {
+	const timestamp = recordText(value, field, 64);
+	const parsed = Date.parse(timestamp);
+	if (!Number.isFinite(parsed) || new Date(parsed).toISOString() !== timestamp) throw new TypeError(field + " must be a canonical ISO timestamp");
+	return timestamp;
+}
+function parseGenerationRecord(source) {
+	let value;
+	try {
+		value = JSON.parse(source);
+	} catch {
+		throw new TypeError("generation.json must contain JSON");
+	}
+	if (!isRecord(value)) throw new TypeError("generation.json must be an object");
+	exactObjectKeys(value, [
+		"schemaVersion",
+		"generationId",
+		"createdAt",
+		"teamId",
+		"packId",
+		"packVersion",
+		"profileId",
+		"deviceId",
+		"manifestDigest",
+		"liveManifestPath",
+		"desiredManifestPath",
+		"files",
+		"generationDigest"
+	], "generation.json");
+	if (value.schemaVersion !== 1 || !isRecord(value.files)) throw new TypeError("generation.json schema or files are invalid");
+	const files = {};
+	for (const [name, rawRecord] of Object.entries(value.files)) {
+		if (![...REQUIRED_GENERATION_FILES, ...OPTIONAL_GENERATION_FILES].includes(name) || !isRecord(rawRecord)) throw new TypeError("generation.json contains an unsupported file record: " + name);
+		exactObjectKeys(rawRecord, [
+			"sha256",
+			"bytes",
+			"mode"
+		], "generation file record");
+		if (typeof rawRecord.bytes !== "number" || !Number.isSafeInteger(rawRecord.bytes) || rawRecord.bytes < 0 || rawRecord.bytes > MAX_GENERATION_FILE_BYTES) throw new TypeError("generation file bytes are invalid");
+		if (rawRecord.mode !== generationFileMode(name)) throw new TypeError("generation file mode is invalid: " + name);
+		files[name] = {
+			sha256: recordDigest(rawRecord.sha256, "generation file sha256"),
+			bytes: rawRecord.bytes,
+			mode: rawRecord.mode
+		};
+	}
+	if (REQUIRED_GENERATION_FILES.some((name) => files[name] === void 0)) throw new TypeError("generation.json is missing required files");
+	const body = {
+		schemaVersion: 1,
+		generationId: identifier(recordText(value.generationId, "generationId", 64), "generationId"),
+		createdAt: recordTime(value.createdAt, "createdAt"),
+		teamId: identifier(recordText(value.teamId, "teamId", 64), "teamId"),
+		packId: identifier(recordText(value.packId, "packId", 64), "packId"),
+		packVersion: recordText(value.packVersion, "packVersion", 128),
+		profileId: identifier(recordText(value.profileId, "profileId", 64), "profileId"),
+		deviceId: normalizeDeviceId(recordText(value.deviceId, "deviceId", 64)),
+		manifestDigest: recordDigest(value.manifestDigest, "manifestDigest"),
+		liveManifestPath: safeAbsolutePath(recordText(value.liveManifestPath, "liveManifestPath", 4096), "liveManifestPath"),
+		desiredManifestPath: safeAbsolutePath(recordText(value.desiredManifestPath, "desiredManifestPath", 4096), "desiredManifestPath"),
+		files
+	};
+	const generationDigest = recordDigest(value.generationDigest, "generationDigest");
+	if (sha256Canonical(body) !== generationDigest) throw new TypeError("generationDigest does not match generation metadata");
+	return {
+		...body,
+		generationDigest
+	};
+}
+async function inspectBootstrapGeneration(input) {
+	const root = await ensureGenerationRoot(input.rootDirectory, false);
+	const generationId = identifier(input.generationId, "generationId");
+	const generationPath = generationDirectory(root, generationId);
+	await assertPrivateDirectory(generationPath, "generation directory");
+	if (((await lstat(generationPath)).mode & 511) !== 320) throw new TypeError("generation directory must be immutable owner-only (0500)");
+	const recordContents = await readRegularBuffer(join(generationPath, GENERATION_RECORD_NAME), "generation.json", true);
+	if (((await lstat(join(generationPath, GENERATION_RECORD_NAME))).mode & 511) !== 256) throw new TypeError("generation.json mode must be 0400");
+	const record = parseGenerationRecord(recordContents.toString("utf8"));
+	if (record.generationId !== generationId) throw new TypeError("generation directory id does not match generation.json");
+	if (record.desiredManifestPath !== join(generationPath, "fleet.lock.yaml")) throw new TypeError("desiredManifestPath must bind the immutable generation manifest");
+	const expectedNames = [...Object.keys(record.files), GENERATION_RECORD_NAME].sort();
+	const actualNames = (await readdir(generationPath)).sort();
+	if (actualNames.length !== expectedNames.length || actualNames.some((name, index) => name !== expectedNames[index])) throw new TypeError("generation directory contains missing or unsupported files");
+	for (const [name, expected] of Object.entries(record.files)) {
+		const path = join(generationPath, name);
+		const contents = await readRegularBuffer(path, "generation file " + name, true);
+		if (((await lstat(path)).mode & 511) !== expected.mode || contents.byteLength !== expected.bytes || sha256(contents) !== expected.sha256) throw new TypeError("generation file integrity mismatch: " + name);
+	}
+	if (sha256(await readRegularBuffer(join(generationPath, "fleet.lock.yaml"), "generation manifest", true)) !== record.manifestDigest) throw new TypeError("generation manifestDigest does not match fleet.lock.yaml");
+	const routes = parseGenerationRoutes((await readRegularBuffer(join(generationPath, ROUTES_NAME), "routes.json", true)).toString("utf8"));
+	const selectedRoute = routes.routes.find((route) => route.deviceId === record.deviceId);
+	if (routes.teamId !== record.teamId || selectedRoute === void 0) throw new TypeError("routes.json does not bind the generation team and device");
+	if (selectedRoute.agentPath !== join(root, "current", "launcher.mjs") || selectedRoute.configPath !== join(root, "current", "agent.config.json")) throw new TypeError("routes.json selected device must target the generation root current launcher and config");
+	const agentConfigSource = (await readRegularBuffer(join(generationPath, "agent.config.json"), "agent.config.json", true)).toString("utf8");
+	let agentConfigValue;
+	try {
+		agentConfigValue = JSON.parse(agentConfigSource);
+	} catch {
+		throw new TypeError("agent.config.json must contain JSON");
+	}
+	const agentConfig = parseAgentConfig(agentConfigValue);
+	assertReleaseReadyConfig(agentConfig);
+	assertA2AReadyConfig(agentConfig);
+	if (agentConfig.deviceId !== record.deviceId || agentConfig.manifestPath !== record.liveManifestPath || agentConfig.desiredManifestPath !== record.desiredManifestPath) throw new TypeError("agent.config.json does not bind the generation device and manifests");
+	return {
+		...record,
+		generationPath
+	};
+}
+function activationJournal(body) {
+	return {
+		...body,
+		journalDigest: sha256Canonical(body)
+	};
+}
+function parseActivationJournal(source) {
+	let value;
+	try {
+		value = JSON.parse(source);
+	} catch {
+		throw new TypeError("activation journal must contain JSON");
+	}
+	if (!isRecord(value)) throw new TypeError("activation journal must be an object");
+	exactObjectKeys(value, [
+		"schemaVersion",
+		"operationId",
+		"previous",
+		"next",
+		"state",
+		"preparedAt",
+		"committedAt",
+		"rolledBackAt",
+		"journalDigest"
+	], "activation journal");
+	if (value.schemaVersion !== 1 || typeof value.operationId !== "string" || !/^activation:[0-9a-f-]{36}$/.test(value.operationId)) throw new TypeError("activation journal identity is invalid");
+	const previous = value.previous === null ? null : identifier(recordText(value.previous, "activation journal previous", 64), "activation journal previous");
+	const next = identifier(recordText(value.next, "activation journal next", 64), "activation journal next");
+	if (value.state !== "prepared" && value.state !== "committed" && value.state !== "rolled-back") throw new TypeError("activation journal state is invalid");
+	const preparedAt = recordTime(value.preparedAt, "activation journal preparedAt");
+	const committedAt = value.committedAt === null ? null : recordTime(value.committedAt, "activation journal committedAt");
+	const rolledBackAt = value.rolledBackAt === null ? null : recordTime(value.rolledBackAt, "activation journal rolledBackAt");
+	if (value.state === "prepared" && (committedAt !== null || rolledBackAt !== null) || value.state === "committed" && (committedAt === null || rolledBackAt !== null) || value.state === "rolled-back" && rolledBackAt === null) throw new TypeError("activation journal timestamps do not match its state");
+	const body = {
+		schemaVersion: 1,
+		operationId: value.operationId,
+		previous,
+		next,
+		state: value.state,
+		preparedAt,
+		committedAt,
+		rolledBackAt
+	};
+	const journalDigest = recordDigest(value.journalDigest, "activation journal digest");
+	if (sha256Canonical(body) !== journalDigest) throw new TypeError("activation journal digest does not match");
+	return {
+		...body,
+		journalDigest
+	};
+}
+async function readActivationJournal(rootDirectory, required) {
+	const path = join(rootDirectory, ACTIVATION_JOURNAL_NAME);
+	try {
+		const contents = await readRegularBuffer(path, "activation journal", true);
+		if (((await lstat(path)).mode & 511) !== 384) throw new TypeError("activation journal mode must be 0600");
+		return parseActivationJournal(contents.toString("utf8"));
+	} catch (error) {
+		if (error.code === "ENOENT" && !required) return null;
+		if (error.code === "ENOENT") throw new TypeError("activation journal does not exist");
+		throw error;
+	}
+}
+async function writeActivationJournal(rootDirectory, journal) {
+	const destination = join(rootDirectory, ACTIVATION_JOURNAL_NAME);
+	try {
+		const existing = await lstat(destination);
+		if (!existing.isFile() || existing.isSymbolicLink() || (existing.mode & 511) !== 384 || typeof process.getuid === "function" && existing.uid !== process.getuid()) throw new TypeError("activation journal destination is not a private regular file");
+	} catch (error) {
+		if (error.code !== "ENOENT") throw error;
+	}
+	const temporary = join(rootDirectory, `.activation-journal.${randomUUID()}.tmp`);
+	try {
+		await writeExclusive(temporary, JSON.stringify(journal, null, 2) + "\n", 384);
+		await rename(temporary, destination);
+		await syncDirectory(rootDirectory);
+	} finally {
+		try {
+			await unlink(temporary);
+		} catch (error) {
+			if (error.code !== "ENOENT") throw error;
+		}
+	}
+}
+async function currentGenerationId(rootDirectory) {
+	const currentPath = join(rootDirectory, "current");
+	let info;
+	try {
+		info = await lstat(currentPath);
+	} catch (error) {
+		if (error.code === "ENOENT") return null;
+		throw error;
+	}
+	if (!info.isSymbolicLink() || typeof process.getuid === "function" && info.uid !== process.getuid()) throw new TypeError("current must be an owner-controlled symbolic link");
+	const target = await readlink(currentPath);
+	const match = /^generations\/([A-Za-z0-9][A-Za-z0-9._-]{0,63})$/.exec(target);
+	if (match === null) throw new TypeError("current must point to generations/<id> with a relative link");
+	const generationId = identifier(match[1], "current generation id");
+	await inspectBootstrapGeneration({
+		rootDirectory,
+		generationId
+	});
+	return generationId;
+}
+function lifecycleProcessId(value, field) {
+	if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1 || value > 2147483647) throw new TypeError(field + " must be a positive process id");
+	return value;
+}
+function lifecycleToken(value, field, prefix) {
+	const token = recordText(value, field, 64);
+	if (!new RegExp(`^${prefix}:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`).test(token)) throw new TypeError(field + " is invalid");
+	return token;
+}
+function generationLifecycleLock(rootDirectory, pid = process.pid) {
+	const body = {
+		schemaVersion: 1,
+		pid,
+		token: "lock:" + randomUUID(),
+		createdAt: canonicalNow(void 0),
+		rootDigest: sha256(rootDirectory)
+	};
+	return {
+		...body,
+		lockDigest: sha256Canonical(body)
+	};
+}
+function parseGenerationLifecycleLock(source, rootDirectory) {
+	let value;
+	try {
+		value = JSON.parse(source);
+	} catch {
+		throw new TypeError("generation lifecycle lock record must contain JSON");
+	}
+	if (!isRecord(value)) throw new TypeError("generation lifecycle lock record must be an object");
+	exactObjectKeys(value, [
+		"schemaVersion",
+		"pid",
+		"token",
+		"createdAt",
+		"rootDigest",
+		"lockDigest"
+	], "generation lifecycle lock record");
+	if (value.schemaVersion !== 1) throw new TypeError("generation lifecycle lock record schema is invalid");
+	const body = {
+		schemaVersion: 1,
+		pid: lifecycleProcessId(value.pid, "generation lifecycle lock pid"),
+		token: lifecycleToken(value.token, "generation lifecycle lock token", "lock"),
+		createdAt: recordTime(value.createdAt, "generation lifecycle lock createdAt"),
+		rootDigest: recordDigest(value.rootDigest, "generation lifecycle lock rootDigest")
+	};
+	const lockDigest = recordDigest(value.lockDigest, "generation lifecycle lock digest");
+	if (body.rootDigest !== sha256(rootDirectory)) throw new TypeError("generation lifecycle lock is bound to another root");
+	if (sha256Canonical(body) !== lockDigest) throw new TypeError("generation lifecycle lock digest does not match");
+	return {
+		...body,
+		lockDigest
+	};
+}
+function generationLifecycleReclaim(rootDirectory, staleToken, pid = process.pid) {
+	const body = {
+		schemaVersion: 1,
+		pid,
+		token: "reclaim:" + randomUUID(),
+		staleToken,
+		createdAt: canonicalNow(void 0),
+		rootDigest: sha256(rootDirectory)
+	};
+	return {
+		...body,
+		reclaimDigest: sha256Canonical(body)
+	};
+}
+function parseGenerationLifecycleReclaim(source, rootDirectory) {
+	let value;
+	try {
+		value = JSON.parse(source);
+	} catch {
+		throw new TypeError("generation lifecycle reclaim record must contain JSON");
+	}
+	if (!isRecord(value)) throw new TypeError("generation lifecycle reclaim record must be an object");
+	exactObjectKeys(value, [
+		"schemaVersion",
+		"pid",
+		"token",
+		"staleToken",
+		"createdAt",
+		"rootDigest",
+		"reclaimDigest"
+	], "generation lifecycle reclaim record");
+	if (value.schemaVersion !== 1) throw new TypeError("generation lifecycle reclaim record schema is invalid");
+	const body = {
+		schemaVersion: 1,
+		pid: lifecycleProcessId(value.pid, "generation lifecycle reclaim pid"),
+		token: lifecycleToken(value.token, "generation lifecycle reclaim token", "reclaim"),
+		staleToken: lifecycleToken(value.staleToken, "generation lifecycle reclaim staleToken", "lock"),
+		createdAt: recordTime(value.createdAt, "generation lifecycle reclaim createdAt"),
+		rootDigest: recordDigest(value.rootDigest, "generation lifecycle reclaim rootDigest")
+	};
+	const reclaimDigest = recordDigest(value.reclaimDigest, "generation lifecycle reclaim digest");
+	if (body.rootDigest !== sha256(rootDirectory)) throw new TypeError("generation lifecycle reclaim is bound to another root");
+	if (sha256Canonical(body) !== reclaimDigest) throw new TypeError("generation lifecycle reclaim digest does not match");
+	return {
+		...body,
+		reclaimDigest
+	};
+}
+async function readLifecycleRecord(path, field) {
+	let handle;
+	try {
+		handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+		const info = await handle.stat();
+		if (!info.isFile() || (info.mode & 511) !== 384) throw new TypeError(field + " must be a private regular file (0600)");
+		if (typeof process.getuid === "function" && info.uid !== process.getuid()) throw new TypeError(field + " must be owned by the current user");
+		if (info.size < 2 || info.size > 16384) throw new TypeError(field + " size is invalid");
+		return {
+			source: await handle.readFile("utf8"),
+			device: info.dev,
+			inode: info.ino
+		};
+	} catch (error) {
+		if (error.code === "ELOOP") throw new TypeError(field + " must not be a symbolic link");
+		throw error;
+	} finally {
+		await handle?.close();
+	}
+}
+function sameLifecycleLockIdentity(left, right) {
+	return left.directoryDevice === right.directoryDevice && left.directoryInode === right.directoryInode && left.recordDevice === right.recordDevice && left.recordInode === right.recordInode && left.record.token === right.record.token && left.record.lockDigest === right.record.lockDigest;
+}
+async function readGenerationLifecycleLockAt(rootDirectory, lockPath, allowReclaim) {
+	const before = await lstat(lockPath);
+	if (!before.isDirectory() || before.isSymbolicLink()) throw new TypeError("generation lifecycle lock must be a real directory");
+	if ((before.mode & 511) !== 448) throw new TypeError("generation lifecycle lock directory must be owner-only (0700)");
+	if (typeof process.getuid === "function" && before.uid !== process.getuid()) throw new TypeError("generation lifecycle lock directory must be owned by the current user");
+	const names = (await readdir(lockPath)).sort();
+	const withoutReclaim = [GENERATION_LIFECYCLE_LOCK_RECORD_NAME];
+	const withReclaim = [GENERATION_LIFECYCLE_LOCK_RECORD_NAME, GENERATION_LIFECYCLE_RECLAIM_RECORD_NAME].sort();
+	const hasReclaim = names.length === withReclaim.length && names.every((name, index) => name === withReclaim[index]);
+	if (!(names.length === withoutReclaim.length && names[0] === withoutReclaim[0]) && !(allowReclaim && hasReclaim)) throw new TypeError("generation lifecycle lock directory contains unsupported or missing records");
+	const owner = await readLifecycleRecord(join(lockPath, GENERATION_LIFECYCLE_LOCK_RECORD_NAME), "generation lifecycle lock record");
+	const record = parseGenerationLifecycleLock(owner.source, rootDirectory);
+	const reclaimFile = hasReclaim ? await readLifecycleRecord(join(lockPath, GENERATION_LIFECYCLE_RECLAIM_RECORD_NAME), "generation lifecycle reclaim record") : null;
+	const reclaim = reclaimFile === null ? null : {
+		recordDevice: reclaimFile.device,
+		recordInode: reclaimFile.inode,
+		record: parseGenerationLifecycleReclaim(reclaimFile.source, rootDirectory)
+	};
+	if (reclaim !== null && reclaim.record.staleToken !== record.token) throw new TypeError("generation lifecycle reclaim does not bind the stale lock token");
+	const after = await lstat(lockPath);
+	if (after.dev !== before.dev || after.ino !== before.ino || !after.isDirectory() || after.isSymbolicLink()) throw new TypeError("generation lifecycle lock was replaced while being inspected");
+	const finalNames = (await readdir(lockPath)).sort();
+	if (finalNames.length !== names.length || finalNames.some((name, index) => name !== names[index])) throw new TypeError("generation lifecycle lock changed while being inspected");
+	return {
+		directoryDevice: before.dev,
+		directoryInode: before.ino,
+		recordDevice: owner.device,
+		recordInode: owner.inode,
+		record,
+		reclaim
+	};
+}
+async function readGenerationLifecycleLock(rootDirectory, allowReclaim) {
+	return readGenerationLifecycleLockAt(rootDirectory, join(rootDirectory, GENERATION_LIFECYCLE_LOCK_NAME), allowReclaim);
+}
+async function assertGenerationLifecycleLockOwned(rootDirectory, expected) {
+	if (!sameLifecycleLockIdentity(expected, await readGenerationLifecycleLock(rootDirectory, false))) throw new TypeError("generation lifecycle lock was replaced");
+}
+function processIsDefinitelyDead(pid) {
+	try {
+		process.kill(pid, 0);
+		return false;
+	} catch (error) {
+		if (error.code === "ESRCH") return true;
+		throw new TypeError("generation lifecycle lock owner liveness cannot be verified");
+	}
+}
+async function assertGenerationLifecycleStateRecoverable(rootDirectory) {
+	const current = await currentGenerationId(rootDirectory);
+	const journal = await readActivationJournal(rootDirectory, false);
+	if (journal === null) return;
+	if (journal.state === "rolled-back") {
+		if (current !== journal.previous) throw new TypeError("stale generation lifecycle lock has an unrecoverable rolled-back state");
+		return;
+	}
+	if (current !== journal.previous && current !== journal.next) throw new TypeError("stale generation lifecycle lock has an unrecoverable journal/current state");
+}
+async function retireGenerationLifecycleLock(rootDirectory, expected, purpose) {
+	const lockPath = join(rootDirectory, GENERATION_LIFECYCLE_LOCK_NAME);
+	const quarantinePath = join(rootDirectory, `.generation-lifecycle.${purpose}.${randomUUID()}`);
+	const observed = await readGenerationLifecycleLock(rootDirectory, purpose === "reclaim");
+	if (!sameLifecycleLockIdentity(expected, observed) || observed.reclaim?.record.token !== expected.reclaim?.record.token || observed.reclaim?.recordInode !== expected.reclaim?.recordInode) throw new TypeError("generation lifecycle lock was replaced before " + purpose);
+	await rename(lockPath, quarantinePath);
+	const quarantined = await readGenerationLifecycleLockAt(rootDirectory, quarantinePath, purpose === "reclaim");
+	if (!sameLifecycleLockIdentity(expected, quarantined) || quarantined.reclaim?.record.token !== expected.reclaim?.record.token || quarantined.reclaim?.recordInode !== expected.reclaim?.recordInode) {
+		try {
+			await lstat(lockPath);
+		} catch (error) {
+			if (error.code === "ENOENT") await rename(quarantinePath, lockPath);
+		}
+		throw new TypeError("generation lifecycle lock was replaced during " + purpose);
+	}
+	if (quarantined.reclaim !== null) await unlink(join(quarantinePath, GENERATION_LIFECYCLE_RECLAIM_RECORD_NAME));
+	await unlink(join(quarantinePath, GENERATION_LIFECYCLE_LOCK_RECORD_NAME));
+	if ((await readdir(quarantinePath)).length !== 0) throw new TypeError("generation lifecycle lock quarantine is not empty");
+	await rmdir(quarantinePath);
+	await syncDirectory(rootDirectory);
+}
+async function removeDeadGenerationLifecycleReclaim(rootDirectory, locked) {
+	const reclaim = locked.reclaim;
+	if (reclaim === null) return locked;
+	if (!processIsDefinitelyDead(reclaim.record.pid)) throw new TypeError("generation lifecycle stale-lock recovery is already active");
+	await assertGenerationLifecycleStateRecoverable(rootDirectory);
+	const observed = await readGenerationLifecycleLock(rootDirectory, true);
+	if (!sameLifecycleLockIdentity(locked, observed) || observed.reclaim?.record.token !== reclaim.record.token || observed.reclaim.recordInode !== reclaim.recordInode) throw new TypeError("generation lifecycle reclaim record was replaced");
+	await unlink(join(rootDirectory, GENERATION_LIFECYCLE_LOCK_NAME, GENERATION_LIFECYCLE_RECLAIM_RECORD_NAME));
+	await syncDirectory(join(rootDirectory, GENERATION_LIFECYCLE_LOCK_NAME));
+	const withoutReclaim = await readGenerationLifecycleLock(rootDirectory, false);
+	if (!sameLifecycleLockIdentity(locked, withoutReclaim)) throw new TypeError("generation lifecycle lock changed while clearing a dead reclaim");
+	return withoutReclaim;
+}
+async function reclaimStaleGenerationLifecycleLock(rootDirectory) {
+	let stale = await readGenerationLifecycleLock(rootDirectory, true);
+	stale = await removeDeadGenerationLifecycleReclaim(rootDirectory, stale);
+	if (!processIsDefinitelyDead(stale.record.pid)) throw new TypeError("generation lifecycle is already locked by a live owner");
+	await assertGenerationLifecycleStateRecoverable(rootDirectory);
+	const reclaim = generationLifecycleReclaim(rootDirectory, stale.record.token);
+	try {
+		await writeExclusive(join(rootDirectory, GENERATION_LIFECYCLE_LOCK_NAME, GENERATION_LIFECYCLE_RECLAIM_RECORD_NAME), JSON.stringify(reclaim, null, 2) + "\n", 384);
+	} catch (error) {
+		if (error.code === "EEXIST") throw new TypeError("generation lifecycle stale-lock recovery is already active");
+		throw error;
+	}
+	await syncDirectory(join(rootDirectory, GENERATION_LIFECYCLE_LOCK_NAME));
+	const claimed = await readGenerationLifecycleLock(rootDirectory, true);
+	if (!sameLifecycleLockIdentity(stale, claimed) || claimed.reclaim?.record.token !== reclaim.token) throw new TypeError("generation lifecycle lock was replaced during stale-lock claim");
+	await assertGenerationLifecycleStateRecoverable(rootDirectory);
+	await retireGenerationLifecycleLock(rootDirectory, claimed, "reclaim");
+}
+async function createGenerationLifecycleLock(rootDirectory) {
+	const lockPath = join(rootDirectory, GENERATION_LIFECYCLE_LOCK_NAME);
+	let directoryDevice;
+	let directoryInode;
+	try {
+		await mkdir(lockPath, { mode: 448 });
+		const info = await lstat(lockPath);
+		directoryDevice = info.dev;
+		directoryInode = info.ino;
+	} catch (error) {
+		if (error.code === "EEXIST") return null;
+		throw error;
+	}
+	const record = generationLifecycleLock(rootDirectory);
+	try {
+		await writeExclusive(join(lockPath, GENERATION_LIFECYCLE_LOCK_RECORD_NAME), JSON.stringify(record, null, 2) + "\n", 384);
+		await syncDirectory(lockPath);
+		await syncDirectory(rootDirectory);
+		const locked = await readGenerationLifecycleLock(rootDirectory, false);
+		if (locked.directoryDevice !== directoryDevice || locked.directoryInode !== directoryInode || locked.record.token !== record.token) throw new TypeError("generation lifecycle lock was replaced during acquisition");
+		return locked;
+	} catch (error) {
+		try {
+			const info = await lstat(lockPath);
+			if (info.dev === directoryDevice && info.ino === directoryInode && info.isDirectory() && !info.isSymbolicLink()) {
+				const names = await readdir(lockPath);
+				if (names.length === 1 && names[0] === GENERATION_LIFECYCLE_LOCK_RECORD_NAME) await unlink(join(lockPath, GENERATION_LIFECYCLE_LOCK_RECORD_NAME));
+				if ((await readdir(lockPath)).length === 0) await rmdir(lockPath);
+			}
+		} catch {}
+		throw error;
+	}
+}
+async function withGenerationLifecycleLock(rootDirectory, action) {
+	let locked = await createGenerationLifecycleLock(rootDirectory);
+	if (locked === null) {
+		await reclaimStaleGenerationLifecycleLock(rootDirectory);
+		locked = await createGenerationLifecycleLock(rootDirectory);
+		if (locked === null) throw new TypeError("generation lifecycle lock was acquired by another owner");
+	}
+	const owned = locked;
+	const guard = { assertOwned: () => assertGenerationLifecycleLockOwned(rootDirectory, owned) };
+	try {
+		await guard.assertOwned();
+		return await action(guard);
+	} finally {
+		await retireGenerationLifecycleLock(rootDirectory, owned, "release");
+	}
+}
+function assertExpectedCurrent(expected, actual) {
+	const normalized = expected === null ? null : identifier(expected, "expectedCurrent");
+	if (normalized !== actual) throw new TypeError(`generation current CAS mismatch: expected ${normalized ?? "none"}, observed ${actual ?? "none"}`);
+}
+async function replaceCurrentGeneration(rootDirectory, expectedBefore, next, hooks, guard) {
+	await guard.assertOwned();
+	await hooks?.beforeCurrentSwap?.();
+	await guard.assertOwned();
+	const observed = await currentGenerationId(rootDirectory);
+	assertExpectedCurrent(expectedBefore, observed);
+	await guard.assertOwned();
+	const currentPath = join(rootDirectory, "current");
+	if (next === null) {
+		if (observed !== null) await unlink(currentPath);
+		await syncDirectory(rootDirectory);
+		await guard.assertOwned();
+		await hooks?.afterCurrentSwap?.();
+		await guard.assertOwned();
+		return;
+	}
+	const temporary = join(rootDirectory, `.current.${randomUUID()}.tmp`);
+	try {
+		await symlink(`generations/${identifier(next, "next generation")}`, temporary);
+		await syncDirectory(rootDirectory);
+		await rename(temporary, currentPath);
+		await syncDirectory(rootDirectory);
+	} finally {
+		try {
+			await unlink(temporary);
+		} catch (error) {
+			if (error.code !== "ENOENT") throw error;
+		}
+	}
+	await guard.assertOwned();
+	await hooks?.afterCurrentSwap?.();
+	await guard.assertOwned();
+}
+function assertPriorJournalSettled(journal, current) {
+	if (journal === null) return;
+	if (journal.state === "prepared") throw new TypeError("previous generation activation is incomplete; rollback it before activating another generation");
+	if (current !== (journal.state === "committed" ? journal.next : journal.previous)) throw new TypeError("activation journal and current link disagree");
+}
+async function activateBootstrapGeneration(input) {
+	const root = await ensureGenerationRoot(input.rootDirectory, false);
+	const generationId = identifier(input.generationId, "generationId");
+	const timestamp = canonicalNow(input.now);
+	return withGenerationLifecycleLock(root, async (guard) => {
+		const target = await inspectBootstrapGeneration({
+			rootDirectory: root,
+			generationId
+		});
+		const previous = await currentGenerationId(root);
+		assertExpectedCurrent(input.expectedCurrent, previous);
+		if (previous === generationId) throw new TypeError("generation is already current");
+		assertPriorJournalSettled(await readActivationJournal(root, false), previous);
+		const prepared = activationJournal({
+			schemaVersion: 1,
+			operationId: "activation:" + randomUUID(),
+			previous,
+			next: generationId,
+			state: "prepared",
+			preparedAt: timestamp,
+			committedAt: null,
+			rolledBackAt: null
+		});
+		await guard.assertOwned();
+		await writeActivationJournal(root, prepared);
+		await guard.assertOwned();
+		await replaceCurrentGeneration(root, previous, generationId, input.hooks, guard);
+		const committed = activationJournal({
+			schemaVersion: 1,
+			operationId: prepared.operationId,
+			previous,
+			next: generationId,
+			state: "committed",
+			preparedAt: prepared.preparedAt,
+			committedAt: timestamp,
+			rolledBackAt: null
+		});
+		await guard.assertOwned();
+		await writeActivationJournal(root, committed);
+		return {
+			previous,
+			current: generationId,
+			generationDigest: target.generationDigest,
+			journalDigest: committed.journalDigest
+		};
+	});
+}
+async function rollbackBootstrapGeneration(input) {
+	const root = await ensureGenerationRoot(input.rootDirectory, false);
+	const timestamp = canonicalNow(input.now);
+	return withGenerationLifecycleLock(root, async (guard) => {
+		const current = await currentGenerationId(root);
+		assertExpectedCurrent(input.expectedCurrent, current);
+		const journal = await readActivationJournal(root, true);
+		if (journal === null) throw new TypeError("activation journal does not exist");
+		if (journal.state === "rolled-back") {
+			if (current !== journal.previous) throw new TypeError("rolled-back journal and current link disagree");
+			const previousGeneration = current === null ? null : await inspectBootstrapGeneration({
+				rootDirectory: root,
+				generationId: current
+			});
+			return {
+				previous: journal.next,
+				current,
+				generationDigest: previousGeneration?.generationDigest ?? null,
+				journalDigest: journal.journalDigest
+			};
+		}
+		if (current !== journal.next && current !== journal.previous) throw new TypeError("rollback refuses a current link unrelated to journal.next or journal.previous");
+		const previousGeneration = journal.previous === null ? null : await inspectBootstrapGeneration({
+			rootDirectory: root,
+			generationId: journal.previous
+		});
+		if (current === journal.next) await replaceCurrentGeneration(root, journal.next, journal.previous, input.hooks, guard);
+		const rolledBack = activationJournal({
+			schemaVersion: 1,
+			operationId: journal.operationId,
+			previous: journal.previous,
+			next: journal.next,
+			state: "rolled-back",
+			preparedAt: journal.preparedAt,
+			committedAt: journal.committedAt,
+			rolledBackAt: timestamp
+		});
+		await guard.assertOwned();
+		await writeActivationJournal(root, rolledBack);
+		return {
+			previous: journal.next,
+			current: journal.previous,
+			generationDigest: previousGeneration?.generationDigest ?? null,
+			journalDigest: rolledBack.journalDigest
+		};
+	});
+}
 //#endregion
 //#region src/bootstrap/cli.ts
+const COMMAND_FLAGS = {
+	identity: { required: [
+		"--device",
+		"--output-dir",
+		"--principal",
+		"--team"
+	] },
+	render: { required: [
+		"--identity-dir",
+		"--output-dir",
+		"--overlay",
+		"--pack"
+	] },
+	plan: {
+		required: ["--overlay", "--pack"],
+		repeatable: ["--overlay"]
+	},
+	"render-set": {
+		required: [
+			"--device",
+			"--identity-dir",
+			"--output-dir",
+			"--overlay",
+			"--pack"
+		],
+		repeatable: ["--overlay"]
+	},
+	"generation-assemble": {
+		required: [
+			"--agent-bundle",
+			"--device",
+			"--generation-id",
+			"--identity-dir",
+			"--overlay",
+			"--pack",
+			"--root",
+			"--worker-bundle"
+		],
+		optional: ["--bootstrap-bundle"],
+		repeatable: ["--overlay"]
+	},
+	"generation-inspect": { required: ["--generation-id", "--root"] },
+	"generation-activate": { required: [
+		"--expected-current",
+		"--generation-id",
+		"--root"
+	] },
+	"generation-rollback": { required: ["--expected-current", "--root"] }
+};
 function parseFlags(argv) {
 	const command = argv.shift();
-	if (command !== "identity" && command !== "render") throw new TypeError("usage: dsh-fleet-bootstrap <identity|render> [options]");
+	if (typeof command !== "string" || !Object.hasOwn(COMMAND_FLAGS, command)) throw new TypeError("usage: dsh-fleet-bootstrap <identity|render|plan|render-set|generation-assemble|generation-inspect|generation-activate|generation-rollback> [options]");
+	const typedCommand = command;
+	const specification = COMMAND_FLAGS[typedCommand];
 	if (argv.length % 2 !== 0) throw new TypeError("bootstrap options must be --name value pairs");
 	const flags = /* @__PURE__ */ new Map();
 	for (let index = 0; index < argv.length; index += 2) {
 		const name = argv[index];
 		const value = argv[index + 1];
-		if (name === void 0 || value === void 0 || !/^--[a-z-]+$/.test(name) || value.length === 0 || flags.has(name)) throw new TypeError("bootstrap options are invalid or duplicated");
-		flags.set(name, value);
+		if (name === void 0 || value === void 0 || !/^--[a-z-]+$/.test(name) || value.length === 0) throw new TypeError("bootstrap options are invalid");
+		if (!specification.required.includes(name) && specification.optional?.includes(name) !== true) throw new TypeError(typedCommand + " does not accept option: " + name);
+		const values = flags.get(name) ?? [];
+		if (values.length > 0 && specification.repeatable?.includes(name) !== true) throw new TypeError("bootstrap option is duplicated: " + name);
+		values.push(value);
+		flags.set(name, values);
 	}
-	const expected = command === "identity" ? [
-		"--device",
-		"--output-dir",
-		"--principal",
-		"--team"
-	] : [
-		"--identity-dir",
-		"--output-dir",
-		"--overlay",
-		"--pack"
-	];
-	const actual = [...flags.keys()].sort();
-	if (actual.length !== expected.length || actual.some((name, index) => name !== expected[index])) throw new TypeError(command + " requires exactly: " + expected.join(" "));
+	if (specification.required.filter((name) => !flags.has(name)).length > 0) throw new TypeError(typedCommand + " requires: " + specification.required.join(" "));
 	return {
-		command,
+		command: typedCommand,
 		flags
 	};
 }
+function one(flags, name) {
+	const value = flags.get(name)?.[0];
+	if (value === void 0) throw new TypeError("missing bootstrap option: " + name);
+	return value;
+}
+function expectedCurrent(flags) {
+	const value = one(flags, "--expected-current");
+	return value === "none" ? null : value;
+}
 try {
 	const { command, flags } = parseFlags(process.argv.slice(2));
-	const result = command === "identity" ? await createBootstrapIdentity({
-		outputDirectory: flags.get("--output-dir"),
-		teamId: flags.get("--team"),
-		principalId: flags.get("--principal"),
-		deviceId: flags.get("--device")
-	}) : await renderBootstrapBundle({
-		packPath: flags.get("--pack"),
-		overlayPath: flags.get("--overlay"),
-		outputDirectory: flags.get("--output-dir"),
-		identityDirectory: flags.get("--identity-dir")
+	let result;
+	if (command === "identity") result = await createBootstrapIdentity({
+		outputDirectory: one(flags, "--output-dir"),
+		teamId: one(flags, "--team"),
+		principalId: one(flags, "--principal"),
+		deviceId: one(flags, "--device")
+	});
+	else if (command === "render") result = await renderBootstrapBundle({
+		packPath: one(flags, "--pack"),
+		overlayPath: one(flags, "--overlay"),
+		outputDirectory: one(flags, "--output-dir"),
+		identityDirectory: one(flags, "--identity-dir")
+	});
+	else if (command === "plan") result = await planBootstrapSet({
+		packPath: one(flags, "--pack"),
+		overlayPaths: flags.get("--overlay") ?? []
+	});
+	else if (command === "render-set") result = await renderBootstrapSet({
+		packPath: one(flags, "--pack"),
+		overlayPaths: flags.get("--overlay") ?? [],
+		outputDirectory: one(flags, "--output-dir"),
+		identityDirectory: one(flags, "--identity-dir"),
+		deviceId: one(flags, "--device")
+	});
+	else if (command === "generation-assemble") result = await assembleBootstrapGeneration({
+		packPath: one(flags, "--pack"),
+		overlayPaths: flags.get("--overlay") ?? [],
+		rootDirectory: one(flags, "--root"),
+		generationId: one(flags, "--generation-id"),
+		identityDirectory: one(flags, "--identity-dir"),
+		deviceId: one(flags, "--device"),
+		agentBundlePath: one(flags, "--agent-bundle"),
+		workerBundlePath: one(flags, "--worker-bundle"),
+		...flags.has("--bootstrap-bundle") ? { bootstrapBundlePath: one(flags, "--bootstrap-bundle") } : {}
+	});
+	else if (command === "generation-inspect") result = await inspectBootstrapGeneration({
+		rootDirectory: one(flags, "--root"),
+		generationId: one(flags, "--generation-id")
+	});
+	else if (command === "generation-activate") result = await activateBootstrapGeneration({
+		rootDirectory: one(flags, "--root"),
+		generationId: one(flags, "--generation-id"),
+		expectedCurrent: expectedCurrent(flags)
+	});
+	else result = await rollbackBootstrapGeneration({
+		rootDirectory: one(flags, "--root"),
+		expectedCurrent: expectedCurrent(flags)
 	});
 	process.stdout.write(JSON.stringify({
 		ok: true,

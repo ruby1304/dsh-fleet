@@ -1,6 +1,6 @@
 {
   "name": "dsh-fleet",
-  "version": "0.3.8",
+  "version": "0.4.0",
   "description": "Atomic plugin releases and signed, recoverable A2A tasks for single-owner DeepSeek Harness fleets.",
   "type": "module",
   "main": "./index.mjs",
@@ -9,6 +9,7 @@
     "./testing": "./testing.mjs",
     "./client": "./client.js",
     "./agent": "./agent.mjs",
+    "./worker": "./worker.mjs",
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json"
   },
@@ -20,6 +21,7 @@
     "index.mjs",
     "testing.mjs",
     "agent.mjs",
+    "worker.mjs",
     "bootstrap.mjs",
     "client.js",
     "client.js.map",

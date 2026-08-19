@@ -84,7 +84,7 @@ describe('fleet agent protocol and planner', () => {
   })
 
   it('creates an update plan for an exact GitHub commit', () => {
-    const source = 'github:ruby1304/plugin-a'
+    const source = 'github:example/plugin-a'
     const plugin: FleetPluginSpec = { id: 'plugin-a', source, revision: GIT_SHA, spec: source + '#' + GIT_SHA }
     const plan = createAgentPlan(input(plugin, { 'plugin-a': source + '#' + 'd'.repeat(40) }))
     expect(plan).toMatchObject({
@@ -98,7 +98,7 @@ describe('fleet agent protocol and planner', () => {
   it.each([
     ['npm range', { id: 'plugin-a', spec: '^1.2.3', source: 'npm', revision: '^1.2.3' }],
     ['npm tag', { id: 'plugin-a', spec: 'latest', source: 'npm', revision: 'latest' }],
-    ['GitHub tag', { id: 'plugin-a', spec: 'github:ruby1304/plugin-a#main' }],
+    ['GitHub tag', { id: 'plugin-a', spec: 'github:example/plugin-a#main' }],
     ['link', { id: 'plugin-a', spec: 'link:/tmp/plugin-a' }],
     ['file', { id: 'plugin-a', spec: 'file:/tmp/plugin-a' }],
     ['workspace', { id: 'plugin-a', spec: 'workspace:*' }],

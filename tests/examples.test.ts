@@ -15,7 +15,7 @@ describe('public examples', () => {
 
     expect(manifest.team.id).toBe('example-team')
     expect(Object.keys(manifest.devices)).toEqual(['controller', 'worker'])
-    expect(source).not.toContain(['/Users', 'qudian'].join('/'))
+    expect(source).not.toMatch(/\/Users\/(?!example(?:\/|$))/)
 
     const stable = manifest.plugins.filter(plugin => plugin.target?.devices?.includes('worker'))
     expect(stable).toHaveLength(2)
@@ -39,7 +39,7 @@ describe('public examples', () => {
   test('public pack and private overlay reproduce the packaged manifest shape', async () => {
     const pack = parseTeamPack(await readFile(join(root, 'examples/team-pack.yaml'), 'utf8'))
     const overlaySource = await readFile(join(root, 'examples/device-overlay.yaml'), 'utf8')
-    expect(overlaySource).not.toContain(['/Users', 'qudian'].join('/'))
+    expect(overlaySource).not.toMatch(/\/Users\/(?!example(?:\/|$))/)
     const rendered = instantiateTeamPack(pack, parseTeamOverlay(overlaySource))
     const manifest = parseFleetManifest(rendered.manifestYaml)
     expect(manifest.v2?.assignments.worker?.web).toBe('web-1.0.0')

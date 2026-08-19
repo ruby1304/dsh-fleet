@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 import { createRequire } from "node:module";
 import { dirname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
-import { access, link, lstat, mkdir, open, readFile, readdir, realpath, rename, rm } from "node:fs/promises";
-import { spawn } from "node:child_process";
+import { access, link, lstat, mkdir, open, readFile, readdir, realpath, rename, rm, unlink } from "node:fs/promises";
 import { createHash, createPrivateKey, createPublicKey, randomUUID, sign, verify } from "node:crypto";
+import { spawn } from "node:child_process";
 import { constants, existsSync } from "node:fs";
 //#region \0rolldown/runtime.js
 var __commonJSMin = (cb, mod) => () => (mod || (cb((mod = { exports: {} }).exports, mod), cb = null), mod.exports);
@@ -18,8 +18,1780 @@ function normalizeDeviceId(value, field = "deviceId") {
 	return deviceId;
 }
 //#endregion
-//#region src/agent/config.ts
-function isRecord$6(value) {
+//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/internal/constants.js
+var require_constants = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	module.exports = {
+		MAX_LENGTH: 256,
+		MAX_SAFE_COMPONENT_LENGTH: 16,
+		MAX_SAFE_BUILD_LENGTH: 250,
+		MAX_SAFE_INTEGER: Number.MAX_SAFE_INTEGER ||
+		/* istanbul ignore next */ 9007199254740991,
+		RELEASE_TYPES: [
+			"major",
+			"premajor",
+			"minor",
+			"preminor",
+			"patch",
+			"prepatch",
+			"prerelease"
+		],
+		SEMVER_SPEC_VERSION: "2.0.0",
+		FLAG_INCLUDE_PRERELEASE: 1,
+		FLAG_LOOSE: 2
+	};
+}));
+//#endregion
+//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/internal/debug.js
+var require_debug = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	module.exports = typeof process === "object" && process.env && process.env.NODE_DEBUG && /\bsemver\b/i.test(process.env.NODE_DEBUG) ? (...args) => console.error("SEMVER", ...args) : () => {};
+}));
+//#endregion
+//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/internal/re.js
+var require_re = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	const { MAX_SAFE_COMPONENT_LENGTH, MAX_SAFE_BUILD_LENGTH, MAX_LENGTH } = require_constants();
+	const debug = require_debug();
+	exports = module.exports = {};
+	const re = exports.re = [];
+	const safeRe = exports.safeRe = [];
+	const src = exports.src = [];
+	const safeSrc = exports.safeSrc = [];
+	const t = exports.t = {};
+	let R = 0;
+	const LETTERDASHNUMBER = "[a-zA-Z0-9-]";
+	const safeRegexReplacements = [
+		["\\s", 1],
+		["\\d", MAX_LENGTH],
+		[LETTERDASHNUMBER, MAX_SAFE_BUILD_LENGTH]
+	];
+	const makeSafeRegex = (value) => {
+		for (const [token, max] of safeRegexReplacements) value = value.split(`${token}*`).join(`${token}{0,${max}}`).split(`${token}+`).join(`${token}{1,${max}}`);
+		return value;
+	};
+	const createToken = (name, value, isGlobal) => {
+		const safe = makeSafeRegex(value);
+		const index = R++;
+		debug(name, index, value);
+		t[name] = index;
+		src[index] = value;
+		safeSrc[index] = safe;
+		re[index] = new RegExp(value, isGlobal ? "g" : void 0);
+		safeRe[index] = new RegExp(safe, isGlobal ? "g" : void 0);
+	};
+	createToken("NUMERICIDENTIFIER", "0|[1-9]\\d*");
+	createToken("NUMERICIDENTIFIERLOOSE", "\\d+");
+	createToken("NONNUMERICIDENTIFIER", `\\d*[a-zA-Z-]${LETTERDASHNUMBER}*`);
+	createToken("MAINVERSION", `(${src[t.NUMERICIDENTIFIER]})\\.(${src[t.NUMERICIDENTIFIER]})\\.(${src[t.NUMERICIDENTIFIER]})`);
+	createToken("MAINVERSIONLOOSE", `(${src[t.NUMERICIDENTIFIERLOOSE]})\\.(${src[t.NUMERICIDENTIFIERLOOSE]})\\.(${src[t.NUMERICIDENTIFIERLOOSE]})`);
+	createToken("PRERELEASEIDENTIFIER", `(?:${src[t.NONNUMERICIDENTIFIER]}|${src[t.NUMERICIDENTIFIER]})`);
+	createToken("PRERELEASEIDENTIFIERLOOSE", `(?:${src[t.NONNUMERICIDENTIFIER]}|${src[t.NUMERICIDENTIFIERLOOSE]})`);
+	createToken("PRERELEASE", `(?:-(${src[t.PRERELEASEIDENTIFIER]}(?:\\.${src[t.PRERELEASEIDENTIFIER]})*))`);
+	createToken("PRERELEASELOOSE", `(?:-?(${src[t.PRERELEASEIDENTIFIERLOOSE]}(?:\\.${src[t.PRERELEASEIDENTIFIERLOOSE]})*))`);
+	createToken("BUILDIDENTIFIER", `${LETTERDASHNUMBER}+`);
+	createToken("BUILD", `(?:\\+(${src[t.BUILDIDENTIFIER]}(?:\\.${src[t.BUILDIDENTIFIER]})*))`);
+	createToken("FULLPLAIN", `v?${src[t.MAINVERSION]}${src[t.PRERELEASE]}?${src[t.BUILD]}?`);
+	createToken("FULL", `^${src[t.FULLPLAIN]}$`);
+	createToken("LOOSEPLAIN", `[v=\\s]*${src[t.MAINVERSIONLOOSE]}${src[t.PRERELEASELOOSE]}?${src[t.BUILD]}?`);
+	createToken("LOOSE", `^${src[t.LOOSEPLAIN]}$`);
+	createToken("GTLT", "((?:<|>)?=?)");
+	createToken("XRANGEIDENTIFIERLOOSE", `${src[t.NUMERICIDENTIFIERLOOSE]}|x|X|\\*`);
+	createToken("XRANGEIDENTIFIER", `${src[t.NUMERICIDENTIFIER]}|x|X|\\*`);
+	createToken("XRANGEPLAIN", `[v=\\s]*(${src[t.XRANGEIDENTIFIER]})(?:\\.(${src[t.XRANGEIDENTIFIER]})(?:\\.(${src[t.XRANGEIDENTIFIER]})(?:${src[t.PRERELEASE]})?${src[t.BUILD]}?)?)?`);
+	createToken("XRANGEPLAINLOOSE", `[v=\\s]*(${src[t.XRANGEIDENTIFIERLOOSE]})(?:\\.(${src[t.XRANGEIDENTIFIERLOOSE]})(?:\\.(${src[t.XRANGEIDENTIFIERLOOSE]})(?:${src[t.PRERELEASELOOSE]})?${src[t.BUILD]}?)?)?`);
+	createToken("XRANGE", `^${src[t.GTLT]}\\s*${src[t.XRANGEPLAIN]}$`);
+	createToken("XRANGELOOSE", `^${src[t.GTLT]}\\s*${src[t.XRANGEPLAINLOOSE]}$`);
+	createToken("COERCEPLAIN", `(^|[^\\d])(\\d{1,${MAX_SAFE_COMPONENT_LENGTH}})(?:\\.(\\d{1,${MAX_SAFE_COMPONENT_LENGTH}}))?(?:\\.(\\d{1,${MAX_SAFE_COMPONENT_LENGTH}}))?`);
+	createToken("COERCE", `${src[t.COERCEPLAIN]}(?:$|[^\\d])`);
+	createToken("COERCEFULL", src[t.COERCEPLAIN] + `(?:${src[t.PRERELEASE]})?(?:${src[t.BUILD]})?(?:$|[^\\d])`);
+	createToken("COERCERTL", src[t.COERCE], true);
+	createToken("COERCERTLFULL", src[t.COERCEFULL], true);
+	createToken("LONETILDE", "(?:~>?)");
+	createToken("TILDETRIM", `(\\s*)${src[t.LONETILDE]}\\s+`, true);
+	exports.tildeTrimReplace = "$1~";
+	createToken("TILDE", `^${src[t.LONETILDE]}${src[t.XRANGEPLAIN]}$`);
+	createToken("TILDELOOSE", `^${src[t.LONETILDE]}${src[t.XRANGEPLAINLOOSE]}$`);
+	createToken("LONECARET", "(?:\\^)");
+	createToken("CARETTRIM", `(\\s*)${src[t.LONECARET]}\\s+`, true);
+	exports.caretTrimReplace = "$1^";
+	createToken("CARET", `^${src[t.LONECARET]}${src[t.XRANGEPLAIN]}$`);
+	createToken("CARETLOOSE", `^${src[t.LONECARET]}${src[t.XRANGEPLAINLOOSE]}$`);
+	createToken("COMPARATORLOOSE", `^${src[t.GTLT]}\\s*(${src[t.LOOSEPLAIN]})$|^$`);
+	createToken("COMPARATOR", `^${src[t.GTLT]}\\s*(${src[t.FULLPLAIN]})$|^$`);
+	createToken("COMPARATORTRIM", `(\\s*)${src[t.GTLT]}\\s*(${src[t.LOOSEPLAIN]}|${src[t.XRANGEPLAIN]})`, true);
+	exports.comparatorTrimReplace = "$1$2$3";
+	createToken("HYPHENRANGE", `^\\s*(${src[t.XRANGEPLAIN]})\\s+-\\s+(${src[t.XRANGEPLAIN]})\\s*$`);
+	createToken("HYPHENRANGELOOSE", `^\\s*(${src[t.XRANGEPLAINLOOSE]})\\s+-\\s+(${src[t.XRANGEPLAINLOOSE]})\\s*$`);
+	createToken("STAR", "(<|>)?=?\\s*\\*");
+	createToken("GTE0", "^\\s*>=\\s*0\\.0\\.0\\s*$");
+	createToken("GTE0PRE", "^\\s*>=\\s*0\\.0\\.0-0\\s*$");
+}));
+//#endregion
+//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/internal/parse-options.js
+var require_parse_options = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	const looseOption = Object.freeze({ loose: true });
+	const emptyOpts = Object.freeze({});
+	const parseOptions = (options) => {
+		if (!options) return emptyOpts;
+		if (typeof options !== "object") return looseOption;
+		return options;
+	};
+	module.exports = parseOptions;
+}));
+//#endregion
+//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/internal/identifiers.js
+var require_identifiers = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	const numeric = /^[0-9]+$/;
+	const compareIdentifiers = (a, b) => {
+		if (typeof a === "number" && typeof b === "number") return a === b ? 0 : a < b ? -1 : 1;
+		const anum = numeric.test(a);
+		const bnum = numeric.test(b);
+		if (anum && bnum) {
+			a = +a;
+			b = +b;
+		}
+		return a === b ? 0 : anum && !bnum ? -1 : bnum && !anum ? 1 : a < b ? -1 : 1;
+	};
+	const rcompareIdentifiers = (a, b) => compareIdentifiers(b, a);
+	module.exports = {
+		compareIdentifiers,
+		rcompareIdentifiers
+	};
+}));
+//#endregion
+//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/classes/semver.js
+var require_semver$1 = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	const debug = require_debug();
+	const { MAX_LENGTH, MAX_SAFE_INTEGER } = require_constants();
+	const { safeRe: re, t } = require_re();
+	const parseOptions = require_parse_options();
+	const { compareIdentifiers } = require_identifiers();
+	const isPrereleaseIdentifier = (prerelease, identifier) => {
+		const identifiers = identifier.split(".");
+		if (identifiers.length > prerelease.length) return false;
+		for (let i = 0; i < identifiers.length; i++) if (compareIdentifiers(prerelease[i], identifiers[i]) !== 0) return false;
+		return true;
+	};
+	module.exports = class SemVer {
+		constructor(version, options) {
+			options = parseOptions(options);
+			if (version instanceof SemVer) {
+				if (version.loose === !!options.loose && version.includePrerelease === !!options.includePrerelease) return version;
+				else version = version.version;
+			} else if (typeof version !== "string") throw new TypeError(`Invalid version. Must be a string. Got type "${typeof version}".`);
+			if (version.length > MAX_LENGTH) throw new TypeError(`version is longer than ${MAX_LENGTH} characters`);
+			debug("SemVer", version, options);
+			this.options = options;
+			this.loose = !!options.loose;
+			this.includePrerelease = !!options.includePrerelease;
+			const m = version.trim().match(options.loose ? re[t.LOOSE] : re[t.FULL]);
+			if (!m) throw new TypeError(`Invalid Version: ${version}`);
+			this.raw = version;
+			this.major = +m[1];
+			this.minor = +m[2];
+			this.patch = +m[3];
+			if (this.major > MAX_SAFE_INTEGER || this.major < 0) throw new TypeError("Invalid major version");
+			if (this.minor > MAX_SAFE_INTEGER || this.minor < 0) throw new TypeError("Invalid minor version");
+			if (this.patch > MAX_SAFE_INTEGER || this.patch < 0) throw new TypeError("Invalid patch version");
+			if (!m[4]) this.prerelease = [];
+			else this.prerelease = m[4].split(".").map((id) => {
+				if (/^[0-9]+$/.test(id)) {
+					const num = +id;
+					if (num >= 0 && num < MAX_SAFE_INTEGER) return num;
+				}
+				return id;
+			});
+			this.build = m[5] ? m[5].split(".") : [];
+			this.format();
+		}
+		format() {
+			this.version = `${this.major}.${this.minor}.${this.patch}`;
+			if (this.prerelease.length) this.version += `-${this.prerelease.join(".")}`;
+			return this.version;
+		}
+		toString() {
+			return this.version;
+		}
+		compare(other) {
+			debug("SemVer.compare", this.version, this.options, other);
+			if (!(other instanceof SemVer)) {
+				if (typeof other === "string" && other === this.version) return 0;
+				other = new SemVer(other, this.options);
+			}
+			if (other.version === this.version) return 0;
+			return this.compareMain(other) || this.comparePre(other);
+		}
+		compareMain(other) {
+			if (!(other instanceof SemVer)) other = new SemVer(other, this.options);
+			if (this.major < other.major) return -1;
+			if (this.major > other.major) return 1;
+			if (this.minor < other.minor) return -1;
+			if (this.minor > other.minor) return 1;
+			if (this.patch < other.patch) return -1;
+			if (this.patch > other.patch) return 1;
+			return 0;
+		}
+		comparePre(other) {
+			if (!(other instanceof SemVer)) other = new SemVer(other, this.options);
+			if (this.prerelease.length && !other.prerelease.length) return -1;
+			else if (!this.prerelease.length && other.prerelease.length) return 1;
+			else if (!this.prerelease.length && !other.prerelease.length) return 0;
+			let i = 0;
+			do {
+				const a = this.prerelease[i];
+				const b = other.prerelease[i];
+				debug("prerelease compare", i, a, b);
+				if (a === void 0 && b === void 0) return 0;
+				else if (b === void 0) return 1;
+				else if (a === void 0) return -1;
+				else if (a === b) continue;
+				else return compareIdentifiers(a, b);
+			} while (++i);
+		}
+		compareBuild(other) {
+			if (!(other instanceof SemVer)) other = new SemVer(other, this.options);
+			let i = 0;
+			do {
+				const a = this.build[i];
+				const b = other.build[i];
+				debug("build compare", i, a, b);
+				if (a === void 0 && b === void 0) return 0;
+				else if (b === void 0) return 1;
+				else if (a === void 0) return -1;
+				else if (a === b) continue;
+				else return compareIdentifiers(a, b);
+			} while (++i);
+		}
+		inc(release, identifier, identifierBase) {
+			if (release.startsWith("pre")) {
+				if (!identifier && identifierBase === false) throw new Error("invalid increment argument: identifier is empty");
+				if (identifier) {
+					const match = `-${identifier}`.match(this.options.loose ? re[t.PRERELEASELOOSE] : re[t.PRERELEASE]);
+					if (!match || match[1] !== identifier) throw new Error(`invalid identifier: ${identifier}`);
+				}
+			}
+			switch (release) {
+				case "premajor":
+					this.prerelease.length = 0;
+					this.patch = 0;
+					this.minor = 0;
+					this.major++;
+					this.inc("pre", identifier, identifierBase);
+					break;
+				case "preminor":
+					this.prerelease.length = 0;
+					this.patch = 0;
+					this.minor++;
+					this.inc("pre", identifier, identifierBase);
+					break;
+				case "prepatch":
+					this.prerelease.length = 0;
+					this.inc("patch", identifier, identifierBase);
+					this.inc("pre", identifier, identifierBase);
+					break;
+				case "prerelease":
+					if (this.prerelease.length === 0) this.inc("patch", identifier, identifierBase);
+					this.inc("pre", identifier, identifierBase);
+					break;
+				case "release":
+					if (this.prerelease.length === 0) throw new Error(`version ${this.raw} is not a prerelease`);
+					this.prerelease.length = 0;
+					break;
+				case "major":
+					if (this.minor !== 0 || this.patch !== 0 || this.prerelease.length === 0) this.major++;
+					this.minor = 0;
+					this.patch = 0;
+					this.prerelease = [];
+					break;
+				case "minor":
+					if (this.patch !== 0 || this.prerelease.length === 0) this.minor++;
+					this.patch = 0;
+					this.prerelease = [];
+					break;
+				case "patch":
+					if (this.prerelease.length === 0) this.patch++;
+					this.prerelease = [];
+					break;
+				case "pre": {
+					const base = Number(identifierBase) ? 1 : 0;
+					if (this.prerelease.length === 0) this.prerelease = [base];
+					else {
+						let i = this.prerelease.length;
+						while (--i >= 0) if (typeof this.prerelease[i] === "number") {
+							this.prerelease[i]++;
+							i = -2;
+						}
+						if (i === -1) {
+							if (identifier === this.prerelease.join(".") && identifierBase === false) throw new Error("invalid increment argument: identifier already exists");
+							this.prerelease.push(base);
+						}
+					}
+					if (identifier) {
+						let prerelease = [identifier, base];
+						if (identifierBase === false) prerelease = [identifier];
+						if (isPrereleaseIdentifier(this.prerelease, identifier)) {
+							const prereleaseBase = this.prerelease[identifier.split(".").length];
+							if (isNaN(prereleaseBase)) this.prerelease = prerelease;
+						} else this.prerelease = prerelease;
+					}
+					break;
+				}
+				default: throw new Error(`invalid increment argument: ${release}`);
+			}
+			this.raw = this.format();
+			if (this.build.length) this.raw += `+${this.build.join(".")}`;
+			return this;
+		}
+	};
+}));
+//#endregion
+//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/parse.js
+var require_parse = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	const SemVer = require_semver$1();
+	const parse = (version, options, throwErrors = false) => {
+		if (version instanceof SemVer) return version;
+		try {
+			return new SemVer(version, options);
+		} catch (er) {
+			if (!throwErrors) return null;
+			throw er;
+		}
+	};
+	module.exports = parse;
+}));
+//#endregion
+//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/valid.js
+var require_valid$1 = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	const parse = require_parse();
+	const valid = (version, options) => {
+		const v = parse(version, options);
+		return v ? v.version : null;
+	};
+	module.exports = valid;
+}));
+//#endregion
+//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/clean.js
+var require_clean = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	const parse = require_parse();
+	const clean = (version, options) => {
+		const s = parse(version.trim().replace(/^[=v]+/, ""), options);
+		return s ? s.version : null;
+	};
+	module.exports = clean;
+}));
+//#endregion
+//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/inc.js
+var require_inc = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	const SemVer = require_semver$1();
+	const inc = (version, release, options, identifier, identifierBase) => {
+		if (typeof options === "string") {
+			identifierBase = identifier;
+			identifier = options;
+			options = void 0;
+		}
+		try {
+			return new SemVer(version instanceof SemVer ? version.version : version, options).inc(release, identifier, identifierBase).version;
+		} catch (er) {
+			return null;
+		}
+	};
+	module.exports = inc;
+}));
+//#endregion
+//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/diff.js
+var require_diff = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	const parse = require_parse();
+	const diff = (version1, version2) => {
+		const v1 = parse(version1, null, true);
+		const v2 = parse(version2, null, true);
+		const comparison = v1.compare(v2);
+		if (comparison === 0) return null;
+		const v1Higher = comparison > 0;
+		const highVersion = v1Higher ? v1 : v2;
+		const lowVersion = v1Higher ? v2 : v1;
+		const highHasPre = !!highVersion.prerelease.length;
+		if (!!lowVersion.prerelease.length && !highHasPre) {
+			if (!lowVersion.patch && !lowVersion.minor) return "major";
+			if (lowVersion.compareMain(highVersion) === 0) {
+				if (lowVersion.minor && !lowVersion.patch) return "minor";
+				return "patch";
+			}
+		}
+		const prefix = highHasPre ? "pre" : "";
+		if (v1.major !== v2.major) return prefix + "major";
+		if (v1.minor !== v2.minor) return prefix + "minor";
+		if (v1.patch !== v2.patch) return prefix + "patch";
+		return "prerelease";
+	};
+	module.exports = diff;
+}));
+//#endregion
+//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/major.js
+var require_major = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	const SemVer = require_semver$1();
+	const major = (a, loose) => new SemVer(a, loose).major;
+	module.exports = major;
+}));
+//#endregion
+//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/minor.js
+var require_minor = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	const SemVer = require_semver$1();
+	const minor = (a, loose) => new SemVer(a, loose).minor;
+	module.exports = minor;
+}));
+//#endregion
+//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/patch.js
+var require_patch = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	const SemVer = require_semver$1();
+	const patch = (a, loose) => new SemVer(a, loose).patch;
+	module.exports = patch;
+}));
+//#endregion
+//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/prerelease.js
+var require_prerelease = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	const parse = require_parse();
+	const prerelease = (version, options) => {
+		const parsed = parse(version, options);
+		return parsed && parsed.prerelease.length ? parsed.prerelease : null;
+	};
+	module.exports = prerelease;
+}));
+//#endregion
+//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/compare.js
+var require_compare = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	const SemVer = require_semver$1();
+	const compare = (a, b, loose) => new SemVer(a, loose).compare(new SemVer(b, loose));
+	module.exports = compare;
+}));
+//#endregion
+//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/rcompare.js
+var require_rcompare = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	const compare = require_compare();
+	const rcompare = (a, b, loose) => compare(b, a, loose);
+	module.exports = rcompare;
+}));
+//#endregion
+//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/compare-loose.js
+var require_compare_loose = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	const compare = require_compare();
+	const compareLoose = (a, b) => compare(a, b, true);
+	module.exports = compareLoose;
+}));
+//#endregion
+//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/compare-build.js
+var require_compare_build = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	const SemVer = require_semver$1();
+	const compareBuild = (a, b, loose) => {
+		const versionA = new SemVer(a, loose);
+		const versionB = new SemVer(b, loose);
+		return versionA.compare(versionB) || versionA.compareBuild(versionB);
+	};
+	module.exports = compareBuild;
+}));
+//#endregion
+//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/sort.js
+var require_sort = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	const compareBuild = require_compare_build();
+	const sort = (list, loose) => list.sort((a, b) => compareBuild(a, b, loose));
+	module.exports = sort;
+}));
+//#endregion
+//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/rsort.js
+var require_rsort = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	const compareBuild = require_compare_build();
+	const rsort = (list, loose) => list.sort((a, b) => compareBuild(b, a, loose));
+	module.exports = rsort;
+}));
+//#endregion
+//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/gt.js
+var require_gt = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	const compare = require_compare();
+	const gt = (a, b, loose) => compare(a, b, loose) > 0;
+	module.exports = gt;
+}));
+//#endregion
+//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/lt.js
+var require_lt = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	const compare = require_compare();
+	const lt = (a, b, loose) => compare(a, b, loose) < 0;
+	module.exports = lt;
+}));
+//#endregion
+//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/eq.js
+var require_eq = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	const compare = require_compare();
+	const eq = (a, b, loose) => compare(a, b, loose) === 0;
+	module.exports = eq;
+}));
+//#endregion
+//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/neq.js
+var require_neq = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	const compare = require_compare();
+	const neq = (a, b, loose) => compare(a, b, loose) !== 0;
+	module.exports = neq;
+}));
+//#endregion
+//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/gte.js
+var require_gte = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	const compare = require_compare();
+	const gte = (a, b, loose) => compare(a, b, loose) >= 0;
+	module.exports = gte;
+}));
+//#endregion
+//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/lte.js
+var require_lte = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	const compare = require_compare();
+	const lte = (a, b, loose) => compare(a, b, loose) <= 0;
+	module.exports = lte;
+}));
+//#endregion
+//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/cmp.js
+var require_cmp = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	const eq = require_eq();
+	const neq = require_neq();
+	const gt = require_gt();
+	const gte = require_gte();
+	const lt = require_lt();
+	const lte = require_lte();
+	const cmp = (a, op, b, loose) => {
+		switch (op) {
+			case "===":
+				if (typeof a === "object") a = a.version;
+				if (typeof b === "object") b = b.version;
+				return a === b;
+			case "!==":
+				if (typeof a === "object") a = a.version;
+				if (typeof b === "object") b = b.version;
+				return a !== b;
+			case "":
+			case "=":
+			case "==": return eq(a, b, loose);
+			case "!=": return neq(a, b, loose);
+			case ">": return gt(a, b, loose);
+			case ">=": return gte(a, b, loose);
+			case "<": return lt(a, b, loose);
+			case "<=": return lte(a, b, loose);
+			default: throw new TypeError(`Invalid operator: ${op}`);
+		}
+	};
+	module.exports = cmp;
+}));
+//#endregion
+//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/coerce.js
+var require_coerce = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	const SemVer = require_semver$1();
+	const parse = require_parse();
+	const { safeRe: re, t } = require_re();
+	const coerce = (version, options) => {
+		if (version instanceof SemVer) return version;
+		if (typeof version === "number") version = String(version);
+		if (typeof version !== "string") return null;
+		options = options || {};
+		let match = null;
+		if (!options.rtl) match = version.match(options.includePrerelease ? re[t.COERCEFULL] : re[t.COERCE]);
+		else {
+			const coerceRtlRegex = options.includePrerelease ? re[t.COERCERTLFULL] : re[t.COERCERTL];
+			let next;
+			while ((next = coerceRtlRegex.exec(version)) && (!match || match.index + match[0].length !== version.length)) {
+				if (!match || next.index + next[0].length !== match.index + match[0].length) match = next;
+				coerceRtlRegex.lastIndex = next.index + next[1].length + next[2].length;
+			}
+			coerceRtlRegex.lastIndex = -1;
+		}
+		if (match === null) return null;
+		const major = match[2];
+		const minor = match[3] || "0";
+		const patch = match[4] || "0";
+		const prerelease = options.includePrerelease && match[5] ? `-${match[5]}` : "";
+		const build = options.includePrerelease && match[6] ? `+${match[6]}` : "";
+		return parse(`${major}.${minor}.${patch}${prerelease}${build}`, options);
+	};
+	module.exports = coerce;
+}));
+//#endregion
+//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/truncate.js
+var require_truncate = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	const parse = require_parse();
+	const constants = require_constants();
+	const SemVer = require_semver$1();
+	const truncate = (version, truncation, options) => {
+		if (!constants.RELEASE_TYPES.includes(truncation)) return null;
+		const clonedVersion = cloneInputVersion(version, options);
+		return clonedVersion && doTruncation(clonedVersion, truncation);
+	};
+	const cloneInputVersion = (version, options) => {
+		const versionStringToParse = version instanceof SemVer ? version.version : version;
+		return parse(versionStringToParse, options);
+	};
+	const doTruncation = (version, truncation) => {
+		if (isPrerelease(truncation)) return version.version;
+		version.prerelease = [];
+		switch (truncation) {
+			case "major":
+				version.minor = 0;
+				version.patch = 0;
+				break;
+			case "minor": version.patch = 0;
+		}
+		return version.format();
+	};
+	const isPrerelease = (type) => {
+		return type.startsWith("pre");
+	};
+	module.exports = truncate;
+}));
+//#endregion
+//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/internal/lrucache.js
+var require_lrucache = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	var LRUCache = class {
+		constructor() {
+			this.max = 1e3;
+			this.map = /* @__PURE__ */ new Map();
+		}
+		get(key) {
+			const value = this.map.get(key);
+			if (value === void 0) return;
+			else {
+				this.map.delete(key);
+				this.map.set(key, value);
+				return value;
+			}
+		}
+		delete(key) {
+			return this.map.delete(key);
+		}
+		set(key, value) {
+			if (!this.delete(key) && value !== void 0) {
+				if (this.map.size >= this.max) {
+					const firstKey = this.map.keys().next().value;
+					this.delete(firstKey);
+				}
+				this.map.set(key, value);
+			}
+			return this;
+		}
+	};
+	module.exports = LRUCache;
+}));
+//#endregion
+//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/classes/range.js
+var require_range = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	const SPACE_CHARACTERS = /\s+/g;
+	module.exports = class Range {
+		constructor(range, options) {
+			options = parseOptions(options);
+			if (range instanceof Range) {
+				if (range.loose === !!options.loose && range.includePrerelease === !!options.includePrerelease) return range;
+				else return new Range(range.raw, options);
+			}
+			if (range instanceof Comparator) {
+				this.raw = range.value;
+				this.set = [[range]];
+				this.formatted = void 0;
+				return this;
+			}
+			this.options = options;
+			this.loose = !!options.loose;
+			this.includePrerelease = !!options.includePrerelease;
+			this.raw = range.trim().replace(SPACE_CHARACTERS, " ");
+			this.set = this.raw.split("||").map((r) => this.parseRange(r.trim())).filter((c) => c.length);
+			if (!this.set.length) throw new TypeError(`Invalid SemVer Range: ${this.raw}`);
+			if (this.set.length > 1) {
+				const first = this.set[0];
+				this.set = this.set.filter((c) => !isNullSet(c[0]));
+				if (this.set.length === 0) this.set = [first];
+				else if (this.set.length > 1) {
+					for (const c of this.set) if (c.length === 1 && isAny(c[0])) {
+						this.set = [c];
+						break;
+					}
+				}
+			}
+			this.formatted = void 0;
+		}
+		get range() {
+			if (this.formatted === void 0) {
+				this.formatted = "";
+				for (let i = 0; i < this.set.length; i++) {
+					if (i > 0) this.formatted += "||";
+					const comps = this.set[i];
+					for (let k = 0; k < comps.length; k++) {
+						if (k > 0) this.formatted += " ";
+						this.formatted += comps[k].toString().trim();
+					}
+				}
+			}
+			return this.formatted;
+		}
+		format() {
+			return this.range;
+		}
+		toString() {
+			return this.range;
+		}
+		parseRange(range) {
+			range = range.replace(BUILDSTRIPRE, "");
+			const memoKey = ((this.options.includePrerelease && FLAG_INCLUDE_PRERELEASE) | (this.options.loose && FLAG_LOOSE)) + ":" + range;
+			const cached = cache.get(memoKey);
+			if (cached) return cached;
+			const loose = this.options.loose;
+			const hr = loose ? re[t.HYPHENRANGELOOSE] : re[t.HYPHENRANGE];
+			range = range.replace(hr, hyphenReplace(this.options.includePrerelease));
+			debug("hyphen replace", range);
+			range = range.replace(re[t.COMPARATORTRIM], comparatorTrimReplace);
+			debug("comparator trim", range);
+			range = range.replace(re[t.TILDETRIM], tildeTrimReplace);
+			debug("tilde trim", range);
+			range = range.replace(re[t.CARETTRIM], caretTrimReplace);
+			debug("caret trim", range);
+			let rangeList = range.split(" ").map((comp) => parseComparator(comp, this.options)).join(" ").split(/\s+/).map((comp) => replaceGTE0(comp, this.options));
+			if (loose) rangeList = rangeList.filter((comp) => {
+				debug("loose invalid filter", comp, this.options);
+				return !!comp.match(re[t.COMPARATORLOOSE]);
+			});
+			debug("range list", rangeList);
+			const rangeMap = /* @__PURE__ */ new Map();
+			const comparators = rangeList.map((comp) => new Comparator(comp, this.options));
+			for (const comp of comparators) {
+				if (isNullSet(comp)) return [comp];
+				rangeMap.set(comp.value, comp);
+			}
+			if (rangeMap.size > 1 && rangeMap.has("")) rangeMap.delete("");
+			const result = [...rangeMap.values()];
+			cache.set(memoKey, result);
+			return result;
+		}
+		intersects(range, options) {
+			if (!(range instanceof Range)) throw new TypeError("a Range is required");
+			return this.set.some((thisComparators) => {
+				return isSatisfiable(thisComparators, options) && range.set.some((rangeComparators) => {
+					return isSatisfiable(rangeComparators, options) && thisComparators.every((thisComparator) => {
+						return rangeComparators.every((rangeComparator) => {
+							return thisComparator.intersects(rangeComparator, options);
+						});
+					});
+				});
+			});
+		}
+		test(version) {
+			if (!version) return false;
+			if (typeof version === "string") try {
+				version = new SemVer(version, this.options);
+			} catch (er) {
+				return false;
+			}
+			for (let i = 0; i < this.set.length; i++) if (testSet(this.set[i], version, this.options)) return true;
+			return false;
+		}
+	};
+	const cache = new (require_lrucache())();
+	const parseOptions = require_parse_options();
+	const Comparator = require_comparator();
+	const debug = require_debug();
+	const SemVer = require_semver$1();
+	const { safeRe: re, src, t, comparatorTrimReplace, tildeTrimReplace, caretTrimReplace } = require_re();
+	const { FLAG_INCLUDE_PRERELEASE, FLAG_LOOSE } = require_constants();
+	const BUILDSTRIPRE = new RegExp(src[t.BUILD], "g");
+	const isNullSet = (c) => c.value === "<0.0.0-0";
+	const isAny = (c) => c.value === "";
+	const isSatisfiable = (comparators, options) => {
+		let result = true;
+		const remainingComparators = comparators.slice();
+		let testComparator = remainingComparators.pop();
+		while (result && remainingComparators.length) {
+			result = remainingComparators.every((otherComparator) => {
+				return testComparator.intersects(otherComparator, options);
+			});
+			testComparator = remainingComparators.pop();
+		}
+		return result;
+	};
+	const parseComparator = (comp, options) => {
+		comp = comp.replace(re[t.BUILD], "");
+		debug("comp", comp, options);
+		comp = replaceCarets(comp, options);
+		debug("caret", comp);
+		comp = replaceTildes(comp, options);
+		debug("tildes", comp);
+		comp = replaceXRanges(comp, options);
+		debug("xrange", comp);
+		comp = replaceStars(comp, options);
+		debug("stars", comp);
+		return comp;
+	};
+	const isX = (id) => !id || id.toLowerCase() === "x" || id === "*";
+	const invalidXRangeOrder = (M, m, p) => isX(M) && !isX(m) || isX(m) && p && !isX(p);
+	const replaceTildes = (comp, options) => {
+		return comp.trim().split(/\s+/).map((c) => replaceTilde(c, options)).join(" ");
+	};
+	const replaceTilde = (comp, options) => {
+		const r = options.loose ? re[t.TILDELOOSE] : re[t.TILDE];
+		const z = options.includePrerelease ? "-0" : "";
+		return comp.replace(r, (_, M, m, p, pr) => {
+			debug("tilde", comp, _, M, m, p, pr);
+			let ret;
+			if (isX(M)) ret = "";
+			else if (isX(m)) ret = `>=${M}.0.0${z} <${+M + 1}.0.0-0`;
+			else if (isX(p)) ret = `>=${M}.${m}.0${z} <${M}.${+m + 1}.0-0`;
+			else if (pr) {
+				debug("replaceTilde pr", pr);
+				ret = `>=${M}.${m}.${p}-${pr} <${M}.${+m + 1}.0-0`;
+			} else ret = `>=${M}.${m}.${p} <${M}.${+m + 1}.0-0`;
+			debug("tilde return", ret);
+			return ret;
+		});
+	};
+	const replaceCarets = (comp, options) => {
+		return comp.trim().split(/\s+/).map((c) => replaceCaret(c, options)).join(" ");
+	};
+	const replaceCaret = (comp, options) => {
+		debug("caret", comp, options);
+		const r = options.loose ? re[t.CARETLOOSE] : re[t.CARET];
+		const z = options.includePrerelease ? "-0" : "";
+		return comp.replace(r, (_, M, m, p, pr) => {
+			debug("caret", comp, _, M, m, p, pr);
+			let ret;
+			if (isX(M)) ret = "";
+			else if (isX(m)) ret = `>=${M}.0.0${z} <${+M + 1}.0.0-0`;
+			else if (isX(p)) {
+				if (M === "0") ret = `>=${M}.${m}.0${z} <${M}.${+m + 1}.0-0`;
+				else ret = `>=${M}.${m}.0${z} <${+M + 1}.0.0-0`;
+			} else if (pr) {
+				debug("replaceCaret pr", pr);
+				if (M === "0") {
+					if (m === "0") ret = `>=${M}.${m}.${p}-${pr} <${M}.${m}.${+p + 1}-0`;
+					else ret = `>=${M}.${m}.${p}-${pr} <${M}.${+m + 1}.0-0`;
+				} else ret = `>=${M}.${m}.${p}-${pr} <${+M + 1}.0.0-0`;
+			} else {
+				debug("no pr");
+				if (M === "0") {
+					if (m === "0") ret = `>=${M}.${m}.${p} <${M}.${m}.${+p + 1}-0`;
+					else ret = `>=${M}.${m}.${p} <${M}.${+m + 1}.0-0`;
+				} else ret = `>=${M}.${m}.${p} <${+M + 1}.0.0-0`;
+			}
+			debug("caret return", ret);
+			return ret;
+		});
+	};
+	const replaceXRanges = (comp, options) => {
+		debug("replaceXRanges", comp, options);
+		return comp.split(/\s+/).map((c) => replaceXRange(c, options)).join(" ");
+	};
+	const replaceXRange = (comp, options) => {
+		comp = comp.trim();
+		const r = options.loose ? re[t.XRANGELOOSE] : re[t.XRANGE];
+		return comp.replace(r, (ret, gtlt, M, m, p, pr) => {
+			debug("xRange", comp, ret, gtlt, M, m, p, pr);
+			if (invalidXRangeOrder(M, m, p)) return comp;
+			const xM = isX(M);
+			const xm = xM || isX(m);
+			const xp = xm || isX(p);
+			const anyX = xp;
+			if (gtlt === "=" && anyX) gtlt = "";
+			pr = options.includePrerelease ? "-0" : "";
+			if (xM) {
+				if (gtlt === ">" || gtlt === "<") ret = "<0.0.0-0";
+				else ret = "*";
+			} else if (gtlt && anyX) {
+				if (xm) m = 0;
+				p = 0;
+				if (gtlt === ">") {
+					gtlt = ">=";
+					if (xm) {
+						M = +M + 1;
+						m = 0;
+						p = 0;
+					} else {
+						m = +m + 1;
+						p = 0;
+					}
+				} else if (gtlt === "<=") {
+					gtlt = "<";
+					if (xm) M = +M + 1;
+					else m = +m + 1;
+				}
+				if (gtlt === "<") pr = "-0";
+				ret = `${gtlt + M}.${m}.${p}${pr}`;
+			} else if (xm) ret = `>=${M}.0.0${pr} <${+M + 1}.0.0-0`;
+			else if (xp) ret = `>=${M}.${m}.0${pr} <${M}.${+m + 1}.0-0`;
+			debug("xRange return", ret);
+			return ret;
+		});
+	};
+	const replaceStars = (comp, options) => {
+		debug("replaceStars", comp, options);
+		return comp.trim().replace(re[t.STAR], "");
+	};
+	const replaceGTE0 = (comp, options) => {
+		debug("replaceGTE0", comp, options);
+		return comp.trim().replace(re[options.includePrerelease ? t.GTE0PRE : t.GTE0], "");
+	};
+	const hyphenReplace = (incPr) => ($0, from, fM, fm, fp, fpr, fb, to, tM, tm, tp, tpr) => {
+		if (isX(fM)) from = "";
+		else if (isX(fm)) from = `>=${fM}.0.0${incPr ? "-0" : ""}`;
+		else if (isX(fp)) from = `>=${fM}.${fm}.0${incPr ? "-0" : ""}`;
+		else if (fpr) from = `>=${from}`;
+		else from = `>=${from}${incPr ? "-0" : ""}`;
+		if (isX(tM)) to = "";
+		else if (isX(tm)) to = `<${+tM + 1}.0.0-0`;
+		else if (isX(tp)) to = `<${tM}.${+tm + 1}.0-0`;
+		else if (tpr) to = `<=${tM}.${tm}.${tp}-${tpr}`;
+		else if (incPr) to = `<${tM}.${tm}.${+tp + 1}-0`;
+		else to = `<=${to}`;
+		return `${from} ${to}`.trim();
+	};
+	const testSet = (set, version, options) => {
+		for (let i = 0; i < set.length; i++) if (!set[i].test(version)) return false;
+		if (version.prerelease.length && !options.includePrerelease) {
+			for (let i = 0; i < set.length; i++) {
+				debug(set[i].semver);
+				if (set[i].semver === Comparator.ANY) continue;
+				if (set[i].semver.prerelease.length > 0) {
+					const allowed = set[i].semver;
+					if (allowed.major === version.major && allowed.minor === version.minor && allowed.patch === version.patch) return true;
+				}
+			}
+			return false;
+		}
+		return true;
+	};
+}));
+//#endregion
+//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/classes/comparator.js
+var require_comparator = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	const ANY = Symbol("SemVer ANY");
+	module.exports = class Comparator {
+		static get ANY() {
+			return ANY;
+		}
+		constructor(comp, options) {
+			options = parseOptions(options);
+			if (comp instanceof Comparator) {
+				if (comp.loose === !!options.loose) return comp;
+				else comp = comp.value;
+			}
+			comp = comp.trim().split(/\s+/).join(" ");
+			debug("comparator", comp, options);
+			this.options = options;
+			this.loose = !!options.loose;
+			this.parse(comp);
+			if (this.semver === ANY) this.value = "";
+			else this.value = this.operator + this.semver.version;
+			debug("comp", this);
+		}
+		parse(comp) {
+			const r = this.options.loose ? re[t.COMPARATORLOOSE] : re[t.COMPARATOR];
+			const m = comp.match(r);
+			if (!m) throw new TypeError(`Invalid comparator: ${comp}`);
+			this.operator = m[1] !== void 0 ? m[1] : "";
+			if (this.operator === "=") this.operator = "";
+			if (!m[2]) this.semver = ANY;
+			else this.semver = new SemVer(m[2], this.options.loose);
+		}
+		toString() {
+			return this.value;
+		}
+		test(version) {
+			debug("Comparator.test", version, this.options.loose);
+			if (this.semver === ANY || version === ANY) return true;
+			if (typeof version === "string") try {
+				version = new SemVer(version, this.options);
+			} catch (er) {
+				return false;
+			}
+			return cmp(version, this.operator, this.semver, this.options);
+		}
+		intersects(comp, options) {
+			if (!(comp instanceof Comparator)) throw new TypeError("a Comparator is required");
+			if (this.operator === "") {
+				if (this.value === "") return true;
+				return new Range(comp.value, options).test(this.value);
+			} else if (comp.operator === "") {
+				if (comp.value === "") return true;
+				return new Range(this.value, options).test(comp.semver);
+			}
+			options = parseOptions(options);
+			if (options.includePrerelease && (this.value === "<0.0.0-0" || comp.value === "<0.0.0-0")) return false;
+			if (!options.includePrerelease && (this.value.startsWith("<0.0.0") || comp.value.startsWith("<0.0.0"))) return false;
+			if (this.operator.startsWith(">") && comp.operator.startsWith(">")) return true;
+			if (this.operator.startsWith("<") && comp.operator.startsWith("<")) return true;
+			if (this.semver.version === comp.semver.version && this.operator.includes("=") && comp.operator.includes("=")) return true;
+			if (cmp(this.semver, "<", comp.semver, options) && this.operator.startsWith(">") && comp.operator.startsWith("<")) return true;
+			if (cmp(this.semver, ">", comp.semver, options) && this.operator.startsWith("<") && comp.operator.startsWith(">")) return true;
+			return false;
+		}
+	};
+	const parseOptions = require_parse_options();
+	const { safeRe: re, t } = require_re();
+	const cmp = require_cmp();
+	const debug = require_debug();
+	const SemVer = require_semver$1();
+	const Range = require_range();
+}));
+//#endregion
+//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/satisfies.js
+var require_satisfies = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	const Range = require_range();
+	const satisfies = (version, range, options) => {
+		try {
+			range = new Range(range, options);
+		} catch (er) {
+			return false;
+		}
+		return range.test(version);
+	};
+	module.exports = satisfies;
+}));
+//#endregion
+//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/ranges/to-comparators.js
+var require_to_comparators = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	const Range = require_range();
+	const toComparators = (range, options) => new Range(range, options).set.map((comp) => comp.map((c) => c.value).join(" ").trim().split(" "));
+	module.exports = toComparators;
+}));
+//#endregion
+//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/ranges/max-satisfying.js
+var require_max_satisfying = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	const SemVer = require_semver$1();
+	const Range = require_range();
+	const maxSatisfying = (versions, range, options) => {
+		let max = null;
+		let maxSV = null;
+		let rangeObj = null;
+		try {
+			rangeObj = new Range(range, options);
+		} catch (er) {
+			return null;
+		}
+		versions.forEach((v) => {
+			if (rangeObj.test(v)) {
+				if (!max || maxSV.compare(v) === -1) {
+					max = v;
+					maxSV = new SemVer(max, options);
+				}
+			}
+		});
+		return max;
+	};
+	module.exports = maxSatisfying;
+}));
+//#endregion
+//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/ranges/min-satisfying.js
+var require_min_satisfying = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	const SemVer = require_semver$1();
+	const Range = require_range();
+	const minSatisfying = (versions, range, options) => {
+		let min = null;
+		let minSV = null;
+		let rangeObj = null;
+		try {
+			rangeObj = new Range(range, options);
+		} catch (er) {
+			return null;
+		}
+		versions.forEach((v) => {
+			if (rangeObj.test(v)) {
+				if (!min || minSV.compare(v) === 1) {
+					min = v;
+					minSV = new SemVer(min, options);
+				}
+			}
+		});
+		return min;
+	};
+	module.exports = minSatisfying;
+}));
+//#endregion
+//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/ranges/min-version.js
+var require_min_version = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	const SemVer = require_semver$1();
+	const Range = require_range();
+	const gt = require_gt();
+	const minVersion = (range, loose) => {
+		range = new Range(range, loose);
+		let minver = new SemVer("0.0.0");
+		if (range.test(minver)) return minver;
+		minver = new SemVer("0.0.0-0");
+		if (range.test(minver)) return minver;
+		minver = null;
+		for (let i = 0; i < range.set.length; ++i) {
+			const comparators = range.set[i];
+			let setMin = null;
+			comparators.forEach((comparator) => {
+				const compver = new SemVer(comparator.semver.version);
+				switch (comparator.operator) {
+					case ">":
+						if (compver.prerelease.length === 0) compver.patch++;
+						else compver.prerelease.push(0);
+						compver.raw = compver.format();
+					case "":
+					case ">=":
+						if (!setMin || gt(compver, setMin)) setMin = compver;
+						break;
+					case "<":
+					case "<=": break;
+					/* istanbul ignore next */
+					default: throw new Error(`Unexpected operation: ${comparator.operator}`);
+				}
+			});
+			if (setMin && (!minver || gt(minver, setMin))) minver = setMin;
+		}
+		if (minver && range.test(minver)) return minver;
+		return null;
+	};
+	module.exports = minVersion;
+}));
+//#endregion
+//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/ranges/valid.js
+var require_valid = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	const Range = require_range();
+	const validRange = (range, options) => {
+		try {
+			return new Range(range, options).range || "*";
+		} catch (er) {
+			return null;
+		}
+	};
+	module.exports = validRange;
+}));
+//#endregion
+//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/ranges/outside.js
+var require_outside = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	const SemVer = require_semver$1();
+	const Comparator = require_comparator();
+	const { ANY } = Comparator;
+	const Range = require_range();
+	const satisfies = require_satisfies();
+	const gt = require_gt();
+	const lt = require_lt();
+	const lte = require_lte();
+	const gte = require_gte();
+	const outside = (version, range, hilo, options) => {
+		version = new SemVer(version, options);
+		range = new Range(range, options);
+		let gtfn, ltefn, ltfn, comp, ecomp;
+		switch (hilo) {
+			case ">":
+				gtfn = gt;
+				ltefn = lte;
+				ltfn = lt;
+				comp = ">";
+				ecomp = ">=";
+				break;
+			case "<":
+				gtfn = lt;
+				ltefn = gte;
+				ltfn = gt;
+				comp = "<";
+				ecomp = "<=";
+				break;
+			default: throw new TypeError("Must provide a hilo val of \"<\" or \">\"");
+		}
+		if (satisfies(version, range, options)) return false;
+		for (let i = 0; i < range.set.length; ++i) {
+			const comparators = range.set[i];
+			let high = null;
+			let low = null;
+			comparators.forEach((comparator) => {
+				if (comparator.semver === ANY) comparator = new Comparator(">=0.0.0");
+				high = high || comparator;
+				low = low || comparator;
+				if (gtfn(comparator.semver, high.semver, options)) high = comparator;
+				else if (ltfn(comparator.semver, low.semver, options)) low = comparator;
+			});
+			if (high.operator === comp || high.operator === ecomp) return false;
+			if ((!low.operator || low.operator === comp) && ltefn(version, low.semver)) return false;
+			else if (low.operator === ecomp && ltfn(version, low.semver)) return false;
+		}
+		return true;
+	};
+	module.exports = outside;
+}));
+//#endregion
+//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/ranges/gtr.js
+var require_gtr = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	const outside = require_outside();
+	const gtr = (version, range, options) => outside(version, range, ">", options);
+	module.exports = gtr;
+}));
+//#endregion
+//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/ranges/ltr.js
+var require_ltr = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	const outside = require_outside();
+	const ltr = (version, range, options) => outside(version, range, "<", options);
+	module.exports = ltr;
+}));
+//#endregion
+//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/ranges/intersects.js
+var require_intersects = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	const Range = require_range();
+	const intersects = (r1, r2, options) => {
+		r1 = new Range(r1, options);
+		r2 = new Range(r2, options);
+		return r1.intersects(r2, options);
+	};
+	module.exports = intersects;
+}));
+//#endregion
+//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/ranges/simplify.js
+var require_simplify = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	const satisfies = require_satisfies();
+	const compare = require_compare();
+	module.exports = (versions, range, options) => {
+		const set = [];
+		let first = null;
+		let prev = null;
+		const v = versions.sort((a, b) => compare(a, b, options));
+		for (const version of v) if (satisfies(version, range, options)) {
+			prev = version;
+			if (!first) first = version;
+		} else {
+			if (prev) set.push([first, prev]);
+			prev = null;
+			first = null;
+		}
+		if (first) set.push([first, null]);
+		const ranges = [];
+		for (const [min, max] of set) if (min === max) ranges.push(min);
+		else if (!max && min === v[0]) ranges.push("*");
+		else if (!max) ranges.push(`>=${min}`);
+		else if (min === v[0]) ranges.push(`<=${max}`);
+		else ranges.push(`${min} - ${max}`);
+		const simplified = ranges.join(" || ");
+		const original = typeof range.raw === "string" ? range.raw : String(range);
+		return simplified.length < original.length ? simplified : range;
+	};
+}));
+//#endregion
+//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/ranges/subset.js
+var require_subset = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	const Range = require_range();
+	const Comparator = require_comparator();
+	const { ANY } = Comparator;
+	const satisfies = require_satisfies();
+	const compare = require_compare();
+	const subset = (sub, dom, options = {}) => {
+		if (sub === dom) return true;
+		sub = new Range(sub, options);
+		dom = new Range(dom, options);
+		let sawNonNull = false;
+		OUTER: for (const simpleSub of sub.set) {
+			for (const simpleDom of dom.set) {
+				const isSub = simpleSubset(simpleSub, simpleDom, options);
+				sawNonNull = sawNonNull || isSub !== null;
+				if (isSub) continue OUTER;
+			}
+			if (sawNonNull) return false;
+		}
+		return true;
+	};
+	const minimumVersionWithPreRelease = [new Comparator(">=0.0.0-0")];
+	const minimumVersion = [new Comparator(">=0.0.0")];
+	const simpleSubset = (sub, dom, options) => {
+		if (sub === dom) return true;
+		if (sub.length === 1 && sub[0].semver === ANY) {
+			if (dom.length === 1 && dom[0].semver === ANY) return true;
+			else if (options.includePrerelease) sub = minimumVersionWithPreRelease;
+			else sub = minimumVersion;
+		}
+		if (dom.length === 1 && dom[0].semver === ANY) {
+			if (options.includePrerelease) return true;
+			else dom = minimumVersion;
+		}
+		const eqSet = /* @__PURE__ */ new Set();
+		let gt, lt;
+		for (const c of sub) if (c.operator === ">" || c.operator === ">=") gt = higherGT(gt, c, options);
+		else if (c.operator === "<" || c.operator === "<=") lt = lowerLT(lt, c, options);
+		else eqSet.add(c.semver);
+		if (eqSet.size > 1) return null;
+		let gtltComp;
+		if (gt && lt) {
+			gtltComp = compare(gt.semver, lt.semver, options);
+			if (gtltComp > 0) return null;
+			else if (gtltComp === 0 && (gt.operator !== ">=" || lt.operator !== "<=")) return null;
+		}
+		for (const eq of eqSet) {
+			if (gt && !satisfies(eq, String(gt), options)) return null;
+			if (lt && !satisfies(eq, String(lt), options)) return null;
+			for (const c of dom) if (!satisfies(eq, String(c), options)) return false;
+			return true;
+		}
+		let higher, lower;
+		let hasDomLT, hasDomGT;
+		let needDomLTPre = lt && !options.includePrerelease && lt.semver.prerelease.length ? lt.semver : false;
+		let needDomGTPre = gt && !options.includePrerelease && gt.semver.prerelease.length ? gt.semver : false;
+		if (needDomLTPre && needDomLTPre.prerelease.length === 1 && lt.operator === "<" && needDomLTPre.prerelease[0] === 0) needDomLTPre = false;
+		for (const c of dom) {
+			hasDomGT = hasDomGT || c.operator === ">" || c.operator === ">=";
+			hasDomLT = hasDomLT || c.operator === "<" || c.operator === "<=";
+			if (gt) {
+				if (needDomGTPre) {
+					if (c.semver.prerelease && c.semver.prerelease.length && c.semver.major === needDomGTPre.major && c.semver.minor === needDomGTPre.minor && c.semver.patch === needDomGTPre.patch) needDomGTPre = false;
+				}
+				if (c.operator === ">" || c.operator === ">=") {
+					higher = higherGT(gt, c, options);
+					if (higher === c && higher !== gt) return false;
+				} else if (gt.operator === ">=" && !c.test(gt.semver)) return false;
+			}
+			if (lt) {
+				if (needDomLTPre) {
+					if (c.semver.prerelease && c.semver.prerelease.length && c.semver.major === needDomLTPre.major && c.semver.minor === needDomLTPre.minor && c.semver.patch === needDomLTPre.patch) needDomLTPre = false;
+				}
+				if (c.operator === "<" || c.operator === "<=") {
+					lower = lowerLT(lt, c, options);
+					if (lower === c && lower !== lt) return false;
+				} else if (lt.operator === "<=" && !c.test(lt.semver)) return false;
+			}
+			if (!c.operator && (lt || gt) && gtltComp !== 0) return false;
+		}
+		if (gt && hasDomLT && !lt && gtltComp !== 0) return false;
+		if (lt && hasDomGT && !gt && gtltComp !== 0) return false;
+		if (needDomGTPre || needDomLTPre) return false;
+		return true;
+	};
+	const higherGT = (a, b, options) => {
+		if (!a) return b;
+		const comp = compare(a.semver, b.semver, options);
+		return comp > 0 ? a : comp < 0 ? b : b.operator === ">" && a.operator === ">=" ? b : a;
+	};
+	const lowerLT = (a, b, options) => {
+		if (!a) return b;
+		const comp = compare(a.semver, b.semver, options);
+		return comp < 0 ? a : comp > 0 ? b : b.operator === "<" && a.operator === "<=" ? b : a;
+	};
+	module.exports = subset;
+}));
+//#endregion
+//#region src/agent/protocol.ts
+var import_semver = (/* @__PURE__ */ __commonJSMin(((exports, module) => {
+	const internalRe = require_re();
+	const constants = require_constants();
+	const SemVer = require_semver$1();
+	const identifiers = require_identifiers();
+	module.exports = {
+		parse: require_parse(),
+		valid: require_valid$1(),
+		clean: require_clean(),
+		inc: require_inc(),
+		diff: require_diff(),
+		major: require_major(),
+		minor: require_minor(),
+		patch: require_patch(),
+		prerelease: require_prerelease(),
+		compare: require_compare(),
+		rcompare: require_rcompare(),
+		compareLoose: require_compare_loose(),
+		compareBuild: require_compare_build(),
+		sort: require_sort(),
+		rsort: require_rsort(),
+		gt: require_gt(),
+		lt: require_lt(),
+		eq: require_eq(),
+		neq: require_neq(),
+		gte: require_gte(),
+		lte: require_lte(),
+		cmp: require_cmp(),
+		coerce: require_coerce(),
+		truncate: require_truncate(),
+		Comparator: require_comparator(),
+		Range: require_range(),
+		satisfies: require_satisfies(),
+		toComparators: require_to_comparators(),
+		maxSatisfying: require_max_satisfying(),
+		minSatisfying: require_min_satisfying(),
+		minVersion: require_min_version(),
+		validRange: require_valid(),
+		outside: require_outside(),
+		gtr: require_gtr(),
+		ltr: require_ltr(),
+		intersects: require_intersects(),
+		simplifyRange: require_simplify(),
+		subset: require_subset(),
+		SemVer,
+		re: internalRe.re,
+		src: internalRe.src,
+		tokens: internalRe.t,
+		SEMVER_SPEC_VERSION: constants.SEMVER_SPEC_VERSION,
+		RELEASE_TYPES: constants.RELEASE_TYPES,
+		compareIdentifiers: identifiers.compareIdentifiers,
+		rcompareIdentifiers: identifiers.rcompareIdentifiers
+	};
+})))();
+var FleetProtocolError = class extends Error {
+	code;
+	constructor(code, message) {
+		super(message);
+		this.name = "FleetProtocolError";
+		this.code = code;
+	}
+};
+const PLAN_BODY_KEYS$1 = [
+	"protocolVersion",
+	"deviceId",
+	"profile",
+	"manifestDigest",
+	"profileHash",
+	"observedDshVersion",
+	"pluginId",
+	"action",
+	"fromSpec",
+	"exactToSpec",
+	"sourceKind",
+	"restartRequired",
+	"createdAt",
+	"expiresAt"
+];
+const PLAN_KEYS$2 = [
+	...PLAN_BODY_KEYS$1,
+	"planId",
+	"digest"
+];
+const APPROVAL_KEYS$2 = [
+	"protocolVersion",
+	"approvalId",
+	"principalId",
+	"planId",
+	"planDigest",
+	"deviceId",
+	"profile",
+	"approvedAt",
+	"expiresAt"
+];
+function isRecord$9(value) {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function assertExactKeys$1(value, keys, label) {
+	if (!isRecord$9(value)) throw new FleetProtocolError("invalid-payload", label + " must be an object");
+	const expected = new Set(keys);
+	for (const key of Object.keys(value)) if (!expected.has(key)) throw new FleetProtocolError("invalid-payload", label + " contains unsupported field " + JSON.stringify(key));
+	for (const key of keys) if (!Object.hasOwn(value, key)) throw new FleetProtocolError("invalid-payload", label + " is missing field " + JSON.stringify(key));
+}
+function assertNonEmpty(value, field) {
+	if (typeof value !== "string" || value.trim().length === 0 || value !== value.trim()) throw new FleetProtocolError("invalid-payload", field + " must be a trimmed non-empty string");
+}
+function assertDigest$1(value, field) {
+	if (typeof value !== "string" || !/^[0-9a-f]{64}$/.test(value)) throw new FleetProtocolError("invalid-digest", field + " must be a lowercase SHA-256 digest");
+}
+function parseCanonicalTime(value, field) {
+	if (typeof value !== "string") throw new FleetProtocolError("invalid-time", field + " must be an ISO timestamp");
+	const timestamp = Date.parse(value);
+	if (!Number.isFinite(timestamp) || new Date(timestamp).toISOString() !== value) throw new FleetProtocolError("invalid-time", field + " must be a canonical ISO timestamp");
+	return timestamp;
+}
+function exactNpmVersion(value) {
+	return (0, import_semver.valid)(value) === value;
+}
+function exactGitHubRevision(value) {
+	return /^github:[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?\/[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?#[0-9a-f]{40}$/.test(value);
+}
+function isSafeNpmPackageName(value) {
+	if (value.length === 0 || value.length > 214 || value !== value.toLowerCase()) return false;
+	return /^(?:@[a-z0-9][a-z0-9._~-]*\/)?[a-z0-9][a-z0-9._~-]*$/.test(value);
+}
+function exactSourceKind(value) {
+	if (exactNpmVersion(value)) return "npm";
+	if (exactGitHubRevision(value)) return "github";
+	return null;
+}
+function isSupportedDshVersion(value) {
+	return (0, import_semver.valid)(value) === value && (0, import_semver.satisfies)(value, ">=0.1.0-rc.7 <0.2.0", { includePrerelease: true });
+}
+function validatePlanBody$1(value) {
+	assertExactKeys$1(value, PLAN_BODY_KEYS$1, "plan body");
+	if (value.protocolVersion !== 1) throw new FleetProtocolError("invalid-protocol", "unsupported fleet agent protocol version");
+	assertNonEmpty(value.deviceId, "deviceId");
+	assertNonEmpty(value.profile, "profile");
+	assertDigest$1(value.manifestDigest, "manifestDigest");
+	assertDigest$1(value.profileHash, "profileHash");
+	assertNonEmpty(value.observedDshVersion, "observedDshVersion");
+	if (!isSupportedDshVersion(value.observedDshVersion)) throw new FleetProtocolError("unsupported-dsh-version", "DSH version is outside >=0.1.0-rc.7 <0.2.0");
+	assertNonEmpty(value.pluginId, "pluginId");
+	if (!isSafeNpmPackageName(value.pluginId)) throw new FleetProtocolError("invalid-payload", "pluginId must be one literal lowercase npm package name");
+	if (value.action !== "install" && value.action !== "update") throw new FleetProtocolError("invalid-action", "action must be install or update");
+	if (value.action === "install" && value.fromSpec !== null) throw new FleetProtocolError("invalid-action", "install plans must bind fromSpec to null");
+	if (value.action === "update") {
+		assertNonEmpty(value.fromSpec, "fromSpec");
+		if (value.fromSpec === value.exactToSpec) throw new FleetProtocolError("invalid-action", "update plans must change the dependency spec");
+	}
+	assertNonEmpty(value.exactToSpec, "exactToSpec");
+	if (exactSourceKind(value.exactToSpec) !== value.sourceKind) throw new FleetProtocolError("unsupported-source", "exactToSpec does not match sourceKind or is mutable");
+	if (value.restartRequired !== true) throw new FleetProtocolError("invalid-payload", "restartRequired must be true for this protocol slice");
+	const createdAt = parseCanonicalTime(value.createdAt, "createdAt");
+	if (parseCanonicalTime(value.expiresAt, "expiresAt") <= createdAt) throw new FleetProtocolError("invalid-time", "expiresAt must be after createdAt");
+}
+function canonicalize(value, seen) {
+	if (value === null) return "null";
+	if (typeof value === "string" || typeof value === "boolean") return JSON.stringify(value);
+	if (typeof value === "number") {
+		if (!Number.isFinite(value)) throw new FleetProtocolError("invalid-payload", "canonical JSON rejects non-finite numbers");
+		return JSON.stringify(value);
+	}
+	if (Array.isArray(value)) {
+		if (seen.has(value)) throw new FleetProtocolError("invalid-payload", "canonical JSON rejects cycles");
+		seen.add(value);
+		const encoded = "[" + value.map((item) => canonicalize(item, seen)).join(",") + "]";
+		seen.delete(value);
+		return encoded;
+	}
+	if (isRecord$9(value)) {
+		const prototype = Object.getPrototypeOf(value);
+		if (prototype !== Object.prototype && prototype !== null) throw new FleetProtocolError("invalid-payload", "canonical JSON accepts only plain objects");
+		if (seen.has(value)) throw new FleetProtocolError("invalid-payload", "canonical JSON rejects cycles");
+		seen.add(value);
+		const encoded = "{" + Object.keys(value).sort().map((key) => {
+			const item = value[key];
+			if (item === void 0) throw new FleetProtocolError("invalid-payload", "canonical JSON rejects undefined");
+			return JSON.stringify(key) + ":" + canonicalize(item, seen);
+		}).join(",") + "}";
+		seen.delete(value);
+		return encoded;
+	}
+	throw new FleetProtocolError("invalid-payload", "value is not representable as canonical JSON");
+}
+function canonicalJson(value) {
+	return canonicalize(value, /* @__PURE__ */ new Set());
+}
+function sha256Canonical(value) {
+	return createHash("sha256").update(canonicalJson(value), "utf8").digest("hex");
+}
+function createFleetPlan(body) {
+	validatePlanBody$1(body);
+	const digest = sha256Canonical(body);
+	return Object.freeze({
+		...body,
+		planId: "plan:" + digest,
+		digest
+	});
+}
+function validateFleetPlan(value) {
+	assertExactKeys$1(value, PLAN_KEYS$2, "plan");
+	const body = {
+		protocolVersion: value.protocolVersion,
+		deviceId: value.deviceId,
+		profile: value.profile,
+		manifestDigest: value.manifestDigest,
+		profileHash: value.profileHash,
+		observedDshVersion: value.observedDshVersion,
+		pluginId: value.pluginId,
+		action: value.action,
+		fromSpec: value.fromSpec,
+		exactToSpec: value.exactToSpec,
+		sourceKind: value.sourceKind,
+		restartRequired: value.restartRequired,
+		createdAt: value.createdAt,
+		expiresAt: value.expiresAt
+	};
+	validatePlanBody$1(body);
+	assertDigest$1(value.digest, "digest");
+	const digest = sha256Canonical(body);
+	if (value.digest !== digest || value.planId !== "plan:" + digest) throw new FleetProtocolError("plan-integrity-failed", "plan id or digest does not match its canonical body");
+}
+function asTimestamp(value, field) {
+	if (value instanceof Date) {
+		const timestamp = value.getTime();
+		if (!Number.isFinite(timestamp)) throw new FleetProtocolError("invalid-time", field + " is invalid");
+		return timestamp;
+	}
+	return parseCanonicalTime(value, field);
+}
+function validateFleetPlanApproval(plan, approval, now) {
+	validateFleetPlan(plan);
+	assertExactKeys$1(approval, APPROVAL_KEYS$2, "approval");
+	if (approval.protocolVersion !== 1) throw new FleetProtocolError("invalid-protocol", "unsupported approval protocol version");
+	assertNonEmpty(approval.approvalId, "approvalId");
+	assertNonEmpty(approval.principalId, "approval.principalId");
+	assertNonEmpty(approval.planId, "approval.planId");
+	assertDigest$1(approval.planDigest, "approval.planDigest");
+	assertNonEmpty(approval.deviceId, "approval.deviceId");
+	assertNonEmpty(approval.profile, "approval.profile");
+	const approvedAt = parseCanonicalTime(approval.approvedAt, "approvedAt");
+	const expiresAt = parseCanonicalTime(approval.expiresAt, "approval.expiresAt");
+	const nowAt = asTimestamp(now, "now");
+	const planCreatedAt = Date.parse(plan.createdAt);
+	const planExpiresAt = Date.parse(plan.expiresAt);
+	if (approval.planId !== plan.planId || approval.planDigest !== plan.digest || approval.deviceId !== plan.deviceId || approval.profile !== plan.profile) throw new FleetProtocolError("approval-mismatch", "approval is not bound to this exact plan, device and profile");
+	if (approvedAt < planCreatedAt || expiresAt <= approvedAt || expiresAt > planExpiresAt) throw new FleetProtocolError("approval-mismatch", "approval lifetime is outside the plan lifetime");
+	if (nowAt < approvedAt) throw new FleetProtocolError("approval-mismatch", "approval is not active yet");
+	if (nowAt >= planExpiresAt) throw new FleetProtocolError("plan-expired", "plan has expired");
+	if (nowAt >= expiresAt) throw new FleetProtocolError("approval-expired", "approval has expired");
+	return Object.freeze({ idempotencyKey: "approval:" + sha256Canonical(approval) });
+}
+//#endregion
+//#region src/worker/context.ts
+const MAX_TASK_TOOL_ARGUMENT_BYTES = 16384;
+var WorkerPolicyError = class extends Error {
+	code;
+	constructor(code, message) {
+		super(message);
+		this.name = "WorkerPolicyError";
+		this.code = code;
+	}
+};
+function isRecord$8(value) {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function boundedText(value, field, maxLength = 128) {
+	if (typeof value !== "string" || value.length === 0 || value !== value.trim() || value.length > maxLength || /[\r\n\0]/.test(value)) throw new WorkerPolicyError("invalid-context", field + " must be a bounded trimmed string");
+	return value;
+}
+function safeIdentifier$2(value, field) {
+	const result = boundedText(value, field, 64);
+	if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(result)) throw new WorkerPolicyError("invalid-context", field + " is invalid");
+	return result;
+}
+function namespacedId(value, field, prefix) {
+	const result = boundedText(value, field, 64);
+	if (!new RegExp("^" + prefix + ":[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$").test(result)) throw new WorkerPolicyError("invalid-context", field + " must be a namespaced UUID");
+	return result;
+}
+function digest$5(value, field) {
+	if (typeof value !== "string" || !/^[0-9a-f]{64}$/.test(value)) throw new WorkerPolicyError("invalid-context", field + " must be a lowercase SHA-256 digest");
+	return value;
+}
+function canonicalTimestamp(value, field) {
+	if (typeof value !== "string") throw new WorkerPolicyError("invalid-context", field + " must be a canonical ISO timestamp");
+	const timestamp = Date.parse(value);
+	if (!Number.isFinite(timestamp) || new Date(timestamp).toISOString() !== value) throw new WorkerPolicyError("invalid-context", field + " must be a canonical ISO timestamp");
+	return value;
+}
+function absolutePath$1(value, field) {
+	const result = boundedText(value, field, 4096);
+	if (!isAbsolute(result) || normalize(result) !== result) throw new WorkerPolicyError("invalid-context", field + " must be a normalized absolute path");
+	return result;
+}
+function canonicalArguments(toolArguments, maxBytes) {
+	if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > 16384) throw new WorkerPolicyError("invalid-context", "maxBytes exceeds the Fleet tool-argument ceiling");
+	if (!isRecord$8(toolArguments)) throw new WorkerPolicyError("invalid-arguments", "tool arguments must be a JSON object");
+	let canonical;
+	try {
+		canonical = canonicalJson(toolArguments);
+	} catch (error) {
+		throw new WorkerPolicyError("invalid-arguments", error instanceof Error ? error.message : "tool arguments are not canonical JSON");
+	}
+	if (Buffer.byteLength(canonical, "utf8") > maxBytes) throw new WorkerPolicyError("arguments-too-large", `tool arguments exceed ${maxBytes} bytes`);
+	return canonical;
+}
+function digestToolArguments(toolArguments, maxBytes = MAX_TASK_TOOL_ARGUMENT_BYTES) {
+	const canonical = canonicalArguments(toolArguments, maxBytes);
+	return sha256Canonical(JSON.parse(canonical));
+}
+function createTaskBindingDigest(input) {
+	const senderKeyId = boundedText(input.sender.keyId, "sender.keyId", 80);
+	if (!/^ed25519:[0-9a-f]{64}$/.test(senderKeyId)) throw new WorkerPolicyError("invalid-context", "sender.keyId must be an Ed25519 key id");
+	return sha256Canonical({
+		schemaVersion: 2,
+		teamId: safeIdentifier$2(input.teamId, "teamId"),
+		submitMessageId: namespacedId(input.submitMessageId, "submitMessageId", "msg"),
+		submitPayloadDigest: digest$5(input.submitPayloadDigest, "submitPayloadDigest"),
+		sender: {
+			principalId: safeIdentifier$2(input.sender.principalId, "sender.principalId"),
+			deviceId: safeIdentifier$2(input.sender.deviceId, "sender.deviceId"),
+			keyId: senderKeyId
+		},
+		recipientDeviceId: safeIdentifier$2(input.recipientDeviceId, "recipientDeviceId"),
+		taskId: namespacedId(input.taskId, "taskId", "task"),
+		workspaceId: safeIdentifier$2(input.workspaceId, "workspaceId"),
+		workspacePath: absolutePath$1(input.workspacePath, "workspacePath"),
+		profile: safeIdentifier$2(input.profile, "profile"),
+		executionProfileHash: digest$5(input.executionProfileHash, "executionProfileHash"),
+		manifestDigest: digest$5(input.manifestDigest, "manifestDigest"),
+		releaseDigest: digest$5(input.releaseDigest, "releaseDigest"),
+		policyId: safeIdentifier$2(input.policyId, "policyId"),
+		policyDigest: digest$5(input.policyDigest, "policyDigest"),
+		deadline: canonicalTimestamp(input.deadline, "deadline")
+	});
+}
+function createAllowedOnceToken(input) {
+	return {
+		schemaVersion: 2,
+		approvalId: namespacedId(input.approvalId, "approvalId", "approval"),
+		approvalRequestMessageId: namespacedId(input.approvalRequestMessageId, "approvalRequestMessageId", "msg"),
+		approvalRequestPayloadDigest: digest$5(input.approvalRequestPayloadDigest, "approvalRequestPayloadDigest"),
+		decisionMessageId: namespacedId(input.decisionMessageId, "decisionMessageId", "msg"),
+		decisionPayloadDigest: digest$5(input.decisionPayloadDigest, "decisionPayloadDigest"),
+		taskBindingDigest: digest$5(input.taskBindingDigest, "taskBindingDigest"),
+		executionProfileHash: digest$5(input.executionProfileHash, "executionProfileHash"),
+		toolCallId: boundedText(input.toolCallId, "toolCallId"),
+		toolName: safeIdentifier$2(input.toolName, "toolName"),
+		argumentsDigest: digest$5(input.argumentsDigest, "argumentsDigest"),
+		expiresAt: canonicalTimestamp(input.expiresAt, "expiresAt"),
+		consumedAt: null
+	};
+}
+const TASK_POLICY_IDS = ["readonly-v1", "workspace-write-ask-v1"];
+const SAFE_READ_TOOLS = [
+	"glob",
+	"grep",
+	"read",
+	"read_image"
+];
+const APPROVAL_REQUIRED_TOOLS = [
+	"bash",
+	"edit",
+	"pwsh",
+	"web_fetch",
+	"web_search",
+	"write"
+];
+const HARD_DENIED_TOOLS = [
+	"cordis_define",
+	"cordis_inspect_list",
+	"cordis_inspect_query",
+	"cordis_inspect_self",
+	"cordis_run",
+	"cordis_stop",
+	"cordis_undefine",
+	"create_goal",
+	"followup_task",
+	"interrupt_agent",
+	"job_kill",
+	"job_list",
+	"job_output",
+	"list_agents",
+	"ralph",
+	"report",
+	"run_code",
+	"send_message",
+	"skill",
+	"spawn_agent",
+	"str_replace_editor",
+	"todo_write",
+	"update_goal",
+	"wait_agent",
+	"workflow"
+];
+function calculateTaskPolicyDigest(policy) {
+	return sha256Canonical(policy);
+}
+function defineTaskPolicy(input) {
+	const body = Object.freeze({
+		schemaVersion: 1,
+		policyId: input.policyId,
+		permissionMode: input.permissionMode,
+		workspaceScope: "configured-workspace",
+		defaultDecision: "deny",
+		safeTools: Object.freeze([...SAFE_READ_TOOLS]),
+		approvalRequiredTools: Object.freeze([...input.approvalRequiredTools]),
+		hardDeniedTools: Object.freeze([...HARD_DENIED_TOOLS]),
+		allowBackground: false,
+		maxArgumentsBytes: MAX_TASK_TOOL_ARGUMENT_BYTES
+	});
+	return Object.freeze({
+		...body,
+		policyDigest: calculateTaskPolicyDigest(body)
+	});
+}
+const LOCAL_TASK_POLICIES = Object.freeze({
+	"readonly-v1": defineTaskPolicy({
+		policyId: "readonly-v1",
+		permissionMode: "read-only",
+		approvalRequiredTools: []
+	}),
+	"workspace-write-ask-v1": defineTaskPolicy({
+		policyId: "workspace-write-ask-v1",
+		permissionMode: "workspace-write",
+		approvalRequiredTools: APPROVAL_REQUIRED_TOOLS
+	})
+});
+function isRecord$7(value) {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function nonEmpty$1(value, field) {
@@ -36,19 +1808,19 @@ function boundedInt(value, field, fallback, min, max) {
 	if (typeof value !== "number" || !Number.isSafeInteger(value) || value < min || value > max) throw new TypeError(`${field} must be an integer from ${min} to ${max}`);
 	return value;
 }
-function exactKeys$3(value, allowed, field) {
+function exactKeys$4(value, allowed, field) {
 	const extra = Object.keys(value).filter((key) => !allowed.includes(key));
 	if (extra.length > 0) throw new TypeError(field + " contains unsupported fields: " + extra.sort().join(", "));
 }
 function parseRestart(value) {
-	if (!isRecord$6(value)) throw new TypeError("restart must be an object");
+	if (!isRecord$7(value)) throw new TypeError("restart must be an object");
 	const kind = nonEmpty$1(value.kind, "restart.kind");
 	if (kind === "none") {
-		exactKeys$3(value, ["kind"], "restart");
+		exactKeys$4(value, ["kind"], "restart");
 		return { kind: "none" };
 	}
 	if (kind !== "screen" && kind !== "launchd") throw new TypeError("restart.kind must be none, screen or launchd");
-	exactKeys$3(value, kind === "screen" ? [
+	exactKeys$4(value, kind === "screen" ? [
 		"kind",
 		"screenBinary",
 		"lsofBinary",
@@ -107,8 +1879,8 @@ function parseHealth(value) {
 		timeoutMs: 45e3,
 		requireFleetRpc: false
 	};
-	if (!isRecord$6(value)) throw new TypeError("health must be an object");
-	exactKeys$3(value, [
+	if (!isRecord$7(value)) throw new TypeError("health must be an object");
+	exactKeys$4(value, [
 		"url",
 		"timeoutMs",
 		"requireFleetRpc"
@@ -136,8 +1908,8 @@ function safeIdentifier$1(value, field) {
 }
 function parseA2A(value) {
 	if (value === void 0) return void 0;
-	if (!isRecord$6(value)) throw new TypeError("a2a must be an object");
-	exactKeys$3(value, [
+	if (!isRecord$7(value)) throw new TypeError("a2a must be an object");
+	exactKeys$4(value, [
 		"teamId",
 		"principalId",
 		"privateKeyPath",
@@ -154,17 +1926,18 @@ function parseA2A(value) {
 }
 function parseTasks(value) {
 	if (value === void 0) return void 0;
-	if (!isRecord$6(value)) throw new TypeError("tasks must be an object");
-	exactKeys$3(value, [
+	if (!isRecord$7(value)) throw new TypeError("tasks must be an object");
+	exactKeys$4(value, [
 		"enabled",
 		"workspaces",
 		"profiles",
 		"timeoutMs",
 		"maxOutputBytes",
-		"maxConcurrent"
+		"maxConcurrent",
+		"policyIds"
 	], "tasks");
 	if (typeof value.enabled !== "boolean") throw new TypeError("tasks.enabled must be boolean");
-	if (!isRecord$6(value.workspaces)) throw new TypeError("tasks.workspaces must be an object");
+	if (!isRecord$7(value.workspaces)) throw new TypeError("tasks.workspaces must be an object");
 	const workspaces = {};
 	for (const [rawId, path] of Object.entries(value.workspaces)) {
 		const id = safeIdentifier$1(rawId, "tasks workspace id");
@@ -172,21 +1945,29 @@ function parseTasks(value) {
 	}
 	if (value.enabled && Object.keys(workspaces).length === 0) throw new TypeError("enabled tasks require at least one workspace");
 	if (!Array.isArray(value.profiles) || value.profiles.length === 0 || value.profiles.length > 16 || value.profiles.some((profile) => typeof profile !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(profile)) || new Set(value.profiles).size !== value.profiles.length) throw new TypeError("tasks.profiles must contain 1 to 16 unique safe profile ids");
+	const rawPolicyIds = value.policyIds ?? ["readonly-v1"];
+	if (!Array.isArray(rawPolicyIds) || rawPolicyIds.length === 0 || rawPolicyIds.length > TASK_POLICY_IDS.length || rawPolicyIds.some((policyId) => typeof policyId !== "string" || !TASK_POLICY_IDS.includes(policyId)) || new Set(rawPolicyIds).size !== rawPolicyIds.length) throw new TypeError("tasks.policyIds must contain unique installed task policy ids");
+	const policyIds = [...rawPolicyIds];
+	const policies = {};
+	for (const policyId of policyIds) policies[policyId] = LOCAL_TASK_POLICIES[policyId];
 	return {
 		enabled: value.enabled,
 		workspaces,
 		profiles: value.profiles,
 		timeoutMs: boundedInt(value.timeoutMs, "tasks.timeoutMs", 36e5, 6e4, 216e5),
 		maxOutputBytes: boundedInt(value.maxOutputBytes, "tasks.maxOutputBytes", 1048576, 4096, 1048576),
-		maxConcurrent: boundedInt(value.maxConcurrent, "tasks.maxConcurrent", 1, 1, 4)
+		maxConcurrent: boundedInt(value.maxConcurrent, "tasks.maxConcurrent", 1, 1, 4),
+		policyIds,
+		policies: Object.freeze(policies)
 	};
 }
 function parseAgentConfig(value) {
-	if (!isRecord$6(value)) throw new TypeError("agent config must be an object");
-	exactKeys$3(value, [
+	if (!isRecord$7(value)) throw new TypeError("agent config must be an object");
+	exactKeys$4(value, [
 		"schemaVersion",
 		"deviceId",
 		"manifestPath",
+		"desiredManifestPath",
 		"dshHome",
 		"dshBinary",
 		"pnpmBinary",
@@ -203,6 +1984,20 @@ function parseAgentConfig(value) {
 	if (value.schemaVersion !== 1 && value.schemaVersion !== 2) throw new TypeError("agent config schemaVersion must equal 1 or 2");
 	const profile = nonEmpty$1(value.profile, "profile");
 	if (!/^[A-Za-z0-9._-]+$/.test(profile)) throw new TypeError("profile contains unsupported characters");
+	const dshHome = absolutePath(value.dshHome, "dshHome");
+	const configuredManifestPath = absolutePath(value.manifestPath, "manifestPath");
+	const profileManifestPath = join(dshHome, "profiles", profile, "fleet.lock.yaml");
+	let manifestPath = configuredManifestPath;
+	let desiredManifestPath;
+	if (value.schemaVersion === 2) {
+		if (value.desiredManifestPath === void 0) {
+			manifestPath = profileManifestPath;
+			desiredManifestPath = configuredManifestPath;
+		} else {
+			desiredManifestPath = absolutePath(value.desiredManifestPath, "desiredManifestPath");
+			if (configuredManifestPath !== profileManifestPath) throw new TypeError("schemaVersion 2 manifestPath must be the profile-local live Fleet manifest");
+		}
+	} else if (value.desiredManifestPath !== void 0) throw new TypeError("schemaVersion 1 must not define desiredManifestPath");
 	const artifactStore = value.artifactStore === void 0 ? void 0 : absolutePath(value.artifactStore, "artifactStore");
 	const tarBinary = value.tarBinary === void 0 ? void 0 : absolutePath(value.tarBinary, "tarBinary");
 	if (value.schemaVersion === 2 && (artifactStore === void 0 || tarBinary === void 0)) throw new TypeError("schemaVersion 2 requires artifactStore and tarBinary");
@@ -212,8 +2007,9 @@ function parseAgentConfig(value) {
 	return {
 		schemaVersion: value.schemaVersion,
 		deviceId: normalizeDeviceId(value.deviceId),
-		manifestPath: absolutePath(value.manifestPath, "manifestPath"),
-		dshHome: absolutePath(value.dshHome, "dshHome"),
+		manifestPath,
+		...desiredManifestPath === void 0 ? {} : { desiredManifestPath },
+		dshHome,
 		dshBinary: absolutePath(value.dshBinary, "dshBinary"),
 		pnpmBinary: absolutePath(value.pnpmBinary, "pnpmBinary"),
 		profile,
@@ -229,10 +2025,12 @@ function parseAgentConfig(value) {
 }
 function assertReleaseReadyConfig(config) {
 	assertMutationReadyConfig(config);
-	if (config.schemaVersion !== 2 || config.artifactStore === void 0 || config.tarBinary === void 0) throw mutationConfigError("atomic profile releases require schemaVersion 2 with artifactStore and tarBinary");
+	const expectedManifestPath = join(config.dshHome, "profiles", config.profile, "fleet.lock.yaml");
+	if (config.schemaVersion !== 2 || config.artifactStore === void 0 || config.tarBinary === void 0 || config.desiredManifestPath === void 0 || config.manifestPath !== expectedManifestPath) throw mutationConfigError("atomic profile releases require schemaVersion 2, a profile-local live manifest, a desired manifest, artifactStore and tarBinary");
 }
 function assertA2AReadyConfig(config) {
 	if (config.schemaVersion !== 2 || config.a2a === void 0 || config.tasks === void 0) throw mutationConfigError("A2A requires schemaVersion 2 with identity, trust and task policy");
+	if (config.tasks.policyIds === void 0 || config.tasks.policies === void 0) throw mutationConfigError("A2A task execution requires resolved local task policies");
 }
 function mutationConfigError(message) {
 	return Object.assign(new TypeError(message), { code: "unsafe-mutation-config" });
@@ -6904,7 +8702,7 @@ var import_dist = (/* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.visit = visit.visit;
 	exports.visitAsync = visit.visitAsync;
 })))();
-function contained(root, candidate) {
+function contained$1(root, candidate) {
 	const path = relative(root, candidate);
 	return path === "" || !path.startsWith(".." + sep) && path !== ".." && !isAbsolute(path);
 }
@@ -6931,7 +8729,7 @@ async function digestInstalledArtifact(profileDir, artifactStore, spec) {
 			realpath(candidate),
 			lstat(candidate)
 		]);
-		if (originalInfo.isSymbolicLink() || !originalInfo.isFile() || !contained(storePath, candidatePath)) return void 0;
+		if (originalInfo.isSymbolicLink() || !originalInfo.isFile() || !contained$1(storePath, candidatePath)) return void 0;
 		const handle = await open(candidatePath, constants.O_RDONLY | constants.O_NOFOLLOW);
 		try {
 			const openedInfo = await handle.stat();
@@ -6954,1404 +8752,8 @@ async function digestInstalledArtifact(profileDir, artifactStore, spec) {
 	}
 }
 //#endregion
-//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/internal/constants.js
-var require_constants = /* @__PURE__ */ __commonJSMin(((exports, module) => {
-	module.exports = {
-		MAX_LENGTH: 256,
-		MAX_SAFE_COMPONENT_LENGTH: 16,
-		MAX_SAFE_BUILD_LENGTH: 250,
-		MAX_SAFE_INTEGER: Number.MAX_SAFE_INTEGER ||
-		/* istanbul ignore next */ 9007199254740991,
-		RELEASE_TYPES: [
-			"major",
-			"premajor",
-			"minor",
-			"preminor",
-			"patch",
-			"prepatch",
-			"prerelease"
-		],
-		SEMVER_SPEC_VERSION: "2.0.0",
-		FLAG_INCLUDE_PRERELEASE: 1,
-		FLAG_LOOSE: 2
-	};
-}));
-//#endregion
-//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/internal/debug.js
-var require_debug = /* @__PURE__ */ __commonJSMin(((exports, module) => {
-	module.exports = typeof process === "object" && process.env && process.env.NODE_DEBUG && /\bsemver\b/i.test(process.env.NODE_DEBUG) ? (...args) => console.error("SEMVER", ...args) : () => {};
-}));
-//#endregion
-//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/internal/re.js
-var require_re = /* @__PURE__ */ __commonJSMin(((exports, module) => {
-	const { MAX_SAFE_COMPONENT_LENGTH, MAX_SAFE_BUILD_LENGTH, MAX_LENGTH } = require_constants();
-	const debug = require_debug();
-	exports = module.exports = {};
-	const re = exports.re = [];
-	const safeRe = exports.safeRe = [];
-	const src = exports.src = [];
-	const safeSrc = exports.safeSrc = [];
-	const t = exports.t = {};
-	let R = 0;
-	const LETTERDASHNUMBER = "[a-zA-Z0-9-]";
-	const safeRegexReplacements = [
-		["\\s", 1],
-		["\\d", MAX_LENGTH],
-		[LETTERDASHNUMBER, MAX_SAFE_BUILD_LENGTH]
-	];
-	const makeSafeRegex = (value) => {
-		for (const [token, max] of safeRegexReplacements) value = value.split(`${token}*`).join(`${token}{0,${max}}`).split(`${token}+`).join(`${token}{1,${max}}`);
-		return value;
-	};
-	const createToken = (name, value, isGlobal) => {
-		const safe = makeSafeRegex(value);
-		const index = R++;
-		debug(name, index, value);
-		t[name] = index;
-		src[index] = value;
-		safeSrc[index] = safe;
-		re[index] = new RegExp(value, isGlobal ? "g" : void 0);
-		safeRe[index] = new RegExp(safe, isGlobal ? "g" : void 0);
-	};
-	createToken("NUMERICIDENTIFIER", "0|[1-9]\\d*");
-	createToken("NUMERICIDENTIFIERLOOSE", "\\d+");
-	createToken("NONNUMERICIDENTIFIER", `\\d*[a-zA-Z-]${LETTERDASHNUMBER}*`);
-	createToken("MAINVERSION", `(${src[t.NUMERICIDENTIFIER]})\\.(${src[t.NUMERICIDENTIFIER]})\\.(${src[t.NUMERICIDENTIFIER]})`);
-	createToken("MAINVERSIONLOOSE", `(${src[t.NUMERICIDENTIFIERLOOSE]})\\.(${src[t.NUMERICIDENTIFIERLOOSE]})\\.(${src[t.NUMERICIDENTIFIERLOOSE]})`);
-	createToken("PRERELEASEIDENTIFIER", `(?:${src[t.NONNUMERICIDENTIFIER]}|${src[t.NUMERICIDENTIFIER]})`);
-	createToken("PRERELEASEIDENTIFIERLOOSE", `(?:${src[t.NONNUMERICIDENTIFIER]}|${src[t.NUMERICIDENTIFIERLOOSE]})`);
-	createToken("PRERELEASE", `(?:-(${src[t.PRERELEASEIDENTIFIER]}(?:\\.${src[t.PRERELEASEIDENTIFIER]})*))`);
-	createToken("PRERELEASELOOSE", `(?:-?(${src[t.PRERELEASEIDENTIFIERLOOSE]}(?:\\.${src[t.PRERELEASEIDENTIFIERLOOSE]})*))`);
-	createToken("BUILDIDENTIFIER", `${LETTERDASHNUMBER}+`);
-	createToken("BUILD", `(?:\\+(${src[t.BUILDIDENTIFIER]}(?:\\.${src[t.BUILDIDENTIFIER]})*))`);
-	createToken("FULLPLAIN", `v?${src[t.MAINVERSION]}${src[t.PRERELEASE]}?${src[t.BUILD]}?`);
-	createToken("FULL", `^${src[t.FULLPLAIN]}$`);
-	createToken("LOOSEPLAIN", `[v=\\s]*${src[t.MAINVERSIONLOOSE]}${src[t.PRERELEASELOOSE]}?${src[t.BUILD]}?`);
-	createToken("LOOSE", `^${src[t.LOOSEPLAIN]}$`);
-	createToken("GTLT", "((?:<|>)?=?)");
-	createToken("XRANGEIDENTIFIERLOOSE", `${src[t.NUMERICIDENTIFIERLOOSE]}|x|X|\\*`);
-	createToken("XRANGEIDENTIFIER", `${src[t.NUMERICIDENTIFIER]}|x|X|\\*`);
-	createToken("XRANGEPLAIN", `[v=\\s]*(${src[t.XRANGEIDENTIFIER]})(?:\\.(${src[t.XRANGEIDENTIFIER]})(?:\\.(${src[t.XRANGEIDENTIFIER]})(?:${src[t.PRERELEASE]})?${src[t.BUILD]}?)?)?`);
-	createToken("XRANGEPLAINLOOSE", `[v=\\s]*(${src[t.XRANGEIDENTIFIERLOOSE]})(?:\\.(${src[t.XRANGEIDENTIFIERLOOSE]})(?:\\.(${src[t.XRANGEIDENTIFIERLOOSE]})(?:${src[t.PRERELEASELOOSE]})?${src[t.BUILD]}?)?)?`);
-	createToken("XRANGE", `^${src[t.GTLT]}\\s*${src[t.XRANGEPLAIN]}$`);
-	createToken("XRANGELOOSE", `^${src[t.GTLT]}\\s*${src[t.XRANGEPLAINLOOSE]}$`);
-	createToken("COERCEPLAIN", `(^|[^\\d])(\\d{1,${MAX_SAFE_COMPONENT_LENGTH}})(?:\\.(\\d{1,${MAX_SAFE_COMPONENT_LENGTH}}))?(?:\\.(\\d{1,${MAX_SAFE_COMPONENT_LENGTH}}))?`);
-	createToken("COERCE", `${src[t.COERCEPLAIN]}(?:$|[^\\d])`);
-	createToken("COERCEFULL", src[t.COERCEPLAIN] + `(?:${src[t.PRERELEASE]})?(?:${src[t.BUILD]})?(?:$|[^\\d])`);
-	createToken("COERCERTL", src[t.COERCE], true);
-	createToken("COERCERTLFULL", src[t.COERCEFULL], true);
-	createToken("LONETILDE", "(?:~>?)");
-	createToken("TILDETRIM", `(\\s*)${src[t.LONETILDE]}\\s+`, true);
-	exports.tildeTrimReplace = "$1~";
-	createToken("TILDE", `^${src[t.LONETILDE]}${src[t.XRANGEPLAIN]}$`);
-	createToken("TILDELOOSE", `^${src[t.LONETILDE]}${src[t.XRANGEPLAINLOOSE]}$`);
-	createToken("LONECARET", "(?:\\^)");
-	createToken("CARETTRIM", `(\\s*)${src[t.LONECARET]}\\s+`, true);
-	exports.caretTrimReplace = "$1^";
-	createToken("CARET", `^${src[t.LONECARET]}${src[t.XRANGEPLAIN]}$`);
-	createToken("CARETLOOSE", `^${src[t.LONECARET]}${src[t.XRANGEPLAINLOOSE]}$`);
-	createToken("COMPARATORLOOSE", `^${src[t.GTLT]}\\s*(${src[t.LOOSEPLAIN]})$|^$`);
-	createToken("COMPARATOR", `^${src[t.GTLT]}\\s*(${src[t.FULLPLAIN]})$|^$`);
-	createToken("COMPARATORTRIM", `(\\s*)${src[t.GTLT]}\\s*(${src[t.LOOSEPLAIN]}|${src[t.XRANGEPLAIN]})`, true);
-	exports.comparatorTrimReplace = "$1$2$3";
-	createToken("HYPHENRANGE", `^\\s*(${src[t.XRANGEPLAIN]})\\s+-\\s+(${src[t.XRANGEPLAIN]})\\s*$`);
-	createToken("HYPHENRANGELOOSE", `^\\s*(${src[t.XRANGEPLAINLOOSE]})\\s+-\\s+(${src[t.XRANGEPLAINLOOSE]})\\s*$`);
-	createToken("STAR", "(<|>)?=?\\s*\\*");
-	createToken("GTE0", "^\\s*>=\\s*0\\.0\\.0\\s*$");
-	createToken("GTE0PRE", "^\\s*>=\\s*0\\.0\\.0-0\\s*$");
-}));
-//#endregion
-//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/internal/parse-options.js
-var require_parse_options = /* @__PURE__ */ __commonJSMin(((exports, module) => {
-	const looseOption = Object.freeze({ loose: true });
-	const emptyOpts = Object.freeze({});
-	const parseOptions = (options) => {
-		if (!options) return emptyOpts;
-		if (typeof options !== "object") return looseOption;
-		return options;
-	};
-	module.exports = parseOptions;
-}));
-//#endregion
-//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/internal/identifiers.js
-var require_identifiers = /* @__PURE__ */ __commonJSMin(((exports, module) => {
-	const numeric = /^[0-9]+$/;
-	const compareIdentifiers = (a, b) => {
-		if (typeof a === "number" && typeof b === "number") return a === b ? 0 : a < b ? -1 : 1;
-		const anum = numeric.test(a);
-		const bnum = numeric.test(b);
-		if (anum && bnum) {
-			a = +a;
-			b = +b;
-		}
-		return a === b ? 0 : anum && !bnum ? -1 : bnum && !anum ? 1 : a < b ? -1 : 1;
-	};
-	const rcompareIdentifiers = (a, b) => compareIdentifiers(b, a);
-	module.exports = {
-		compareIdentifiers,
-		rcompareIdentifiers
-	};
-}));
-//#endregion
-//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/classes/semver.js
-var require_semver$1 = /* @__PURE__ */ __commonJSMin(((exports, module) => {
-	const debug = require_debug();
-	const { MAX_LENGTH, MAX_SAFE_INTEGER } = require_constants();
-	const { safeRe: re, t } = require_re();
-	const parseOptions = require_parse_options();
-	const { compareIdentifiers } = require_identifiers();
-	const isPrereleaseIdentifier = (prerelease, identifier) => {
-		const identifiers = identifier.split(".");
-		if (identifiers.length > prerelease.length) return false;
-		for (let i = 0; i < identifiers.length; i++) if (compareIdentifiers(prerelease[i], identifiers[i]) !== 0) return false;
-		return true;
-	};
-	module.exports = class SemVer {
-		constructor(version, options) {
-			options = parseOptions(options);
-			if (version instanceof SemVer) {
-				if (version.loose === !!options.loose && version.includePrerelease === !!options.includePrerelease) return version;
-				else version = version.version;
-			} else if (typeof version !== "string") throw new TypeError(`Invalid version. Must be a string. Got type "${typeof version}".`);
-			if (version.length > MAX_LENGTH) throw new TypeError(`version is longer than ${MAX_LENGTH} characters`);
-			debug("SemVer", version, options);
-			this.options = options;
-			this.loose = !!options.loose;
-			this.includePrerelease = !!options.includePrerelease;
-			const m = version.trim().match(options.loose ? re[t.LOOSE] : re[t.FULL]);
-			if (!m) throw new TypeError(`Invalid Version: ${version}`);
-			this.raw = version;
-			this.major = +m[1];
-			this.minor = +m[2];
-			this.patch = +m[3];
-			if (this.major > MAX_SAFE_INTEGER || this.major < 0) throw new TypeError("Invalid major version");
-			if (this.minor > MAX_SAFE_INTEGER || this.minor < 0) throw new TypeError("Invalid minor version");
-			if (this.patch > MAX_SAFE_INTEGER || this.patch < 0) throw new TypeError("Invalid patch version");
-			if (!m[4]) this.prerelease = [];
-			else this.prerelease = m[4].split(".").map((id) => {
-				if (/^[0-9]+$/.test(id)) {
-					const num = +id;
-					if (num >= 0 && num < MAX_SAFE_INTEGER) return num;
-				}
-				return id;
-			});
-			this.build = m[5] ? m[5].split(".") : [];
-			this.format();
-		}
-		format() {
-			this.version = `${this.major}.${this.minor}.${this.patch}`;
-			if (this.prerelease.length) this.version += `-${this.prerelease.join(".")}`;
-			return this.version;
-		}
-		toString() {
-			return this.version;
-		}
-		compare(other) {
-			debug("SemVer.compare", this.version, this.options, other);
-			if (!(other instanceof SemVer)) {
-				if (typeof other === "string" && other === this.version) return 0;
-				other = new SemVer(other, this.options);
-			}
-			if (other.version === this.version) return 0;
-			return this.compareMain(other) || this.comparePre(other);
-		}
-		compareMain(other) {
-			if (!(other instanceof SemVer)) other = new SemVer(other, this.options);
-			if (this.major < other.major) return -1;
-			if (this.major > other.major) return 1;
-			if (this.minor < other.minor) return -1;
-			if (this.minor > other.minor) return 1;
-			if (this.patch < other.patch) return -1;
-			if (this.patch > other.patch) return 1;
-			return 0;
-		}
-		comparePre(other) {
-			if (!(other instanceof SemVer)) other = new SemVer(other, this.options);
-			if (this.prerelease.length && !other.prerelease.length) return -1;
-			else if (!this.prerelease.length && other.prerelease.length) return 1;
-			else if (!this.prerelease.length && !other.prerelease.length) return 0;
-			let i = 0;
-			do {
-				const a = this.prerelease[i];
-				const b = other.prerelease[i];
-				debug("prerelease compare", i, a, b);
-				if (a === void 0 && b === void 0) return 0;
-				else if (b === void 0) return 1;
-				else if (a === void 0) return -1;
-				else if (a === b) continue;
-				else return compareIdentifiers(a, b);
-			} while (++i);
-		}
-		compareBuild(other) {
-			if (!(other instanceof SemVer)) other = new SemVer(other, this.options);
-			let i = 0;
-			do {
-				const a = this.build[i];
-				const b = other.build[i];
-				debug("build compare", i, a, b);
-				if (a === void 0 && b === void 0) return 0;
-				else if (b === void 0) return 1;
-				else if (a === void 0) return -1;
-				else if (a === b) continue;
-				else return compareIdentifiers(a, b);
-			} while (++i);
-		}
-		inc(release, identifier, identifierBase) {
-			if (release.startsWith("pre")) {
-				if (!identifier && identifierBase === false) throw new Error("invalid increment argument: identifier is empty");
-				if (identifier) {
-					const match = `-${identifier}`.match(this.options.loose ? re[t.PRERELEASELOOSE] : re[t.PRERELEASE]);
-					if (!match || match[1] !== identifier) throw new Error(`invalid identifier: ${identifier}`);
-				}
-			}
-			switch (release) {
-				case "premajor":
-					this.prerelease.length = 0;
-					this.patch = 0;
-					this.minor = 0;
-					this.major++;
-					this.inc("pre", identifier, identifierBase);
-					break;
-				case "preminor":
-					this.prerelease.length = 0;
-					this.patch = 0;
-					this.minor++;
-					this.inc("pre", identifier, identifierBase);
-					break;
-				case "prepatch":
-					this.prerelease.length = 0;
-					this.inc("patch", identifier, identifierBase);
-					this.inc("pre", identifier, identifierBase);
-					break;
-				case "prerelease":
-					if (this.prerelease.length === 0) this.inc("patch", identifier, identifierBase);
-					this.inc("pre", identifier, identifierBase);
-					break;
-				case "release":
-					if (this.prerelease.length === 0) throw new Error(`version ${this.raw} is not a prerelease`);
-					this.prerelease.length = 0;
-					break;
-				case "major":
-					if (this.minor !== 0 || this.patch !== 0 || this.prerelease.length === 0) this.major++;
-					this.minor = 0;
-					this.patch = 0;
-					this.prerelease = [];
-					break;
-				case "minor":
-					if (this.patch !== 0 || this.prerelease.length === 0) this.minor++;
-					this.patch = 0;
-					this.prerelease = [];
-					break;
-				case "patch":
-					if (this.prerelease.length === 0) this.patch++;
-					this.prerelease = [];
-					break;
-				case "pre": {
-					const base = Number(identifierBase) ? 1 : 0;
-					if (this.prerelease.length === 0) this.prerelease = [base];
-					else {
-						let i = this.prerelease.length;
-						while (--i >= 0) if (typeof this.prerelease[i] === "number") {
-							this.prerelease[i]++;
-							i = -2;
-						}
-						if (i === -1) {
-							if (identifier === this.prerelease.join(".") && identifierBase === false) throw new Error("invalid increment argument: identifier already exists");
-							this.prerelease.push(base);
-						}
-					}
-					if (identifier) {
-						let prerelease = [identifier, base];
-						if (identifierBase === false) prerelease = [identifier];
-						if (isPrereleaseIdentifier(this.prerelease, identifier)) {
-							const prereleaseBase = this.prerelease[identifier.split(".").length];
-							if (isNaN(prereleaseBase)) this.prerelease = prerelease;
-						} else this.prerelease = prerelease;
-					}
-					break;
-				}
-				default: throw new Error(`invalid increment argument: ${release}`);
-			}
-			this.raw = this.format();
-			if (this.build.length) this.raw += `+${this.build.join(".")}`;
-			return this;
-		}
-	};
-}));
-//#endregion
-//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/parse.js
-var require_parse = /* @__PURE__ */ __commonJSMin(((exports, module) => {
-	const SemVer = require_semver$1();
-	const parse = (version, options, throwErrors = false) => {
-		if (version instanceof SemVer) return version;
-		try {
-			return new SemVer(version, options);
-		} catch (er) {
-			if (!throwErrors) return null;
-			throw er;
-		}
-	};
-	module.exports = parse;
-}));
-//#endregion
-//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/valid.js
-var require_valid$1 = /* @__PURE__ */ __commonJSMin(((exports, module) => {
-	const parse = require_parse();
-	const valid = (version, options) => {
-		const v = parse(version, options);
-		return v ? v.version : null;
-	};
-	module.exports = valid;
-}));
-//#endregion
-//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/clean.js
-var require_clean = /* @__PURE__ */ __commonJSMin(((exports, module) => {
-	const parse = require_parse();
-	const clean = (version, options) => {
-		const s = parse(version.trim().replace(/^[=v]+/, ""), options);
-		return s ? s.version : null;
-	};
-	module.exports = clean;
-}));
-//#endregion
-//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/inc.js
-var require_inc = /* @__PURE__ */ __commonJSMin(((exports, module) => {
-	const SemVer = require_semver$1();
-	const inc = (version, release, options, identifier, identifierBase) => {
-		if (typeof options === "string") {
-			identifierBase = identifier;
-			identifier = options;
-			options = void 0;
-		}
-		try {
-			return new SemVer(version instanceof SemVer ? version.version : version, options).inc(release, identifier, identifierBase).version;
-		} catch (er) {
-			return null;
-		}
-	};
-	module.exports = inc;
-}));
-//#endregion
-//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/diff.js
-var require_diff = /* @__PURE__ */ __commonJSMin(((exports, module) => {
-	const parse = require_parse();
-	const diff = (version1, version2) => {
-		const v1 = parse(version1, null, true);
-		const v2 = parse(version2, null, true);
-		const comparison = v1.compare(v2);
-		if (comparison === 0) return null;
-		const v1Higher = comparison > 0;
-		const highVersion = v1Higher ? v1 : v2;
-		const lowVersion = v1Higher ? v2 : v1;
-		const highHasPre = !!highVersion.prerelease.length;
-		if (!!lowVersion.prerelease.length && !highHasPre) {
-			if (!lowVersion.patch && !lowVersion.minor) return "major";
-			if (lowVersion.compareMain(highVersion) === 0) {
-				if (lowVersion.minor && !lowVersion.patch) return "minor";
-				return "patch";
-			}
-		}
-		const prefix = highHasPre ? "pre" : "";
-		if (v1.major !== v2.major) return prefix + "major";
-		if (v1.minor !== v2.minor) return prefix + "minor";
-		if (v1.patch !== v2.patch) return prefix + "patch";
-		return "prerelease";
-	};
-	module.exports = diff;
-}));
-//#endregion
-//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/major.js
-var require_major = /* @__PURE__ */ __commonJSMin(((exports, module) => {
-	const SemVer = require_semver$1();
-	const major = (a, loose) => new SemVer(a, loose).major;
-	module.exports = major;
-}));
-//#endregion
-//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/minor.js
-var require_minor = /* @__PURE__ */ __commonJSMin(((exports, module) => {
-	const SemVer = require_semver$1();
-	const minor = (a, loose) => new SemVer(a, loose).minor;
-	module.exports = minor;
-}));
-//#endregion
-//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/patch.js
-var require_patch = /* @__PURE__ */ __commonJSMin(((exports, module) => {
-	const SemVer = require_semver$1();
-	const patch = (a, loose) => new SemVer(a, loose).patch;
-	module.exports = patch;
-}));
-//#endregion
-//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/prerelease.js
-var require_prerelease = /* @__PURE__ */ __commonJSMin(((exports, module) => {
-	const parse = require_parse();
-	const prerelease = (version, options) => {
-		const parsed = parse(version, options);
-		return parsed && parsed.prerelease.length ? parsed.prerelease : null;
-	};
-	module.exports = prerelease;
-}));
-//#endregion
-//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/compare.js
-var require_compare = /* @__PURE__ */ __commonJSMin(((exports, module) => {
-	const SemVer = require_semver$1();
-	const compare = (a, b, loose) => new SemVer(a, loose).compare(new SemVer(b, loose));
-	module.exports = compare;
-}));
-//#endregion
-//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/rcompare.js
-var require_rcompare = /* @__PURE__ */ __commonJSMin(((exports, module) => {
-	const compare = require_compare();
-	const rcompare = (a, b, loose) => compare(b, a, loose);
-	module.exports = rcompare;
-}));
-//#endregion
-//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/compare-loose.js
-var require_compare_loose = /* @__PURE__ */ __commonJSMin(((exports, module) => {
-	const compare = require_compare();
-	const compareLoose = (a, b) => compare(a, b, true);
-	module.exports = compareLoose;
-}));
-//#endregion
-//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/compare-build.js
-var require_compare_build = /* @__PURE__ */ __commonJSMin(((exports, module) => {
-	const SemVer = require_semver$1();
-	const compareBuild = (a, b, loose) => {
-		const versionA = new SemVer(a, loose);
-		const versionB = new SemVer(b, loose);
-		return versionA.compare(versionB) || versionA.compareBuild(versionB);
-	};
-	module.exports = compareBuild;
-}));
-//#endregion
-//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/sort.js
-var require_sort = /* @__PURE__ */ __commonJSMin(((exports, module) => {
-	const compareBuild = require_compare_build();
-	const sort = (list, loose) => list.sort((a, b) => compareBuild(a, b, loose));
-	module.exports = sort;
-}));
-//#endregion
-//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/rsort.js
-var require_rsort = /* @__PURE__ */ __commonJSMin(((exports, module) => {
-	const compareBuild = require_compare_build();
-	const rsort = (list, loose) => list.sort((a, b) => compareBuild(b, a, loose));
-	module.exports = rsort;
-}));
-//#endregion
-//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/gt.js
-var require_gt = /* @__PURE__ */ __commonJSMin(((exports, module) => {
-	const compare = require_compare();
-	const gt = (a, b, loose) => compare(a, b, loose) > 0;
-	module.exports = gt;
-}));
-//#endregion
-//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/lt.js
-var require_lt = /* @__PURE__ */ __commonJSMin(((exports, module) => {
-	const compare = require_compare();
-	const lt = (a, b, loose) => compare(a, b, loose) < 0;
-	module.exports = lt;
-}));
-//#endregion
-//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/eq.js
-var require_eq = /* @__PURE__ */ __commonJSMin(((exports, module) => {
-	const compare = require_compare();
-	const eq = (a, b, loose) => compare(a, b, loose) === 0;
-	module.exports = eq;
-}));
-//#endregion
-//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/neq.js
-var require_neq = /* @__PURE__ */ __commonJSMin(((exports, module) => {
-	const compare = require_compare();
-	const neq = (a, b, loose) => compare(a, b, loose) !== 0;
-	module.exports = neq;
-}));
-//#endregion
-//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/gte.js
-var require_gte = /* @__PURE__ */ __commonJSMin(((exports, module) => {
-	const compare = require_compare();
-	const gte = (a, b, loose) => compare(a, b, loose) >= 0;
-	module.exports = gte;
-}));
-//#endregion
-//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/lte.js
-var require_lte = /* @__PURE__ */ __commonJSMin(((exports, module) => {
-	const compare = require_compare();
-	const lte = (a, b, loose) => compare(a, b, loose) <= 0;
-	module.exports = lte;
-}));
-//#endregion
-//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/cmp.js
-var require_cmp = /* @__PURE__ */ __commonJSMin(((exports, module) => {
-	const eq = require_eq();
-	const neq = require_neq();
-	const gt = require_gt();
-	const gte = require_gte();
-	const lt = require_lt();
-	const lte = require_lte();
-	const cmp = (a, op, b, loose) => {
-		switch (op) {
-			case "===":
-				if (typeof a === "object") a = a.version;
-				if (typeof b === "object") b = b.version;
-				return a === b;
-			case "!==":
-				if (typeof a === "object") a = a.version;
-				if (typeof b === "object") b = b.version;
-				return a !== b;
-			case "":
-			case "=":
-			case "==": return eq(a, b, loose);
-			case "!=": return neq(a, b, loose);
-			case ">": return gt(a, b, loose);
-			case ">=": return gte(a, b, loose);
-			case "<": return lt(a, b, loose);
-			case "<=": return lte(a, b, loose);
-			default: throw new TypeError(`Invalid operator: ${op}`);
-		}
-	};
-	module.exports = cmp;
-}));
-//#endregion
-//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/coerce.js
-var require_coerce = /* @__PURE__ */ __commonJSMin(((exports, module) => {
-	const SemVer = require_semver$1();
-	const parse = require_parse();
-	const { safeRe: re, t } = require_re();
-	const coerce = (version, options) => {
-		if (version instanceof SemVer) return version;
-		if (typeof version === "number") version = String(version);
-		if (typeof version !== "string") return null;
-		options = options || {};
-		let match = null;
-		if (!options.rtl) match = version.match(options.includePrerelease ? re[t.COERCEFULL] : re[t.COERCE]);
-		else {
-			const coerceRtlRegex = options.includePrerelease ? re[t.COERCERTLFULL] : re[t.COERCERTL];
-			let next;
-			while ((next = coerceRtlRegex.exec(version)) && (!match || match.index + match[0].length !== version.length)) {
-				if (!match || next.index + next[0].length !== match.index + match[0].length) match = next;
-				coerceRtlRegex.lastIndex = next.index + next[1].length + next[2].length;
-			}
-			coerceRtlRegex.lastIndex = -1;
-		}
-		if (match === null) return null;
-		const major = match[2];
-		const minor = match[3] || "0";
-		const patch = match[4] || "0";
-		const prerelease = options.includePrerelease && match[5] ? `-${match[5]}` : "";
-		const build = options.includePrerelease && match[6] ? `+${match[6]}` : "";
-		return parse(`${major}.${minor}.${patch}${prerelease}${build}`, options);
-	};
-	module.exports = coerce;
-}));
-//#endregion
-//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/truncate.js
-var require_truncate = /* @__PURE__ */ __commonJSMin(((exports, module) => {
-	const parse = require_parse();
-	const constants = require_constants();
-	const SemVer = require_semver$1();
-	const truncate = (version, truncation, options) => {
-		if (!constants.RELEASE_TYPES.includes(truncation)) return null;
-		const clonedVersion = cloneInputVersion(version, options);
-		return clonedVersion && doTruncation(clonedVersion, truncation);
-	};
-	const cloneInputVersion = (version, options) => {
-		const versionStringToParse = version instanceof SemVer ? version.version : version;
-		return parse(versionStringToParse, options);
-	};
-	const doTruncation = (version, truncation) => {
-		if (isPrerelease(truncation)) return version.version;
-		version.prerelease = [];
-		switch (truncation) {
-			case "major":
-				version.minor = 0;
-				version.patch = 0;
-				break;
-			case "minor": version.patch = 0;
-		}
-		return version.format();
-	};
-	const isPrerelease = (type) => {
-		return type.startsWith("pre");
-	};
-	module.exports = truncate;
-}));
-//#endregion
-//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/internal/lrucache.js
-var require_lrucache = /* @__PURE__ */ __commonJSMin(((exports, module) => {
-	var LRUCache = class {
-		constructor() {
-			this.max = 1e3;
-			this.map = /* @__PURE__ */ new Map();
-		}
-		get(key) {
-			const value = this.map.get(key);
-			if (value === void 0) return;
-			else {
-				this.map.delete(key);
-				this.map.set(key, value);
-				return value;
-			}
-		}
-		delete(key) {
-			return this.map.delete(key);
-		}
-		set(key, value) {
-			if (!this.delete(key) && value !== void 0) {
-				if (this.map.size >= this.max) {
-					const firstKey = this.map.keys().next().value;
-					this.delete(firstKey);
-				}
-				this.map.set(key, value);
-			}
-			return this;
-		}
-	};
-	module.exports = LRUCache;
-}));
-//#endregion
-//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/classes/range.js
-var require_range = /* @__PURE__ */ __commonJSMin(((exports, module) => {
-	const SPACE_CHARACTERS = /\s+/g;
-	module.exports = class Range {
-		constructor(range, options) {
-			options = parseOptions(options);
-			if (range instanceof Range) {
-				if (range.loose === !!options.loose && range.includePrerelease === !!options.includePrerelease) return range;
-				else return new Range(range.raw, options);
-			}
-			if (range instanceof Comparator) {
-				this.raw = range.value;
-				this.set = [[range]];
-				this.formatted = void 0;
-				return this;
-			}
-			this.options = options;
-			this.loose = !!options.loose;
-			this.includePrerelease = !!options.includePrerelease;
-			this.raw = range.trim().replace(SPACE_CHARACTERS, " ");
-			this.set = this.raw.split("||").map((r) => this.parseRange(r.trim())).filter((c) => c.length);
-			if (!this.set.length) throw new TypeError(`Invalid SemVer Range: ${this.raw}`);
-			if (this.set.length > 1) {
-				const first = this.set[0];
-				this.set = this.set.filter((c) => !isNullSet(c[0]));
-				if (this.set.length === 0) this.set = [first];
-				else if (this.set.length > 1) {
-					for (const c of this.set) if (c.length === 1 && isAny(c[0])) {
-						this.set = [c];
-						break;
-					}
-				}
-			}
-			this.formatted = void 0;
-		}
-		get range() {
-			if (this.formatted === void 0) {
-				this.formatted = "";
-				for (let i = 0; i < this.set.length; i++) {
-					if (i > 0) this.formatted += "||";
-					const comps = this.set[i];
-					for (let k = 0; k < comps.length; k++) {
-						if (k > 0) this.formatted += " ";
-						this.formatted += comps[k].toString().trim();
-					}
-				}
-			}
-			return this.formatted;
-		}
-		format() {
-			return this.range;
-		}
-		toString() {
-			return this.range;
-		}
-		parseRange(range) {
-			range = range.replace(BUILDSTRIPRE, "");
-			const memoKey = ((this.options.includePrerelease && FLAG_INCLUDE_PRERELEASE) | (this.options.loose && FLAG_LOOSE)) + ":" + range;
-			const cached = cache.get(memoKey);
-			if (cached) return cached;
-			const loose = this.options.loose;
-			const hr = loose ? re[t.HYPHENRANGELOOSE] : re[t.HYPHENRANGE];
-			range = range.replace(hr, hyphenReplace(this.options.includePrerelease));
-			debug("hyphen replace", range);
-			range = range.replace(re[t.COMPARATORTRIM], comparatorTrimReplace);
-			debug("comparator trim", range);
-			range = range.replace(re[t.TILDETRIM], tildeTrimReplace);
-			debug("tilde trim", range);
-			range = range.replace(re[t.CARETTRIM], caretTrimReplace);
-			debug("caret trim", range);
-			let rangeList = range.split(" ").map((comp) => parseComparator(comp, this.options)).join(" ").split(/\s+/).map((comp) => replaceGTE0(comp, this.options));
-			if (loose) rangeList = rangeList.filter((comp) => {
-				debug("loose invalid filter", comp, this.options);
-				return !!comp.match(re[t.COMPARATORLOOSE]);
-			});
-			debug("range list", rangeList);
-			const rangeMap = /* @__PURE__ */ new Map();
-			const comparators = rangeList.map((comp) => new Comparator(comp, this.options));
-			for (const comp of comparators) {
-				if (isNullSet(comp)) return [comp];
-				rangeMap.set(comp.value, comp);
-			}
-			if (rangeMap.size > 1 && rangeMap.has("")) rangeMap.delete("");
-			const result = [...rangeMap.values()];
-			cache.set(memoKey, result);
-			return result;
-		}
-		intersects(range, options) {
-			if (!(range instanceof Range)) throw new TypeError("a Range is required");
-			return this.set.some((thisComparators) => {
-				return isSatisfiable(thisComparators, options) && range.set.some((rangeComparators) => {
-					return isSatisfiable(rangeComparators, options) && thisComparators.every((thisComparator) => {
-						return rangeComparators.every((rangeComparator) => {
-							return thisComparator.intersects(rangeComparator, options);
-						});
-					});
-				});
-			});
-		}
-		test(version) {
-			if (!version) return false;
-			if (typeof version === "string") try {
-				version = new SemVer(version, this.options);
-			} catch (er) {
-				return false;
-			}
-			for (let i = 0; i < this.set.length; i++) if (testSet(this.set[i], version, this.options)) return true;
-			return false;
-		}
-	};
-	const cache = new (require_lrucache())();
-	const parseOptions = require_parse_options();
-	const Comparator = require_comparator();
-	const debug = require_debug();
-	const SemVer = require_semver$1();
-	const { safeRe: re, src, t, comparatorTrimReplace, tildeTrimReplace, caretTrimReplace } = require_re();
-	const { FLAG_INCLUDE_PRERELEASE, FLAG_LOOSE } = require_constants();
-	const BUILDSTRIPRE = new RegExp(src[t.BUILD], "g");
-	const isNullSet = (c) => c.value === "<0.0.0-0";
-	const isAny = (c) => c.value === "";
-	const isSatisfiable = (comparators, options) => {
-		let result = true;
-		const remainingComparators = comparators.slice();
-		let testComparator = remainingComparators.pop();
-		while (result && remainingComparators.length) {
-			result = remainingComparators.every((otherComparator) => {
-				return testComparator.intersects(otherComparator, options);
-			});
-			testComparator = remainingComparators.pop();
-		}
-		return result;
-	};
-	const parseComparator = (comp, options) => {
-		comp = comp.replace(re[t.BUILD], "");
-		debug("comp", comp, options);
-		comp = replaceCarets(comp, options);
-		debug("caret", comp);
-		comp = replaceTildes(comp, options);
-		debug("tildes", comp);
-		comp = replaceXRanges(comp, options);
-		debug("xrange", comp);
-		comp = replaceStars(comp, options);
-		debug("stars", comp);
-		return comp;
-	};
-	const isX = (id) => !id || id.toLowerCase() === "x" || id === "*";
-	const invalidXRangeOrder = (M, m, p) => isX(M) && !isX(m) || isX(m) && p && !isX(p);
-	const replaceTildes = (comp, options) => {
-		return comp.trim().split(/\s+/).map((c) => replaceTilde(c, options)).join(" ");
-	};
-	const replaceTilde = (comp, options) => {
-		const r = options.loose ? re[t.TILDELOOSE] : re[t.TILDE];
-		const z = options.includePrerelease ? "-0" : "";
-		return comp.replace(r, (_, M, m, p, pr) => {
-			debug("tilde", comp, _, M, m, p, pr);
-			let ret;
-			if (isX(M)) ret = "";
-			else if (isX(m)) ret = `>=${M}.0.0${z} <${+M + 1}.0.0-0`;
-			else if (isX(p)) ret = `>=${M}.${m}.0${z} <${M}.${+m + 1}.0-0`;
-			else if (pr) {
-				debug("replaceTilde pr", pr);
-				ret = `>=${M}.${m}.${p}-${pr} <${M}.${+m + 1}.0-0`;
-			} else ret = `>=${M}.${m}.${p} <${M}.${+m + 1}.0-0`;
-			debug("tilde return", ret);
-			return ret;
-		});
-	};
-	const replaceCarets = (comp, options) => {
-		return comp.trim().split(/\s+/).map((c) => replaceCaret(c, options)).join(" ");
-	};
-	const replaceCaret = (comp, options) => {
-		debug("caret", comp, options);
-		const r = options.loose ? re[t.CARETLOOSE] : re[t.CARET];
-		const z = options.includePrerelease ? "-0" : "";
-		return comp.replace(r, (_, M, m, p, pr) => {
-			debug("caret", comp, _, M, m, p, pr);
-			let ret;
-			if (isX(M)) ret = "";
-			else if (isX(m)) ret = `>=${M}.0.0${z} <${+M + 1}.0.0-0`;
-			else if (isX(p)) {
-				if (M === "0") ret = `>=${M}.${m}.0${z} <${M}.${+m + 1}.0-0`;
-				else ret = `>=${M}.${m}.0${z} <${+M + 1}.0.0-0`;
-			} else if (pr) {
-				debug("replaceCaret pr", pr);
-				if (M === "0") {
-					if (m === "0") ret = `>=${M}.${m}.${p}-${pr} <${M}.${m}.${+p + 1}-0`;
-					else ret = `>=${M}.${m}.${p}-${pr} <${M}.${+m + 1}.0-0`;
-				} else ret = `>=${M}.${m}.${p}-${pr} <${+M + 1}.0.0-0`;
-			} else {
-				debug("no pr");
-				if (M === "0") {
-					if (m === "0") ret = `>=${M}.${m}.${p} <${M}.${m}.${+p + 1}-0`;
-					else ret = `>=${M}.${m}.${p} <${M}.${+m + 1}.0-0`;
-				} else ret = `>=${M}.${m}.${p} <${+M + 1}.0.0-0`;
-			}
-			debug("caret return", ret);
-			return ret;
-		});
-	};
-	const replaceXRanges = (comp, options) => {
-		debug("replaceXRanges", comp, options);
-		return comp.split(/\s+/).map((c) => replaceXRange(c, options)).join(" ");
-	};
-	const replaceXRange = (comp, options) => {
-		comp = comp.trim();
-		const r = options.loose ? re[t.XRANGELOOSE] : re[t.XRANGE];
-		return comp.replace(r, (ret, gtlt, M, m, p, pr) => {
-			debug("xRange", comp, ret, gtlt, M, m, p, pr);
-			if (invalidXRangeOrder(M, m, p)) return comp;
-			const xM = isX(M);
-			const xm = xM || isX(m);
-			const xp = xm || isX(p);
-			const anyX = xp;
-			if (gtlt === "=" && anyX) gtlt = "";
-			pr = options.includePrerelease ? "-0" : "";
-			if (xM) {
-				if (gtlt === ">" || gtlt === "<") ret = "<0.0.0-0";
-				else ret = "*";
-			} else if (gtlt && anyX) {
-				if (xm) m = 0;
-				p = 0;
-				if (gtlt === ">") {
-					gtlt = ">=";
-					if (xm) {
-						M = +M + 1;
-						m = 0;
-						p = 0;
-					} else {
-						m = +m + 1;
-						p = 0;
-					}
-				} else if (gtlt === "<=") {
-					gtlt = "<";
-					if (xm) M = +M + 1;
-					else m = +m + 1;
-				}
-				if (gtlt === "<") pr = "-0";
-				ret = `${gtlt + M}.${m}.${p}${pr}`;
-			} else if (xm) ret = `>=${M}.0.0${pr} <${+M + 1}.0.0-0`;
-			else if (xp) ret = `>=${M}.${m}.0${pr} <${M}.${+m + 1}.0-0`;
-			debug("xRange return", ret);
-			return ret;
-		});
-	};
-	const replaceStars = (comp, options) => {
-		debug("replaceStars", comp, options);
-		return comp.trim().replace(re[t.STAR], "");
-	};
-	const replaceGTE0 = (comp, options) => {
-		debug("replaceGTE0", comp, options);
-		return comp.trim().replace(re[options.includePrerelease ? t.GTE0PRE : t.GTE0], "");
-	};
-	const hyphenReplace = (incPr) => ($0, from, fM, fm, fp, fpr, fb, to, tM, tm, tp, tpr) => {
-		if (isX(fM)) from = "";
-		else if (isX(fm)) from = `>=${fM}.0.0${incPr ? "-0" : ""}`;
-		else if (isX(fp)) from = `>=${fM}.${fm}.0${incPr ? "-0" : ""}`;
-		else if (fpr) from = `>=${from}`;
-		else from = `>=${from}${incPr ? "-0" : ""}`;
-		if (isX(tM)) to = "";
-		else if (isX(tm)) to = `<${+tM + 1}.0.0-0`;
-		else if (isX(tp)) to = `<${tM}.${+tm + 1}.0-0`;
-		else if (tpr) to = `<=${tM}.${tm}.${tp}-${tpr}`;
-		else if (incPr) to = `<${tM}.${tm}.${+tp + 1}-0`;
-		else to = `<=${to}`;
-		return `${from} ${to}`.trim();
-	};
-	const testSet = (set, version, options) => {
-		for (let i = 0; i < set.length; i++) if (!set[i].test(version)) return false;
-		if (version.prerelease.length && !options.includePrerelease) {
-			for (let i = 0; i < set.length; i++) {
-				debug(set[i].semver);
-				if (set[i].semver === Comparator.ANY) continue;
-				if (set[i].semver.prerelease.length > 0) {
-					const allowed = set[i].semver;
-					if (allowed.major === version.major && allowed.minor === version.minor && allowed.patch === version.patch) return true;
-				}
-			}
-			return false;
-		}
-		return true;
-	};
-}));
-//#endregion
-//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/classes/comparator.js
-var require_comparator = /* @__PURE__ */ __commonJSMin(((exports, module) => {
-	const ANY = Symbol("SemVer ANY");
-	module.exports = class Comparator {
-		static get ANY() {
-			return ANY;
-		}
-		constructor(comp, options) {
-			options = parseOptions(options);
-			if (comp instanceof Comparator) {
-				if (comp.loose === !!options.loose) return comp;
-				else comp = comp.value;
-			}
-			comp = comp.trim().split(/\s+/).join(" ");
-			debug("comparator", comp, options);
-			this.options = options;
-			this.loose = !!options.loose;
-			this.parse(comp);
-			if (this.semver === ANY) this.value = "";
-			else this.value = this.operator + this.semver.version;
-			debug("comp", this);
-		}
-		parse(comp) {
-			const r = this.options.loose ? re[t.COMPARATORLOOSE] : re[t.COMPARATOR];
-			const m = comp.match(r);
-			if (!m) throw new TypeError(`Invalid comparator: ${comp}`);
-			this.operator = m[1] !== void 0 ? m[1] : "";
-			if (this.operator === "=") this.operator = "";
-			if (!m[2]) this.semver = ANY;
-			else this.semver = new SemVer(m[2], this.options.loose);
-		}
-		toString() {
-			return this.value;
-		}
-		test(version) {
-			debug("Comparator.test", version, this.options.loose);
-			if (this.semver === ANY || version === ANY) return true;
-			if (typeof version === "string") try {
-				version = new SemVer(version, this.options);
-			} catch (er) {
-				return false;
-			}
-			return cmp(version, this.operator, this.semver, this.options);
-		}
-		intersects(comp, options) {
-			if (!(comp instanceof Comparator)) throw new TypeError("a Comparator is required");
-			if (this.operator === "") {
-				if (this.value === "") return true;
-				return new Range(comp.value, options).test(this.value);
-			} else if (comp.operator === "") {
-				if (comp.value === "") return true;
-				return new Range(this.value, options).test(comp.semver);
-			}
-			options = parseOptions(options);
-			if (options.includePrerelease && (this.value === "<0.0.0-0" || comp.value === "<0.0.0-0")) return false;
-			if (!options.includePrerelease && (this.value.startsWith("<0.0.0") || comp.value.startsWith("<0.0.0"))) return false;
-			if (this.operator.startsWith(">") && comp.operator.startsWith(">")) return true;
-			if (this.operator.startsWith("<") && comp.operator.startsWith("<")) return true;
-			if (this.semver.version === comp.semver.version && this.operator.includes("=") && comp.operator.includes("=")) return true;
-			if (cmp(this.semver, "<", comp.semver, options) && this.operator.startsWith(">") && comp.operator.startsWith("<")) return true;
-			if (cmp(this.semver, ">", comp.semver, options) && this.operator.startsWith("<") && comp.operator.startsWith(">")) return true;
-			return false;
-		}
-	};
-	const parseOptions = require_parse_options();
-	const { safeRe: re, t } = require_re();
-	const cmp = require_cmp();
-	const debug = require_debug();
-	const SemVer = require_semver$1();
-	const Range = require_range();
-}));
-//#endregion
-//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/satisfies.js
-var require_satisfies = /* @__PURE__ */ __commonJSMin(((exports, module) => {
-	const Range = require_range();
-	const satisfies = (version, range, options) => {
-		try {
-			range = new Range(range, options);
-		} catch (er) {
-			return false;
-		}
-		return range.test(version);
-	};
-	module.exports = satisfies;
-}));
-//#endregion
-//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/ranges/to-comparators.js
-var require_to_comparators = /* @__PURE__ */ __commonJSMin(((exports, module) => {
-	const Range = require_range();
-	const toComparators = (range, options) => new Range(range, options).set.map((comp) => comp.map((c) => c.value).join(" ").trim().split(" "));
-	module.exports = toComparators;
-}));
-//#endregion
-//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/ranges/max-satisfying.js
-var require_max_satisfying = /* @__PURE__ */ __commonJSMin(((exports, module) => {
-	const SemVer = require_semver$1();
-	const Range = require_range();
-	const maxSatisfying = (versions, range, options) => {
-		let max = null;
-		let maxSV = null;
-		let rangeObj = null;
-		try {
-			rangeObj = new Range(range, options);
-		} catch (er) {
-			return null;
-		}
-		versions.forEach((v) => {
-			if (rangeObj.test(v)) {
-				if (!max || maxSV.compare(v) === -1) {
-					max = v;
-					maxSV = new SemVer(max, options);
-				}
-			}
-		});
-		return max;
-	};
-	module.exports = maxSatisfying;
-}));
-//#endregion
-//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/ranges/min-satisfying.js
-var require_min_satisfying = /* @__PURE__ */ __commonJSMin(((exports, module) => {
-	const SemVer = require_semver$1();
-	const Range = require_range();
-	const minSatisfying = (versions, range, options) => {
-		let min = null;
-		let minSV = null;
-		let rangeObj = null;
-		try {
-			rangeObj = new Range(range, options);
-		} catch (er) {
-			return null;
-		}
-		versions.forEach((v) => {
-			if (rangeObj.test(v)) {
-				if (!min || minSV.compare(v) === 1) {
-					min = v;
-					minSV = new SemVer(min, options);
-				}
-			}
-		});
-		return min;
-	};
-	module.exports = minSatisfying;
-}));
-//#endregion
-//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/ranges/min-version.js
-var require_min_version = /* @__PURE__ */ __commonJSMin(((exports, module) => {
-	const SemVer = require_semver$1();
-	const Range = require_range();
-	const gt = require_gt();
-	const minVersion = (range, loose) => {
-		range = new Range(range, loose);
-		let minver = new SemVer("0.0.0");
-		if (range.test(minver)) return minver;
-		minver = new SemVer("0.0.0-0");
-		if (range.test(minver)) return minver;
-		minver = null;
-		for (let i = 0; i < range.set.length; ++i) {
-			const comparators = range.set[i];
-			let setMin = null;
-			comparators.forEach((comparator) => {
-				const compver = new SemVer(comparator.semver.version);
-				switch (comparator.operator) {
-					case ">":
-						if (compver.prerelease.length === 0) compver.patch++;
-						else compver.prerelease.push(0);
-						compver.raw = compver.format();
-					case "":
-					case ">=":
-						if (!setMin || gt(compver, setMin)) setMin = compver;
-						break;
-					case "<":
-					case "<=": break;
-					/* istanbul ignore next */
-					default: throw new Error(`Unexpected operation: ${comparator.operator}`);
-				}
-			});
-			if (setMin && (!minver || gt(minver, setMin))) minver = setMin;
-		}
-		if (minver && range.test(minver)) return minver;
-		return null;
-	};
-	module.exports = minVersion;
-}));
-//#endregion
-//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/ranges/valid.js
-var require_valid = /* @__PURE__ */ __commonJSMin(((exports, module) => {
-	const Range = require_range();
-	const validRange = (range, options) => {
-		try {
-			return new Range(range, options).range || "*";
-		} catch (er) {
-			return null;
-		}
-	};
-	module.exports = validRange;
-}));
-//#endregion
-//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/ranges/outside.js
-var require_outside = /* @__PURE__ */ __commonJSMin(((exports, module) => {
-	const SemVer = require_semver$1();
-	const Comparator = require_comparator();
-	const { ANY } = Comparator;
-	const Range = require_range();
-	const satisfies = require_satisfies();
-	const gt = require_gt();
-	const lt = require_lt();
-	const lte = require_lte();
-	const gte = require_gte();
-	const outside = (version, range, hilo, options) => {
-		version = new SemVer(version, options);
-		range = new Range(range, options);
-		let gtfn, ltefn, ltfn, comp, ecomp;
-		switch (hilo) {
-			case ">":
-				gtfn = gt;
-				ltefn = lte;
-				ltfn = lt;
-				comp = ">";
-				ecomp = ">=";
-				break;
-			case "<":
-				gtfn = lt;
-				ltefn = gte;
-				ltfn = gt;
-				comp = "<";
-				ecomp = "<=";
-				break;
-			default: throw new TypeError("Must provide a hilo val of \"<\" or \">\"");
-		}
-		if (satisfies(version, range, options)) return false;
-		for (let i = 0; i < range.set.length; ++i) {
-			const comparators = range.set[i];
-			let high = null;
-			let low = null;
-			comparators.forEach((comparator) => {
-				if (comparator.semver === ANY) comparator = new Comparator(">=0.0.0");
-				high = high || comparator;
-				low = low || comparator;
-				if (gtfn(comparator.semver, high.semver, options)) high = comparator;
-				else if (ltfn(comparator.semver, low.semver, options)) low = comparator;
-			});
-			if (high.operator === comp || high.operator === ecomp) return false;
-			if ((!low.operator || low.operator === comp) && ltefn(version, low.semver)) return false;
-			else if (low.operator === ecomp && ltfn(version, low.semver)) return false;
-		}
-		return true;
-	};
-	module.exports = outside;
-}));
-//#endregion
-//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/ranges/gtr.js
-var require_gtr = /* @__PURE__ */ __commonJSMin(((exports, module) => {
-	const outside = require_outside();
-	const gtr = (version, range, options) => outside(version, range, ">", options);
-	module.exports = gtr;
-}));
-//#endregion
-//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/ranges/ltr.js
-var require_ltr = /* @__PURE__ */ __commonJSMin(((exports, module) => {
-	const outside = require_outside();
-	const ltr = (version, range, options) => outside(version, range, "<", options);
-	module.exports = ltr;
-}));
-//#endregion
-//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/ranges/intersects.js
-var require_intersects = /* @__PURE__ */ __commonJSMin(((exports, module) => {
-	const Range = require_range();
-	const intersects = (r1, r2, options) => {
-		r1 = new Range(r1, options);
-		r2 = new Range(r2, options);
-		return r1.intersects(r2, options);
-	};
-	module.exports = intersects;
-}));
-//#endregion
-//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/ranges/simplify.js
-var require_simplify = /* @__PURE__ */ __commonJSMin(((exports, module) => {
-	const satisfies = require_satisfies();
-	const compare = require_compare();
-	module.exports = (versions, range, options) => {
-		const set = [];
-		let first = null;
-		let prev = null;
-		const v = versions.sort((a, b) => compare(a, b, options));
-		for (const version of v) if (satisfies(version, range, options)) {
-			prev = version;
-			if (!first) first = version;
-		} else {
-			if (prev) set.push([first, prev]);
-			prev = null;
-			first = null;
-		}
-		if (first) set.push([first, null]);
-		const ranges = [];
-		for (const [min, max] of set) if (min === max) ranges.push(min);
-		else if (!max && min === v[0]) ranges.push("*");
-		else if (!max) ranges.push(`>=${min}`);
-		else if (min === v[0]) ranges.push(`<=${max}`);
-		else ranges.push(`${min} - ${max}`);
-		const simplified = ranges.join(" || ");
-		const original = typeof range.raw === "string" ? range.raw : String(range);
-		return simplified.length < original.length ? simplified : range;
-	};
-}));
-//#endregion
-//#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/ranges/subset.js
-var require_subset = /* @__PURE__ */ __commonJSMin(((exports, module) => {
-	const Range = require_range();
-	const Comparator = require_comparator();
-	const { ANY } = Comparator;
-	const satisfies = require_satisfies();
-	const compare = require_compare();
-	const subset = (sub, dom, options = {}) => {
-		if (sub === dom) return true;
-		sub = new Range(sub, options);
-		dom = new Range(dom, options);
-		let sawNonNull = false;
-		OUTER: for (const simpleSub of sub.set) {
-			for (const simpleDom of dom.set) {
-				const isSub = simpleSubset(simpleSub, simpleDom, options);
-				sawNonNull = sawNonNull || isSub !== null;
-				if (isSub) continue OUTER;
-			}
-			if (sawNonNull) return false;
-		}
-		return true;
-	};
-	const minimumVersionWithPreRelease = [new Comparator(">=0.0.0-0")];
-	const minimumVersion = [new Comparator(">=0.0.0")];
-	const simpleSubset = (sub, dom, options) => {
-		if (sub === dom) return true;
-		if (sub.length === 1 && sub[0].semver === ANY) {
-			if (dom.length === 1 && dom[0].semver === ANY) return true;
-			else if (options.includePrerelease) sub = minimumVersionWithPreRelease;
-			else sub = minimumVersion;
-		}
-		if (dom.length === 1 && dom[0].semver === ANY) {
-			if (options.includePrerelease) return true;
-			else dom = minimumVersion;
-		}
-		const eqSet = /* @__PURE__ */ new Set();
-		let gt, lt;
-		for (const c of sub) if (c.operator === ">" || c.operator === ">=") gt = higherGT(gt, c, options);
-		else if (c.operator === "<" || c.operator === "<=") lt = lowerLT(lt, c, options);
-		else eqSet.add(c.semver);
-		if (eqSet.size > 1) return null;
-		let gtltComp;
-		if (gt && lt) {
-			gtltComp = compare(gt.semver, lt.semver, options);
-			if (gtltComp > 0) return null;
-			else if (gtltComp === 0 && (gt.operator !== ">=" || lt.operator !== "<=")) return null;
-		}
-		for (const eq of eqSet) {
-			if (gt && !satisfies(eq, String(gt), options)) return null;
-			if (lt && !satisfies(eq, String(lt), options)) return null;
-			for (const c of dom) if (!satisfies(eq, String(c), options)) return false;
-			return true;
-		}
-		let higher, lower;
-		let hasDomLT, hasDomGT;
-		let needDomLTPre = lt && !options.includePrerelease && lt.semver.prerelease.length ? lt.semver : false;
-		let needDomGTPre = gt && !options.includePrerelease && gt.semver.prerelease.length ? gt.semver : false;
-		if (needDomLTPre && needDomLTPre.prerelease.length === 1 && lt.operator === "<" && needDomLTPre.prerelease[0] === 0) needDomLTPre = false;
-		for (const c of dom) {
-			hasDomGT = hasDomGT || c.operator === ">" || c.operator === ">=";
-			hasDomLT = hasDomLT || c.operator === "<" || c.operator === "<=";
-			if (gt) {
-				if (needDomGTPre) {
-					if (c.semver.prerelease && c.semver.prerelease.length && c.semver.major === needDomGTPre.major && c.semver.minor === needDomGTPre.minor && c.semver.patch === needDomGTPre.patch) needDomGTPre = false;
-				}
-				if (c.operator === ">" || c.operator === ">=") {
-					higher = higherGT(gt, c, options);
-					if (higher === c && higher !== gt) return false;
-				} else if (gt.operator === ">=" && !c.test(gt.semver)) return false;
-			}
-			if (lt) {
-				if (needDomLTPre) {
-					if (c.semver.prerelease && c.semver.prerelease.length && c.semver.major === needDomLTPre.major && c.semver.minor === needDomLTPre.minor && c.semver.patch === needDomLTPre.patch) needDomLTPre = false;
-				}
-				if (c.operator === "<" || c.operator === "<=") {
-					lower = lowerLT(lt, c, options);
-					if (lower === c && lower !== lt) return false;
-				} else if (lt.operator === "<=" && !c.test(lt.semver)) return false;
-			}
-			if (!c.operator && (lt || gt) && gtltComp !== 0) return false;
-		}
-		if (gt && hasDomLT && !lt && gtltComp !== 0) return false;
-		if (lt && hasDomGT && !gt && gtltComp !== 0) return false;
-		if (needDomGTPre || needDomLTPre) return false;
-		return true;
-	};
-	const higherGT = (a, b, options) => {
-		if (!a) return b;
-		const comp = compare(a.semver, b.semver, options);
-		return comp > 0 ? a : comp < 0 ? b : b.operator === ">" && a.operator === ">=" ? b : a;
-	};
-	const lowerLT = (a, b, options) => {
-		if (!a) return b;
-		const comp = compare(a.semver, b.semver, options);
-		return comp < 0 ? a : comp > 0 ? b : b.operator === "<" && a.operator === "<=" ? b : a;
-	};
-	module.exports = subset;
-}));
-//#endregion
 //#region src/host/core.ts
-var import_semver = (/* @__PURE__ */ __commonJSMin(((exports, module) => {
-	const internalRe = require_re();
-	const constants = require_constants();
-	const SemVer = require_semver$1();
-	const identifiers = require_identifiers();
-	module.exports = {
-		parse: require_parse(),
-		valid: require_valid$1(),
-		clean: require_clean(),
-		inc: require_inc(),
-		diff: require_diff(),
-		major: require_major(),
-		minor: require_minor(),
-		patch: require_patch(),
-		prerelease: require_prerelease(),
-		compare: require_compare(),
-		rcompare: require_rcompare(),
-		compareLoose: require_compare_loose(),
-		compareBuild: require_compare_build(),
-		sort: require_sort(),
-		rsort: require_rsort(),
-		gt: require_gt(),
-		lt: require_lt(),
-		eq: require_eq(),
-		neq: require_neq(),
-		gte: require_gte(),
-		lte: require_lte(),
-		cmp: require_cmp(),
-		coerce: require_coerce(),
-		truncate: require_truncate(),
-		Comparator: require_comparator(),
-		Range: require_range(),
-		satisfies: require_satisfies(),
-		toComparators: require_to_comparators(),
-		maxSatisfying: require_max_satisfying(),
-		minSatisfying: require_min_satisfying(),
-		minVersion: require_min_version(),
-		validRange: require_valid(),
-		outside: require_outside(),
-		gtr: require_gtr(),
-		ltr: require_ltr(),
-		intersects: require_intersects(),
-		simplifyRange: require_simplify(),
-		subset: require_subset(),
-		SemVer,
-		re: internalRe.re,
-		src: internalRe.src,
-		tokens: internalRe.t,
-		SEMVER_SPEC_VERSION: constants.SEMVER_SPEC_VERSION,
-		RELEASE_TYPES: constants.RELEASE_TYPES,
-		compareIdentifiers: identifiers.compareIdentifiers,
-		rcompareIdentifiers: identifiers.rcompareIdentifiers
-	};
-})))();
-function isRecord$5(value) {
+function isRecord$6(value) {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function strings(value, field) {
@@ -8363,7 +8765,7 @@ function nonEmpty(value, field) {
 	if (typeof value !== "string" || value.trim().length === 0) throw new TypeError(field + " must be a non-empty string");
 	return value.trim();
 }
-function exactKeys$2(value, allowed, field) {
+function exactKeys$3(value, allowed, field) {
 	const extras = Object.keys(value).filter((key) => !allowed.includes(key));
 	if (extras.length > 0) throw new TypeError(field + " contains unsupported fields: " + extras.sort().join(", "));
 }
@@ -8388,7 +8790,7 @@ function sha256Digest(value, field) {
 	return digest;
 }
 function parseDevice(value, field) {
-	if (!isRecord$5(value)) throw new TypeError(field + " must be an object");
+	if (!isRecord$6(value)) throw new TypeError(field + " must be an object");
 	const assignedTo = value.assignedTo === void 0 ? void 0 : nonEmpty(value.assignedTo, field + ".assignedTo");
 	const labels = strings(value.labels, field + ".labels");
 	return {
@@ -8412,12 +8814,12 @@ function dependencySpec(source, revision, field) {
 }
 function parsePlugin(value, index) {
 	const field = "plugins[" + index + "]";
-	if (!isRecord$5(value)) throw new TypeError(field + " must be an object");
+	if (!isRecord$6(value)) throw new TypeError(field + " must be an object");
 	const profiles = strings(value.profiles, field + ".profiles");
 	const runtimeModules = strings(value.runtimeModules, field + ".runtimeModules");
 	let target;
 	if (value.target !== void 0) {
-		if (!isRecord$5(value.target)) throw new TypeError(field + ".target must be an object");
+		if (!isRecord$6(value.target)) throw new TypeError(field + ".target must be an object");
 		const devices = strings(value.target.devices, field + ".target.devices")?.map((id, targetIndex) => normalizeDeviceId(id, `${field}.target.devices[${targetIndex}]`));
 		const classes = strings(value.target.classes, field + ".target.classes");
 		const channels = strings(value.target.channels, field + ".target.channels");
@@ -8447,10 +8849,10 @@ function parsePlugin(value, index) {
 	};
 }
 function parseReleaseSource(value, field, visibility) {
-	if (!isRecord$5(value)) throw new TypeError(field + " must be an object");
+	if (!isRecord$6(value)) throw new TypeError(field + " must be an object");
 	const kind = nonEmpty(value.kind, field + ".kind");
 	if (kind === "npm") {
-		exactKeys$2(value, [
+		exactKeys$3(value, [
 			"kind",
 			"version",
 			"integrity"
@@ -8465,7 +8867,7 @@ function parseReleaseSource(value, field, visibility) {
 		};
 	}
 	if (kind === "github") {
-		exactKeys$2(value, [
+		exactKeys$3(value, [
 			"kind",
 			"repository",
 			"revision"
@@ -8482,7 +8884,7 @@ function parseReleaseSource(value, field, visibility) {
 		};
 	}
 	if (kind === "artifact") {
-		exactKeys$2(value, [
+		exactKeys$3(value, [
 			"kind",
 			"digest",
 			"version"
@@ -8497,8 +8899,8 @@ function parseReleaseSource(value, field, visibility) {
 	throw new TypeError(field + ".kind must be npm, github or artifact");
 }
 function parseReleasePlugin(value, field) {
-	if (!isRecord$5(value)) throw new TypeError(field + " must be an object");
-	exactKeys$2(value, [
+	if (!isRecord$6(value)) throw new TypeError(field + " must be an object");
+	exactKeys$3(value, [
 		"id",
 		"visibility",
 		"source",
@@ -8514,8 +8916,8 @@ function parseReleasePlugin(value, field) {
 	};
 }
 function parseProfileRelease(id, value, field) {
-	if (!isRecord$5(value)) throw new TypeError(field + " must be an object");
-	exactKeys$2(value, [
+	if (!isRecord$6(value)) throw new TypeError(field + " must be an object");
+	exactKeys$3(value, [
 		"id",
 		"version",
 		"profile",
@@ -8562,27 +8964,27 @@ function releasePluginSpec(plugin) {
 	};
 }
 function parseManifestV2(raw, team, devices) {
-	exactKeys$2(raw, [
+	exactKeys$3(raw, [
 		"schemaVersion",
 		"team",
 		"devices",
 		"profileReleases",
 		"assignments"
 	], "fleet manifest");
-	if (!isRecord$5(raw.profileReleases)) throw new TypeError("profileReleases must be an object");
+	if (!isRecord$6(raw.profileReleases)) throw new TypeError("profileReleases must be an object");
 	const profileReleases = {};
 	for (const [rawId, value] of Object.entries(raw.profileReleases)) {
 		const id = safeIdentifier(rawId, "profile release id");
 		profileReleases[id] = parseProfileRelease(id, value, "profileReleases." + id);
 	}
 	if (Object.keys(profileReleases).length === 0) throw new TypeError("profileReleases must not be empty");
-	if (!isRecord$5(raw.assignments)) throw new TypeError("assignments must be an object");
+	if (!isRecord$6(raw.assignments)) throw new TypeError("assignments must be an object");
 	const assignments = {};
 	const plugins = [];
 	for (const [rawDeviceId, value] of Object.entries(raw.assignments)) {
 		const deviceId = normalizeDeviceId(rawDeviceId, "assignment device id");
 		if (devices[deviceId] === void 0) throw new TypeError("assignments." + deviceId + " references an unknown device");
-		if (!isRecord$5(value) || Object.keys(value).length === 0) throw new TypeError("assignments." + deviceId + " must be a non-empty profile-to-release object");
+		if (!isRecord$6(value) || Object.keys(value).length === 0) throw new TypeError("assignments." + deviceId + " must be a non-empty profile-to-release object");
 		const deviceAssignments = {};
 		for (const [rawProfile, rawReleaseId] of Object.entries(value)) {
 			const profile = safeIdentifier(rawProfile, `assignments.${deviceId} profile`);
@@ -8617,17 +9019,17 @@ function parseManifestV2(raw, team, devices) {
 }
 function parseFleetManifest(source) {
 	const raw = (0, import_dist.parse)(source);
-	if (!isRecord$5(raw)) throw new TypeError("fleet manifest must be an object");
+	if (!isRecord$6(raw)) throw new TypeError("fleet manifest must be an object");
 	if (raw.schemaVersion !== 1 && raw.schemaVersion !== 2) throw new TypeError("schemaVersion must equal 1 or 2");
-	if (!isRecord$5(raw.team)) throw new TypeError("team must be an object");
-	if (raw.schemaVersion === 2) exactKeys$2(raw.team, ["id", "name"], "team");
+	if (!isRecord$6(raw.team)) throw new TypeError("team must be an object");
+	if (raw.schemaVersion === 2) exactKeys$3(raw.team, ["id", "name"], "team");
 	const teamId = nonEmpty(raw.team.id, "team.id");
 	const teamName = raw.team.name === void 0 ? void 0 : nonEmpty(raw.team.name, "team.name");
-	if (!isRecord$5(raw.devices)) throw new TypeError("devices must be an object");
+	if (!isRecord$6(raw.devices)) throw new TypeError("devices must be an object");
 	const devices = {};
 	for (const [id, value] of Object.entries(raw.devices)) {
 		const deviceId = normalizeDeviceId(id, "device id");
-		if (raw.schemaVersion === 2 && isRecord$5(value)) exactKeys$2(value, [
+		if (raw.schemaVersion === 2 && isRecord$6(value)) exactKeys$3(value, [
 			"assignedTo",
 			"class",
 			"channel",
@@ -8669,204 +9071,104 @@ function targetsDevice$1(plugin, deviceId, device) {
 	if (target.channels !== void 0 && (device === void 0 || !target.channels.includes(device.channel))) return false;
 	return true;
 }
-var FleetProtocolError = class extends Error {
-	code;
-	constructor(code, message) {
-		super(message);
-		this.name = "FleetProtocolError";
-		this.code = code;
+//#endregion
+//#region src/host/runtime-identity.ts
+const DSH_PACKAGE_NAME = "@deepseek-ai/dsh";
+const MAX_PACKAGE_SEARCH_DEPTH = 8;
+function sha256$2(value) {
+	return createHash("sha256").update(value).digest("hex");
+}
+async function readRegularFile$1(path) {
+	let handle;
+	try {
+		handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+		if (!(await handle.stat()).isFile()) throw new TypeError("runtime identity accepts regular files only");
+		return await handle.readFile();
+	} catch (error) {
+		if (error.code === "ELOOP") throw new TypeError("runtime identity accepts regular files only");
+		throw error;
+	} finally {
+		await handle?.close();
 	}
-};
-const PLAN_BODY_KEYS$1 = [
-	"protocolVersion",
-	"deviceId",
-	"profile",
-	"manifestDigest",
-	"profileHash",
-	"observedDshVersion",
-	"pluginId",
-	"action",
-	"fromSpec",
-	"exactToSpec",
-	"sourceKind",
-	"restartRequired",
-	"createdAt",
-	"expiresAt"
-];
-const PLAN_KEYS$1 = [
-	...PLAN_BODY_KEYS$1,
-	"planId",
-	"digest"
-];
-const APPROVAL_KEYS$1 = [
-	"protocolVersion",
-	"approvalId",
-	"principalId",
-	"planId",
-	"planDigest",
-	"deviceId",
-	"profile",
-	"approvedAt",
-	"expiresAt"
-];
-function isRecord$4(value) {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-function assertExactKeys$1(value, keys, label) {
-	if (!isRecord$4(value)) throw new FleetProtocolError("invalid-payload", label + " must be an object");
-	const expected = new Set(keys);
-	for (const key of Object.keys(value)) if (!expected.has(key)) throw new FleetProtocolError("invalid-payload", label + " contains unsupported field " + JSON.stringify(key));
-	for (const key of keys) if (!Object.hasOwn(value, key)) throw new FleetProtocolError("invalid-payload", label + " is missing field " + JSON.stringify(key));
-}
-function assertNonEmpty(value, field) {
-	if (typeof value !== "string" || value.trim().length === 0 || value !== value.trim()) throw new FleetProtocolError("invalid-payload", field + " must be a trimmed non-empty string");
-}
-function assertDigest$1(value, field) {
-	if (typeof value !== "string" || !/^[0-9a-f]{64}$/.test(value)) throw new FleetProtocolError("invalid-digest", field + " must be a lowercase SHA-256 digest");
-}
-function parseCanonicalTime(value, field) {
-	if (typeof value !== "string") throw new FleetProtocolError("invalid-time", field + " must be an ISO timestamp");
-	const timestamp = Date.parse(value);
-	if (!Number.isFinite(timestamp) || new Date(timestamp).toISOString() !== value) throw new FleetProtocolError("invalid-time", field + " must be a canonical ISO timestamp");
-	return timestamp;
-}
-function exactNpmVersion(value) {
-	return (0, import_semver.valid)(value) === value;
-}
-function exactGitHubRevision(value) {
-	return /^github:[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?\/[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?#[0-9a-f]{40}$/.test(value);
-}
-function isSafeNpmPackageName(value) {
-	if (value.length === 0 || value.length > 214 || value !== value.toLowerCase()) return false;
-	return /^(?:@[a-z0-9][a-z0-9._~-]*\/)?[a-z0-9][a-z0-9._~-]*$/.test(value);
-}
-function exactSourceKind(value) {
-	if (exactNpmVersion(value)) return "npm";
-	if (exactGitHubRevision(value)) return "github";
-	return null;
-}
-function isSupportedDshVersion(value) {
-	return (0, import_semver.valid)(value) === value && (0, import_semver.satisfies)(value, ">=0.1.0-rc.7 <0.2.0", { includePrerelease: true });
-}
-function validatePlanBody$1(value) {
-	assertExactKeys$1(value, PLAN_BODY_KEYS$1, "plan body");
-	if (value.protocolVersion !== 1) throw new FleetProtocolError("invalid-protocol", "unsupported fleet agent protocol version");
-	assertNonEmpty(value.deviceId, "deviceId");
-	assertNonEmpty(value.profile, "profile");
-	assertDigest$1(value.manifestDigest, "manifestDigest");
-	assertDigest$1(value.profileHash, "profileHash");
-	assertNonEmpty(value.observedDshVersion, "observedDshVersion");
-	if (!isSupportedDshVersion(value.observedDshVersion)) throw new FleetProtocolError("unsupported-dsh-version", "DSH version is outside >=0.1.0-rc.7 <0.2.0");
-	assertNonEmpty(value.pluginId, "pluginId");
-	if (!isSafeNpmPackageName(value.pluginId)) throw new FleetProtocolError("invalid-payload", "pluginId must be one literal lowercase npm package name");
-	if (value.action !== "install" && value.action !== "update") throw new FleetProtocolError("invalid-action", "action must be install or update");
-	if (value.action === "install" && value.fromSpec !== null) throw new FleetProtocolError("invalid-action", "install plans must bind fromSpec to null");
-	if (value.action === "update") {
-		assertNonEmpty(value.fromSpec, "fromSpec");
-		if (value.fromSpec === value.exactToSpec) throw new FleetProtocolError("invalid-action", "update plans must change the dependency spec");
+async function findDshPackage(entrypoint) {
+	let directory = dirname(entrypoint);
+	for (let depth = 0; depth < MAX_PACKAGE_SEARCH_DEPTH; depth += 1) {
+		const candidate = join(directory, "package.json");
+		try {
+			const packageJson = await readRegularFile$1(candidate);
+			const metadata = JSON.parse(packageJson.toString("utf8"));
+			if (metadata.name === DSH_PACKAGE_NAME) {
+				if (typeof metadata.version !== "string" || metadata.version.trim() !== metadata.version || metadata.version.length === 0) throw new TypeError("DSH runtime package version is invalid");
+				return {
+					packageRealpath: await realpath(directory),
+					packageJson,
+					version: metadata.version
+				};
+			}
+		} catch (error) {
+			if (error.code !== "ENOENT") throw error;
+		}
+		const parent = dirname(directory);
+		if (parent === directory) break;
+		directory = parent;
 	}
-	assertNonEmpty(value.exactToSpec, "exactToSpec");
-	if (exactSourceKind(value.exactToSpec) !== value.sourceKind) throw new FleetProtocolError("unsupported-source", "exactToSpec does not match sourceKind or is mutable");
-	if (value.restartRequired !== true) throw new FleetProtocolError("invalid-payload", "restartRequired must be true for this protocol slice");
-	const createdAt = parseCanonicalTime(value.createdAt, "createdAt");
-	if (parseCanonicalTime(value.expiresAt, "expiresAt") <= createdAt) throw new FleetProtocolError("invalid-time", "expiresAt must be after createdAt");
+	throw new TypeError("running DSH package metadata was not found");
 }
-function canonicalize(value, seen) {
-	if (value === null) return "null";
-	if (typeof value === "string" || typeof value === "boolean") return JSON.stringify(value);
-	if (typeof value === "number") {
-		if (!Number.isFinite(value)) throw new FleetProtocolError("invalid-payload", "canonical JSON rejects non-finite numbers");
-		return JSON.stringify(value);
-	}
-	if (Array.isArray(value)) {
-		if (seen.has(value)) throw new FleetProtocolError("invalid-payload", "canonical JSON rejects cycles");
-		seen.add(value);
-		const encoded = "[" + value.map((item) => canonicalize(item, seen)).join(",") + "]";
-		seen.delete(value);
-		return encoded;
-	}
-	if (isRecord$4(value)) {
-		const prototype = Object.getPrototypeOf(value);
-		if (prototype !== Object.prototype && prototype !== null) throw new FleetProtocolError("invalid-payload", "canonical JSON accepts only plain objects");
-		if (seen.has(value)) throw new FleetProtocolError("invalid-payload", "canonical JSON rejects cycles");
-		seen.add(value);
-		const encoded = "{" + Object.keys(value).sort().map((key) => {
-			const item = value[key];
-			if (item === void 0) throw new FleetProtocolError("invalid-payload", "canonical JSON rejects undefined");
-			return JSON.stringify(key) + ":" + canonicalize(item, seen);
-		}).join(",") + "}";
-		seen.delete(value);
-		return encoded;
-	}
-	throw new FleetProtocolError("invalid-payload", "value is not representable as canonical JSON");
-}
-function canonicalJson(value) {
-	return canonicalize(value, /* @__PURE__ */ new Set());
-}
-function sha256Canonical(value) {
-	return createHash("sha256").update(canonicalJson(value), "utf8").digest("hex");
-}
-function createFleetPlan(body) {
-	validatePlanBody$1(body);
-	const digest = sha256Canonical(body);
-	return Object.freeze({
-		...body,
-		planId: "plan:" + digest,
-		digest
-	});
-}
-function validateFleetPlan(value) {
-	assertExactKeys$1(value, PLAN_KEYS$1, "plan");
-	const body = {
-		protocolVersion: value.protocolVersion,
-		deviceId: value.deviceId,
-		profile: value.profile,
-		manifestDigest: value.manifestDigest,
-		profileHash: value.profileHash,
-		observedDshVersion: value.observedDshVersion,
-		pluginId: value.pluginId,
-		action: value.action,
-		fromSpec: value.fromSpec,
-		exactToSpec: value.exactToSpec,
-		sourceKind: value.sourceKind,
-		restartRequired: value.restartRequired,
-		createdAt: value.createdAt,
-		expiresAt: value.expiresAt
+async function inspectCurrentRuntimeIdentity(input = {}) {
+	const execPath = input.execPath ?? process.execPath;
+	const entrypointPath = input.entrypointPath ?? process.argv[1];
+	if (typeof entrypointPath !== "string" || !isAbsolute(execPath) || !isAbsolute(entrypointPath)) throw new TypeError("runtime identity needs absolute Node and DSH entrypoint paths");
+	const [nodeRealpath, dshEntrypointRealpath] = await Promise.all([realpath(execPath), realpath(entrypointPath)]);
+	const [entrypoint, packageMetadata] = await Promise.all([readRegularFile$1(dshEntrypointRealpath), findDshPackage(dshEntrypointRealpath)]);
+	const entrypointDigest = sha256$2(entrypoint);
+	const packageJsonDigest = sha256$2(packageMetadata.packageJson);
+	const identity = {
+		nodeRealpath,
+		dshEntrypointRealpath,
+		dshPackageRealpath: packageMetadata.packageRealpath,
+		dshVersion: packageMetadata.version,
+		entrypointDigest,
+		packageJsonDigest
 	};
-	validatePlanBody$1(body);
-	assertDigest$1(value.digest, "digest");
-	const digest = sha256Canonical(body);
-	if (value.digest !== digest || value.planId !== "plan:" + digest) throw new FleetProtocolError("plan-integrity-failed", "plan id or digest does not match its canonical body");
+	return {
+		...identity,
+		runtimeDigest: sha256$2(JSON.stringify(identity))
+	};
 }
-function asTimestamp(value, field) {
-	if (value instanceof Date) {
-		const timestamp = value.getTime();
-		if (!Number.isFinite(timestamp)) throw new FleetProtocolError("invalid-time", field + " is invalid");
-		return timestamp;
-	}
-	return parseCanonicalTime(value, field);
-}
-function validateFleetPlanApproval(plan, approval, now) {
-	validateFleetPlan(plan);
-	assertExactKeys$1(approval, APPROVAL_KEYS$1, "approval");
-	if (approval.protocolVersion !== 1) throw new FleetProtocolError("invalid-protocol", "unsupported approval protocol version");
-	assertNonEmpty(approval.approvalId, "approvalId");
-	assertNonEmpty(approval.principalId, "approval.principalId");
-	assertNonEmpty(approval.planId, "approval.planId");
-	assertDigest$1(approval.planDigest, "approval.planDigest");
-	assertNonEmpty(approval.deviceId, "approval.deviceId");
-	assertNonEmpty(approval.profile, "approval.profile");
-	const approvedAt = parseCanonicalTime(approval.approvedAt, "approvedAt");
-	const expiresAt = parseCanonicalTime(approval.expiresAt, "approval.expiresAt");
-	const nowAt = asTimestamp(now, "now");
-	const planCreatedAt = Date.parse(plan.createdAt);
-	const planExpiresAt = Date.parse(plan.expiresAt);
-	if (approval.planId !== plan.planId || approval.planDigest !== plan.digest || approval.deviceId !== plan.deviceId || approval.profile !== plan.profile) throw new FleetProtocolError("approval-mismatch", "approval is not bound to this exact plan, device and profile");
-	if (approvedAt < planCreatedAt || expiresAt <= approvedAt || expiresAt > planExpiresAt) throw new FleetProtocolError("approval-mismatch", "approval lifetime is outside the plan lifetime");
-	if (nowAt < approvedAt) throw new FleetProtocolError("approval-mismatch", "approval is not active yet");
-	if (nowAt >= planExpiresAt) throw new FleetProtocolError("plan-expired", "plan has expired");
-	if (nowAt >= expiresAt) throw new FleetProtocolError("approval-expired", "approval has expired");
-	return Object.freeze({ idempotencyKey: "approval:" + sha256Canonical(approval) });
+function validateRuntimeIdentity(value) {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) throw new TypeError("runtime identity must be an object");
+	const body = value;
+	const expected = [
+		"nodeRealpath",
+		"dshEntrypointRealpath",
+		"dshPackageRealpath",
+		"dshVersion",
+		"entrypointDigest",
+		"packageJsonDigest",
+		"runtimeDigest"
+	].sort();
+	if (Object.keys(body).sort().join(",") !== expected.join(",")) throw new TypeError("runtime identity has unsupported or missing fields");
+	for (const field of [
+		"nodeRealpath",
+		"dshEntrypointRealpath",
+		"dshPackageRealpath"
+	]) if (typeof body[field] !== "string" || !isAbsolute(body[field]) || normalize(body[field]) !== body[field]) throw new TypeError("runtime identity path is invalid");
+	if (typeof body.dshVersion !== "string" || body.dshVersion.length === 0 || body.dshVersion !== body.dshVersion.trim()) throw new TypeError("runtime identity DSH version is invalid");
+	for (const field of [
+		"entrypointDigest",
+		"packageJsonDigest",
+		"runtimeDigest"
+	]) if (typeof body[field] !== "string" || !/^[0-9a-f]{64}$/.test(body[field])) throw new TypeError("runtime identity digest is invalid");
+	const identity = {
+		nodeRealpath: body.nodeRealpath,
+		dshEntrypointRealpath: body.dshEntrypointRealpath,
+		dshPackageRealpath: body.dshPackageRealpath,
+		dshVersion: body.dshVersion,
+		entrypointDigest: body.entrypointDigest,
+		packageJsonDigest: body.packageJsonDigest
+	};
+	if (sha256$2(JSON.stringify(identity)) !== body.runtimeDigest) throw new TypeError("runtime identity digest does not match its fields");
 }
 var FleetPlannerError = class extends Error {
 	code;
@@ -8915,11 +9217,11 @@ const TARGET_KEYS = [
 	"classes",
 	"channels"
 ];
-function isRecord$3(value) {
+function isRecord$5(value) {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function rejectUnknownKeys(value, keys, label) {
-	if (!isRecord$3(value)) throw new FleetPlannerError("invalid-input", label + " must be an object");
+	if (!isRecord$5(value)) throw new FleetPlannerError("invalid-input", label + " must be an object");
 	const allowed = new Set(keys);
 	for (const key of Object.keys(value)) if (!allowed.has(key)) throw new FleetPlannerError("invalid-input", label + " contains unsupported field " + JSON.stringify(key));
 }
@@ -8983,8 +9285,8 @@ function createAgentPlan(input) {
 	rejectUnknownKeys(input, INPUT_KEYS, "planner input");
 	rejectUnknownKeys(input.manifest, MANIFEST_KEYS, "manifest");
 	rejectUnknownKeys(input.manifest.team, TEAM_KEYS, "manifest.team");
-	if (input.manifest.schemaVersion !== 1 || !Array.isArray(input.manifest.plugins) || !isRecord$3(input.manifest.devices)) throw new FleetPlannerError("invalid-input", "planner requires a parsed schemaVersion 1 manifest");
-	if (!isRecord$3(input.dependencies)) throw new FleetPlannerError("invalid-input", "dependencies must be an object");
+	if (input.manifest.schemaVersion !== 1 || !Array.isArray(input.manifest.plugins) || !isRecord$5(input.manifest.devices)) throw new FleetPlannerError("invalid-input", "planner requires a parsed schemaVersion 1 manifest");
+	if (!isRecord$5(input.dependencies)) throw new FleetPlannerError("invalid-input", "dependencies must be an object");
 	const deviceId = trimmed$1(input.deviceId, "deviceId");
 	const profile = trimmed$1(input.profile, "profile");
 	const pluginId = trimmed$1(input.pluginId, "pluginId");
@@ -9030,9 +9332,15 @@ const PLAN_BODY_KEYS = [
 	"kind",
 	"deviceId",
 	"profile",
+	"fromManifestDigest",
+	"toManifestDigest",
+	"fromReleaseDigest",
+	"toReleaseDigest",
 	"manifestDigest",
 	"profileHash",
 	"observedDshVersion",
+	"observedRuntimeDigest",
+	"observedServiceDefinitionDigest",
 	"releaseId",
 	"releaseVersion",
 	"releaseDigest",
@@ -9042,7 +9350,7 @@ const PLAN_BODY_KEYS = [
 	"createdAt",
 	"expiresAt"
 ];
-const PLAN_KEYS = [
+const PLAN_KEYS$1 = [
 	...PLAN_BODY_KEYS,
 	"planId",
 	"digest"
@@ -9066,7 +9374,7 @@ const CHANGE_KEYS = [
 	"exactToSpec",
 	"artifactDigest"
 ];
-const APPROVAL_KEYS = [
+const APPROVAL_KEYS$1 = [
 	"protocolVersion",
 	"kind",
 	"approvalId",
@@ -9075,10 +9383,55 @@ const APPROVAL_KEYS = [
 	"planDigest",
 	"deviceId",
 	"profile",
+	"fromManifestDigest",
+	"toManifestDigest",
+	"fromReleaseDigest",
+	"toReleaseDigest",
 	"approvedAt",
 	"expiresAt"
 ];
-const APPLIED_KEYS = [
+const ROLLBACK_PLAN_BODY_KEYS = [
+	"protocolVersion",
+	"kind",
+	"transitionPlanId",
+	"transitionPlanDigest",
+	"deviceId",
+	"profile",
+	"fromManifestDigest",
+	"toManifestDigest",
+	"fromReleaseDigest",
+	"toReleaseDigest",
+	"fromProfileHash",
+	"toProfileHash",
+	"observedDshVersion",
+	"observedRuntimeDigest",
+	"observedServiceDefinitionDigest",
+	"createdAt",
+	"expiresAt"
+];
+const ROLLBACK_PLAN_KEYS = [
+	...ROLLBACK_PLAN_BODY_KEYS,
+	"planId",
+	"digest"
+];
+const ROLLBACK_APPROVAL_KEYS = [
+	"protocolVersion",
+	"kind",
+	"approvalId",
+	"principalId",
+	"planId",
+	"planDigest",
+	"transitionPlanId",
+	"deviceId",
+	"profile",
+	"fromManifestDigest",
+	"toManifestDigest",
+	"fromReleaseDigest",
+	"toReleaseDigest",
+	"approvedAt",
+	"expiresAt"
+];
+const APPLIED_V1_KEYS = [
 	"schemaVersion",
 	"deviceId",
 	"profile",
@@ -9088,11 +9441,16 @@ const APPLIED_KEYS = [
 	"plugins",
 	"appliedAt"
 ];
-function isRecord$2(value) {
+const APPLIED_V2_KEYS = [
+	...APPLIED_V1_KEYS,
+	"transitionPlanId",
+	"transitionPlanDigest"
+];
+function isRecord$4(value) {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function assertExactKeys(value, keys, label) {
-	if (!isRecord$2(value)) throw new FleetProtocolError("invalid-payload", label + " must be an object");
+	if (!isRecord$4(value)) throw new FleetProtocolError("invalid-payload", label + " must be an object");
 	const expected = new Set(keys);
 	for (const key of Object.keys(value)) if (!expected.has(key)) throw new FleetProtocolError("invalid-payload", label + " contains unsupported field " + JSON.stringify(key));
 	for (const key of keys) if (!Object.hasOwn(value, key)) throw new FleetProtocolError("invalid-payload", label + " is missing field " + JSON.stringify(key));
@@ -9106,6 +9464,9 @@ function assertIdentifier(value, field) {
 }
 function assertDigest(value, field) {
 	if (typeof value !== "string" || !/^[0-9a-f]{64}$/.test(value)) throw new FleetProtocolError("invalid-digest", field + " must be a lowercase SHA-256 digest");
+}
+function assertNullableDigest(value, field) {
+	if (value !== null) assertDigest(value, field);
 }
 function parseTime(value, field) {
 	if (typeof value !== "string") throw new FleetProtocolError("invalid-time", field + " must be a canonical ISO timestamp");
@@ -9169,17 +9530,24 @@ function validateChange(value, index) {
 }
 function validatePlanBody(value) {
 	assertExactKeys(value, PLAN_BODY_KEYS, "release plan body");
-	if (value.protocolVersion !== 1 || value.kind !== "profile-release") throw new FleetProtocolError("invalid-protocol", "unsupported release protocol");
+	if (value.protocolVersion !== 2 || value.kind !== "profile-release") throw new FleetProtocolError("invalid-protocol", "unsupported release protocol");
 	assertIdentifier(value.deviceId, "deviceId");
 	assertIdentifier(value.profile, "profile");
+	assertDigest(value.fromManifestDigest, "fromManifestDigest");
+	assertDigest(value.toManifestDigest, "toManifestDigest");
+	assertNullableDigest(value.fromReleaseDigest, "fromReleaseDigest");
+	assertDigest(value.toReleaseDigest, "toReleaseDigest");
 	assertDigest(value.manifestDigest, "manifestDigest");
 	assertDigest(value.profileHash, "profileHash");
 	assertString(value.observedDshVersion, "observedDshVersion");
 	if (!isSupportedDshVersion(value.observedDshVersion)) throw new FleetProtocolError("unsupported-dsh-version", "DSH version is outside the supported Agent range");
+	assertDigest(value.observedRuntimeDigest, "observedRuntimeDigest");
+	assertNullableDigest(value.observedServiceDefinitionDigest, "observedServiceDefinitionDigest");
 	assertIdentifier(value.releaseId, "releaseId");
 	assertString(value.releaseVersion, "releaseVersion");
 	if ((0, import_semver.valid)(value.releaseVersion) !== value.releaseVersion) throw new FleetProtocolError("invalid-payload", "releaseVersion must be an exact semantic version");
 	assertDigest(value.releaseDigest, "releaseDigest");
+	if (value.manifestDigest !== value.toManifestDigest || value.releaseDigest !== value.toReleaseDigest) throw new FleetProtocolError("plan-integrity-failed", "legacy release digest aliases must equal the transition target digests");
 	if (!Array.isArray(value.plugins) || value.plugins.length === 0) throw new FleetProtocolError("invalid-payload", "plugins must not be empty");
 	value.plugins.forEach(validatePlugin);
 	if (!Array.isArray(value.changes)) throw new FleetProtocolError("invalid-payload", "changes must be an array");
@@ -9211,7 +9579,7 @@ function createFleetReleasePlan(body) {
 	});
 }
 function validateFleetReleasePlan(value) {
-	assertExactKeys(value, PLAN_KEYS, "release plan");
+	assertExactKeys(value, PLAN_KEYS$1, "release plan");
 	const body = Object.fromEntries(PLAN_BODY_KEYS.map((key) => [key, value[key]]));
 	validatePlanBody(body);
 	assertDigest(value.digest, "digest");
@@ -9220,8 +9588,8 @@ function validateFleetReleasePlan(value) {
 }
 function validateFleetReleaseApproval(plan, approval, now) {
 	validateFleetReleasePlan(plan);
-	assertExactKeys(approval, APPROVAL_KEYS, "release approval");
-	if (approval.protocolVersion !== 1 || approval.kind !== "profile-release") throw new FleetProtocolError("invalid-protocol", "unsupported release approval protocol");
+	assertExactKeys(approval, APPROVAL_KEYS$1, "release approval");
+	if (approval.protocolVersion !== 2 || approval.kind !== "profile-release") throw new FleetProtocolError("invalid-protocol", "unsupported release approval protocol");
 	for (const [field, value] of Object.entries({
 		approvalId: approval.approvalId,
 		principalId: approval.principalId,
@@ -9230,6 +9598,11 @@ function validateFleetReleaseApproval(plan, approval, now) {
 		profile: approval.profile
 	})) assertString(value, field);
 	assertDigest(approval.planDigest, "planDigest");
+	assertDigest(approval.fromManifestDigest, "fromManifestDigest");
+	assertDigest(approval.toManifestDigest, "toManifestDigest");
+	assertNullableDigest(approval.fromReleaseDigest, "fromReleaseDigest");
+	assertDigest(approval.toReleaseDigest, "toReleaseDigest");
+	if (approval.fromManifestDigest !== plan.fromManifestDigest || approval.toManifestDigest !== plan.toManifestDigest || approval.fromReleaseDigest !== plan.fromReleaseDigest || approval.toReleaseDigest !== plan.toReleaseDigest) throw new FleetProtocolError("approval-mismatch", "release approval transition digests do not match its plan");
 	const approvedAt = parseTime(approval.approvedAt, "approvedAt");
 	const expiresAt = parseTime(approval.expiresAt, "approval.expiresAt");
 	const nowAt = now instanceof Date ? now.getTime() : parseTime(now, "now");
@@ -9243,9 +9616,83 @@ function validateFleetReleaseApproval(plan, approval, now) {
 		approval: JSON.parse(canonicalJson(approval))
 	}) };
 }
+function validateRollbackPlanBody(value) {
+	assertExactKeys(value, ROLLBACK_PLAN_BODY_KEYS, "release rollback plan body");
+	if (value.protocolVersion !== 2 || value.kind !== "profile-release-rollback") throw new FleetProtocolError("invalid-protocol", "unsupported release rollback protocol");
+	if (!/^release-plan:[0-9a-f]{64}$/.test(value.transitionPlanId)) throw new FleetProtocolError("invalid-payload", "transitionPlanId is invalid");
+	assertDigest(value.transitionPlanDigest, "transitionPlanDigest");
+	if (value.transitionPlanId !== "release-plan:" + value.transitionPlanDigest) throw new FleetProtocolError("plan-integrity-failed", "transition plan id does not match transitionPlanDigest");
+	assertIdentifier(value.deviceId, "deviceId");
+	assertIdentifier(value.profile, "profile");
+	assertDigest(value.fromManifestDigest, "fromManifestDigest");
+	assertDigest(value.toManifestDigest, "toManifestDigest");
+	assertDigest(value.fromReleaseDigest, "fromReleaseDigest");
+	assertNullableDigest(value.toReleaseDigest, "toReleaseDigest");
+	assertDigest(value.fromProfileHash, "fromProfileHash");
+	assertDigest(value.toProfileHash, "toProfileHash");
+	assertString(value.observedDshVersion, "observedDshVersion");
+	if (!isSupportedDshVersion(value.observedDshVersion)) throw new FleetProtocolError("unsupported-dsh-version", "DSH version is outside the supported Agent range");
+	assertDigest(value.observedRuntimeDigest, "observedRuntimeDigest");
+	assertNullableDigest(value.observedServiceDefinitionDigest, "observedServiceDefinitionDigest");
+	if (value.fromManifestDigest === value.toManifestDigest && value.fromReleaseDigest === value.toReleaseDigest) throw new FleetProtocolError("invalid-payload", "release rollback must change a manifest or applied release binding");
+	const createdAt = parseTime(value.createdAt, "createdAt");
+	if (parseTime(value.expiresAt, "expiresAt") <= createdAt) throw new FleetProtocolError("invalid-time", "expiresAt must be after createdAt");
+}
+function createFleetReleaseRollbackPlan(body) {
+	validateRollbackPlanBody(body);
+	const digest = sha256Canonical(body);
+	return Object.freeze({
+		...body,
+		planId: "release-rollback-plan:" + digest,
+		digest
+	});
+}
+function validateFleetReleaseRollbackPlan(value) {
+	assertExactKeys(value, ROLLBACK_PLAN_KEYS, "release rollback plan");
+	const body = Object.fromEntries(ROLLBACK_PLAN_BODY_KEYS.map((key) => [key, value[key]]));
+	validateRollbackPlanBody(body);
+	assertDigest(value.digest, "digest");
+	const digest = sha256Canonical(body);
+	if (value.digest !== digest || value.planId !== "release-rollback-plan:" + digest) throw new FleetProtocolError("plan-integrity-failed", "release rollback plan id or digest does not match its canonical body");
+}
+function validateFleetReleaseRollbackApproval(plan, approval, now) {
+	validateFleetReleaseRollbackPlan(plan);
+	assertExactKeys(approval, ROLLBACK_APPROVAL_KEYS, "release rollback approval");
+	if (approval.protocolVersion !== 2 || approval.kind !== "profile-release-rollback") throw new FleetProtocolError("invalid-protocol", "unsupported release rollback approval protocol");
+	for (const [field, value] of Object.entries({
+		approvalId: approval.approvalId,
+		principalId: approval.principalId,
+		planId: approval.planId,
+		transitionPlanId: approval.transitionPlanId,
+		deviceId: approval.deviceId,
+		profile: approval.profile
+	})) assertString(value, field);
+	assertDigest(approval.planDigest, "planDigest");
+	assertDigest(approval.fromManifestDigest, "fromManifestDigest");
+	assertDigest(approval.toManifestDigest, "toManifestDigest");
+	assertDigest(approval.fromReleaseDigest, "fromReleaseDigest");
+	assertNullableDigest(approval.toReleaseDigest, "toReleaseDigest");
+	const approvedAt = parseTime(approval.approvedAt, "approvedAt");
+	const expiresAt = parseTime(approval.expiresAt, "approval.expiresAt");
+	const nowAt = now instanceof Date ? now.getTime() : parseTime(now, "now");
+	if (!Number.isFinite(nowAt)) throw new FleetProtocolError("invalid-time", "now is invalid");
+	if (expiresAt <= approvedAt || approvedAt < Date.parse(plan.createdAt) || approvedAt >= Date.parse(plan.expiresAt)) throw new FleetProtocolError("approval-mismatch", "approval time is outside the release rollback plan validity window");
+	if (nowAt >= Date.parse(plan.expiresAt)) throw new FleetProtocolError("plan-expired", "release rollback plan has expired");
+	if (nowAt >= expiresAt) throw new FleetProtocolError("approval-expired", "release rollback approval has expired");
+	if (approval.planId !== plan.planId || approval.planDigest !== plan.digest || approval.transitionPlanId !== plan.transitionPlanId || approval.deviceId !== plan.deviceId || approval.profile !== plan.profile || approval.fromManifestDigest !== plan.fromManifestDigest || approval.toManifestDigest !== plan.toManifestDigest || approval.fromReleaseDigest !== plan.fromReleaseDigest || approval.toReleaseDigest !== plan.toReleaseDigest) throw new FleetProtocolError("approval-mismatch", "release rollback approval does not match its plan");
+	return { idempotencyKey: sha256Canonical({
+		planDigest: plan.digest,
+		approval: JSON.parse(canonicalJson(approval))
+	}) };
+}
 function validateFleetAppliedRelease(value) {
-	assertExactKeys(value, APPLIED_KEYS, "applied release");
-	if (value.schemaVersion !== 1) throw new FleetProtocolError("invalid-protocol", "unsupported applied release schema");
+	if (value.schemaVersion === 1) assertExactKeys(value, APPLIED_V1_KEYS, "applied release");
+	else if (value.schemaVersion === 2) {
+		assertExactKeys(value, APPLIED_V2_KEYS, "applied release");
+		if (typeof value.transitionPlanId !== "string" || !/^release-plan:[0-9a-f]{64}$/.test(value.transitionPlanId)) throw new FleetProtocolError("invalid-payload", "applied release transitionPlanId is invalid");
+		assertDigest(value.transitionPlanDigest, "transitionPlanDigest");
+		if (value.transitionPlanId !== "release-plan:" + value.transitionPlanDigest) throw new FleetProtocolError("plan-integrity-failed", "applied release transition binding is invalid");
+	} else throw new FleetProtocolError("invalid-protocol", "unsupported applied release schema");
 	assertIdentifier(value.deviceId, "deviceId");
 	assertIdentifier(value.profile, "profile");
 	assertIdentifier(value.releaseId, "releaseId");
@@ -9276,7 +9723,7 @@ function trimmed(value, field) {
 	if (typeof value !== "string" || value.length === 0 || value !== value.trim()) throw new FleetReleasePlannerError("invalid-input", field + " must be a trimmed non-empty string");
 	return value;
 }
-function digest$1(value) {
+function digest$4(value) {
 	return createHash("sha256").update(value, "utf8").digest("hex");
 }
 function binding(plugin) {
@@ -9341,7 +9788,7 @@ function buildChanges(plugins, dependencies, artifactDigests, previous) {
 			visibility: plugin.visibility,
 			sourceKind: plugin.sourceKind,
 			action: actualSpec === void 0 ? "install" : "update",
-			fromSpecDigest: actualSpec === void 0 ? null : digest$1(actualSpec),
+			fromSpecDigest: actualSpec === void 0 ? null : digest$4(actualSpec),
 			exactToSpec: plugin.exactSpec,
 			artifactDigest: plugin.artifactDigest
 		});
@@ -9350,12 +9797,13 @@ function buildChanges(plugins, dependencies, artifactDigests, previous) {
 		if (finalIds.has(plugin.pluginId)) continue;
 		const actualSpec = dependencies[plugin.pluginId];
 		if (actualSpec === void 0) continue;
+		if (!currentMatches(plugin, actualSpec, artifactDigests)) throw new FleetReleasePlannerError("release-ownership-conflict", "live binding for " + plugin.pluginId + " no longer matches the previously applied release marker");
 		changes.push({
 			pluginId: plugin.pluginId,
 			visibility: plugin.visibility,
 			sourceKind: plugin.sourceKind,
 			action: "remove",
-			fromSpecDigest: digest$1(actualSpec),
+			fromSpecDigest: digest$4(actualSpec),
 			exactToSpec: null,
 			artifactDigest: null
 		});
@@ -9386,21 +9834,29 @@ function createReleasePlan(input) {
 		profile,
 		plugins
 	});
+	const toManifestDigest = trimmed(input.manifestDigest, "manifestDigest").toLowerCase();
+	const fromManifestDigest = trimmed(input.liveManifestDigest ?? input.runtimeManifestDigest ?? input.manifestDigest, "liveManifestDigest").toLowerCase();
 	try {
 		return createFleetReleasePlan({
-			protocolVersion: 1,
+			protocolVersion: 2,
 			kind: "profile-release",
 			deviceId,
 			profile,
-			manifestDigest: trimmed(input.manifestDigest, "manifestDigest").toLowerCase(),
+			fromManifestDigest,
+			toManifestDigest,
+			fromReleaseDigest: input.appliedRelease?.releaseDigest ?? null,
+			toReleaseDigest: releaseDigest,
+			manifestDigest: toManifestDigest,
 			profileHash: trimmed(input.profileHash, "profileHash").toLowerCase(),
 			observedDshVersion,
+			observedRuntimeDigest: trimmed(input.observedRuntimeDigest, "observedRuntimeDigest").toLowerCase(),
+			observedServiceDefinitionDigest: input.observedServiceDefinitionDigest === null ? null : trimmed(input.observedServiceDefinitionDigest, "observedServiceDefinitionDigest").toLowerCase(),
 			releaseId: release.id,
 			releaseVersion: release.version,
 			releaseDigest,
 			plugins,
 			changes,
-			restartRequired: changes.length > 0 || input.runtimeManifestDigest !== input.manifestDigest,
+			restartRequired: changes.length > 0 || fromManifestDigest !== toManifestDigest,
 			createdAt,
 			expiresAt: new Date(Date.parse(createdAt) + planTtlMs).toISOString()
 		});
@@ -9410,6 +9866,292 @@ function createReleasePlan(input) {
 	}
 }
 //#endregion
+//#region src/worker/profile.ts
+const EXECUTION_PROFILE_FILES = [
+	"package.json",
+	"pnpm-lock.yaml",
+	"pnpm-workspace.yaml",
+	"cordis.patch.yml",
+	"cordis.yml",
+	"fleet.lock.yaml"
+];
+const EXECUTION_PROFILE_FILE_NAMES = new Set(EXECUTION_PROFILE_FILES);
+var ExecutionProfileHashError = class extends Error {
+	code;
+	constructor(code, message) {
+		super(message);
+		this.name = "ExecutionProfileHashError";
+		this.code = code;
+	}
+};
+function profileDirectory(dshHome, profile) {
+	if (!isAbsolute(dshHome) || normalize(dshHome) !== dshHome || dshHome === "/" || dshHome.includes("\0")) throw new ExecutionProfileHashError("execution-profile-invalid", "DSH home must be a normalized absolute non-root path");
+	if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(profile)) throw new ExecutionProfileHashError("execution-profile-invalid", "execution profile id is invalid");
+	return join(dshHome, "profiles", profile);
+}
+async function readRegularOptional$1(path) {
+	let handle;
+	try {
+		handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+		if (!(await handle.stat()).isFile()) throw new ExecutionProfileHashError("execution-profile-invalid", "execution profile state accepts regular files only");
+		return await handle.readFile("utf8");
+	} catch (error) {
+		if (error.code === "ENOENT") return null;
+		if (error.code === "ELOOP") throw new ExecutionProfileHashError("execution-profile-invalid", "execution profile state must not contain symbolic links");
+		throw error;
+	} finally {
+		await handle?.close();
+	}
+}
+/**
+* Hashes the complete reproducible DSH profile snapshot. node_modules is
+* deliberately represented by package.json + pnpm-lock.yaml and is rebuilt
+* with scripts disabled; every other top-level entry is rejected.
+*/
+async function computeExecutionProfileHash(dshHome, profile) {
+	const directory = profileDirectory(dshHome, profile);
+	let directoryInfo;
+	try {
+		directoryInfo = await lstat(directory);
+	} catch (error) {
+		if (error.code !== "ENOENT") throw error;
+	}
+	if (directoryInfo === void 0 || directoryInfo.isSymbolicLink() || !directoryInfo.isDirectory()) throw new ExecutionProfileHashError("execution-profile-invalid", "execution profile must be an existing real directory");
+	for (const entry of await readdir(directory, { withFileTypes: true })) {
+		const path = join(directory, entry.name);
+		if (entry.name === "node_modules") {
+			const info = await lstat(path);
+			if (info.isSymbolicLink() || !info.isDirectory()) throw new ExecutionProfileHashError("execution-profile-invalid", "execution profile node_modules must be a real directory");
+			continue;
+		}
+		if (!EXECUTION_PROFILE_FILE_NAMES.has(entry.name)) throw new ExecutionProfileHashError("execution-profile-layout-unsupported", "execution profile contains unsupported top-level state");
+		const info = await lstat(path);
+		if (info.isSymbolicLink() || !info.isFile()) throw new ExecutionProfileHashError("execution-profile-invalid", "execution profile state accepts regular files only");
+	}
+	const files = Object.fromEntries(await Promise.all(EXECUTION_PROFILE_FILES.map(async (name) => [name, await readRegularOptional$1(join(directory, name))])));
+	return createHash("sha256").update(JSON.stringify(files), "utf8").digest("hex");
+}
+async function assertExecutionProfileHash(dshHome, profile, expectedHash) {
+	if (!/^[0-9a-f]{64}$/.test(expectedHash) || await computeExecutionProfileHash(dshHome, profile) !== expectedHash) throw new ExecutionProfileHashError("execution-profile-invalid", "execution profile no longer matches its signed task binding");
+}
+const BODY_KEYS$1 = [
+	"protocolVersion",
+	"kind",
+	"deviceId",
+	"profile",
+	"currentTransitionPlanId",
+	"retainedTransitionPlanIds",
+	"entries",
+	"orphanBackupProfiles",
+	"orphanStageProfiles",
+	"orphanFailedProfiles",
+	"createdAt",
+	"expiresAt"
+];
+const PLAN_KEYS = [
+	...BODY_KEYS$1,
+	"planId",
+	"digest"
+];
+const ENTRY_KEYS = [
+	"transitionPlanId",
+	"descriptorDigest",
+	"backupProfile",
+	"backupManifestDigest",
+	"backupProfileHash",
+	"reason"
+];
+const APPROVAL_KEYS = [
+	"protocolVersion",
+	"kind",
+	"approvalId",
+	"principalId",
+	"planId",
+	"planDigest",
+	"deviceId",
+	"profile",
+	"approvedAt",
+	"expiresAt"
+];
+function object(value, label) {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) throw new FleetProtocolError("invalid-payload", label + " must be an object");
+	return value;
+}
+function exact(value, keys, label) {
+	const body = object(value, label);
+	const actual = Object.keys(body).sort();
+	const expected = [...keys].sort();
+	if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) throw new FleetProtocolError("invalid-payload", label + " has unsupported or missing fields");
+	return body;
+}
+function identifier$2(value, label) {
+	if (typeof value !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(value)) throw new FleetProtocolError("invalid-payload", label + " is invalid");
+}
+function digest$3(value, label) {
+	if (typeof value !== "string" || !/^[0-9a-f]{64}$/.test(value)) throw new FleetProtocolError("invalid-digest", label + " must be a lowercase SHA-256 digest");
+}
+function transitionId(value, label) {
+	if (typeof value !== "string" || !/^release-plan:[0-9a-f]{64}$/.test(value)) throw new FleetProtocolError("invalid-payload", label + " is invalid");
+}
+function timestamp$1(value, label) {
+	if (typeof value !== "string") throw new FleetProtocolError("invalid-time", label + " must be a canonical timestamp");
+	const time = Date.parse(value);
+	if (!Number.isFinite(time) || new Date(time).toISOString() !== value) throw new FleetProtocolError("invalid-time", label + " must be a canonical timestamp");
+	return time;
+}
+function sortedUnique(values, label, validate) {
+	if (!Array.isArray(values)) throw new FleetProtocolError("invalid-payload", label + " must be an array");
+	values.forEach((value, index) => validate(value, `${label}[${index}]`));
+	if (new Set(values).size !== values.length || values.some((value, index) => index > 0 && value <= values[index - 1])) throw new FleetProtocolError("invalid-payload", label + " must be unique and sorted");
+	return values;
+}
+function validateEntry(value, index) {
+	const body = exact(value, ENTRY_KEYS, `entries[${index}]`);
+	transitionId(body.transitionPlanId, `entries[${index}].transitionPlanId`);
+	digest$3(body.descriptorDigest, `entries[${index}].descriptorDigest`);
+	if (body.backupProfile === null) {
+		if (body.backupManifestDigest !== null || body.backupProfileHash !== null) throw new FleetProtocolError("invalid-payload", "marker-only retention entries cannot bind a backup");
+	} else {
+		if (typeof body.backupProfile !== "string" || !/^fleet-backup-[0-9a-f]{24}$/.test(body.backupProfile)) throw new FleetProtocolError("invalid-payload", "retention backup profile is invalid");
+		digest$3(body.backupManifestDigest, `entries[${index}].backupManifestDigest`);
+		digest$3(body.backupProfileHash, `entries[${index}].backupProfileHash`);
+	}
+	if (body.reason !== "superseded") throw new FleetProtocolError("invalid-payload", "retention reason is invalid");
+}
+function validateBody(value) {
+	exact(value, BODY_KEYS$1, "release retention plan body");
+	if (value.protocolVersion !== 1 || value.kind !== "profile-release-retention") throw new FleetProtocolError("invalid-protocol", "unsupported release retention protocol");
+	identifier$2(value.deviceId, "deviceId");
+	identifier$2(value.profile, "profile");
+	if (value.currentTransitionPlanId !== null) transitionId(value.currentTransitionPlanId, "currentTransitionPlanId");
+	const retained = sortedUnique(value.retainedTransitionPlanIds, "retainedTransitionPlanIds", transitionId);
+	if (retained.length > 2) throw new FleetProtocolError("invalid-payload", "release retention keeps at most the current and previous transitions");
+	if (value.currentTransitionPlanId !== null && !retained.includes(value.currentTransitionPlanId)) throw new FleetProtocolError("invalid-payload", "retained transitions must include the current transition");
+	if (value.currentTransitionPlanId === null && retained.length !== 0) throw new FleetProtocolError("invalid-payload", "retained transitions require a current transition");
+	if (!Array.isArray(value.entries)) throw new FleetProtocolError("invalid-payload", "entries must be an array");
+	value.entries.forEach(validateEntry);
+	if (value.currentTransitionPlanId === null && value.entries.length !== 0) throw new FleetProtocolError("invalid-payload", "retention entries require a current transition");
+	const entryIds = value.entries.map((entry) => entry.transitionPlanId);
+	if (new Set(entryIds).size !== entryIds.length || entryIds.some((id, index) => index > 0 && id <= entryIds[index - 1])) throw new FleetProtocolError("invalid-payload", "retention entries must be unique and sorted");
+	if (entryIds.some((id) => retained.includes(id))) throw new FleetProtocolError("invalid-payload", "retained transitions cannot be pruned");
+	sortedUnique(value.orphanBackupProfiles, "orphanBackupProfiles", (item, label) => {
+		if (typeof item !== "string" || !/^fleet-backup-[0-9a-f]{24}$/.test(item)) throw new FleetProtocolError("invalid-payload", label + " is invalid");
+	});
+	sortedUnique(value.orphanStageProfiles, "orphanStageProfiles", (item, label) => {
+		if (typeof item !== "string" || !/^fleet-stage-[0-9a-f]{24}$/.test(item)) throw new FleetProtocolError("invalid-payload", label + " is invalid");
+	});
+	sortedUnique(value.orphanFailedProfiles, "orphanFailedProfiles", (item, label) => {
+		if (typeof item !== "string" || !/^fleet-failed-[0-9a-f]{24}$/.test(item)) throw new FleetProtocolError("invalid-payload", label + " is invalid");
+	});
+	const createdAt = timestamp$1(value.createdAt, "createdAt");
+	const expiresAt = timestamp$1(value.expiresAt, "expiresAt");
+	if (expiresAt <= createdAt || expiresAt - createdAt > 36e5) throw new FleetProtocolError("invalid-time", "release retention plan lifetime is invalid");
+}
+function createFleetReleaseRetentionPlan(body) {
+	validateBody(body);
+	const digest = sha256Canonical(body);
+	return Object.freeze({
+		...body,
+		planId: "release-retention-plan:" + digest,
+		digest
+	});
+}
+function validateFleetReleaseRetentionPlan(value) {
+	exact(value, PLAN_KEYS, "release retention plan");
+	const body = Object.fromEntries(BODY_KEYS$1.map((key) => [key, value[key]]));
+	validateBody(body);
+	digest$3(value.digest, "digest");
+	if (value.planId !== "release-retention-plan:" + value.digest || sha256Canonical(body) !== value.digest) throw new FleetProtocolError("plan-integrity-failed", "release retention plan identity is invalid");
+}
+function validateFleetReleaseRetentionApproval(plan, approval, now) {
+	validateFleetReleaseRetentionPlan(plan);
+	const body = exact(approval, APPROVAL_KEYS, "release retention approval");
+	if (body.protocolVersion !== 1 || body.kind !== "profile-release-retention") throw new FleetProtocolError("invalid-protocol", "unsupported release retention approval protocol");
+	for (const field of ["approvalId", "principalId"]) identifier$2(body[field], field);
+	if (body.planId !== plan.planId || body.deviceId !== plan.deviceId || body.profile !== plan.profile) throw new FleetProtocolError("approval-mismatch", "release retention approval does not match its plan");
+	digest$3(body.planDigest, "planDigest");
+	if (body.planDigest !== plan.digest) throw new FleetProtocolError("approval-mismatch", "release retention digest does not match its plan");
+	const approvedAt = timestamp$1(body.approvedAt, "approvedAt");
+	const expiresAt = timestamp$1(body.expiresAt, "approval.expiresAt");
+	const nowAt = now instanceof Date ? now.getTime() : timestamp$1(now, "now");
+	if (expiresAt <= approvedAt || approvedAt < Date.parse(plan.createdAt) || approvedAt >= Date.parse(plan.expiresAt)) throw new FleetProtocolError("approval-mismatch", "release retention approval is outside its plan window");
+	if (expiresAt > Date.parse(plan.expiresAt)) throw new FleetProtocolError("approval-mismatch", "release retention approval cannot outlive its plan");
+	if (nowAt >= Date.parse(plan.expiresAt)) throw new FleetProtocolError("plan-expired", "release retention plan has expired");
+	if (nowAt >= expiresAt) throw new FleetProtocolError("approval-expired", "release retention approval has expired");
+	return { idempotencyKey: sha256Canonical({
+		planDigest: plan.digest,
+		approval: JSON.parse(canonicalJson(approval))
+	}) };
+}
+//#endregion
+//#region src/agent/service-definition.ts
+function sha256$1(value) {
+	return createHash("sha256").update(value, "utf8").digest("hex");
+}
+function block(lines, name) {
+	const start = lines.findIndex((line) => line.trim() === name + " = {");
+	if (start < 0) throw new TypeError("launchd service is missing the " + name + " block");
+	const values = [];
+	for (let index = start + 1; index < lines.length; index += 1) {
+		const value = lines[index].trim();
+		if (value === "}") return values;
+		if (value.length > 0) values.push(value);
+	}
+	throw new TypeError("launchd service has an unterminated " + name + " block");
+}
+function singleValue(lines, name) {
+	const prefix = name + " = ";
+	const values = lines.map((line) => line.trim()).filter((line) => line.startsWith(prefix)).map((line) => line.slice(prefix.length));
+	if (values.length !== 1 || values[0].length === 0) throw new TypeError("launchd service has an invalid " + name);
+	return values[0];
+}
+function environmentValue(lines, name) {
+	const prefix = name + " => ";
+	const values = block(lines, "environment").filter((line) => line.startsWith(prefix)).map((line) => line.slice(prefix.length));
+	if (values.length !== 1 || values[0].length === 0) throw new TypeError("launchd service environment is missing " + name);
+	return values[0];
+}
+async function inspectLaunchdServiceDefinition(input) {
+	const lines = input.source.split(/\r?\n/);
+	if (lines[0]?.trim() !== input.serviceTarget + " = {") throw new TypeError("launchd service target does not match the configured target");
+	const programArguments = block(lines, "arguments");
+	if (programArguments.length !== 7 || programArguments.some((argument) => /[\r\n\0]/.test(argument))) throw new TypeError("launchd service must have one exact DSH web argument vector");
+	const expectedTail = [
+		"web",
+		"--host",
+		input.host,
+		"--port",
+		String(input.port)
+	];
+	if (programArguments.slice(2).some((argument, index) => argument !== expectedTail[index])) throw new TypeError("launchd service DSH web arguments do not match the Agent configuration");
+	if (singleValue(lines, "program") !== programArguments[0]) throw new TypeError("launchd service program does not match argv[0]");
+	const dshHome = environmentValue(lines, "DSH_HOME");
+	if (dshHome !== input.dshHome) throw new TypeError("launchd service DSH_HOME does not match the Agent configuration");
+	const nodePath = programArguments[0];
+	const entrypointPath = programArguments[1];
+	const runtimeIdentity = await inspectCurrentRuntimeIdentity({
+		execPath: nodePath,
+		entrypointPath
+	});
+	const definition = {
+		serviceTarget: input.serviceTarget,
+		programArguments,
+		dshHome,
+		runtimeDigest: runtimeIdentity.runtimeDigest
+	};
+	const rawPid = singleValue(lines, "pid");
+	const pid = Number(rawPid);
+	if (!Number.isSafeInteger(pid) || pid <= 0) throw new TypeError("launchd service pid is invalid");
+	return {
+		serviceTarget: input.serviceTarget,
+		programArguments,
+		dshHome,
+		runtimeIdentity,
+		serviceDefinitionDigest: sha256$1(JSON.stringify(definition)),
+		pid
+	};
+}
+//#endregion
 //#region src/agent/runtime.ts
 const RUNTIME_MANIFEST_FILENAME = "fleet.lock.yaml";
 const SNAPSHOT_FILES = [
@@ -9417,8 +10159,11 @@ const SNAPSHOT_FILES = [
 	"pnpm-lock.yaml",
 	"pnpm-workspace.yaml",
 	"cordis.patch.yml",
+	"cordis.yml",
 	RUNTIME_MANIFEST_FILENAME
 ];
+const REBUILT_PROFILE_DIRECTORY = "node_modules";
+const PROFILE_FILE_NAMES = new Set(SNAPSHOT_FILES);
 const MAX_OUTPUT_BYTES = 1048576;
 const TERMINATION_GRACE_MS = 2e3;
 const TERMINATION_CONFIRM_MS = 5e3;
@@ -9626,6 +10371,20 @@ async function readRegularFileSnapshot(path) {
 async function readRegularOptional(path) {
 	return (await readRegularFileSnapshot(path))?.source ?? null;
 }
+async function validateProfileLayout(dir) {
+	const entries = await readdir(dir, { withFileTypes: true });
+	for (const entry of entries) {
+		const path = join(dir, entry.name);
+		if (entry.name === REBUILT_PROFILE_DIRECTORY) {
+			const info = await lstat(path);
+			if (info.isSymbolicLink() || !info.isDirectory()) throw new AgentRuntimeError("unsafe-profile-directory", "profile node_modules must be a regular directory");
+			continue;
+		}
+		if (!PROFILE_FILE_NAMES.has(entry.name)) throw new AgentRuntimeError("profile-layout-unsupported", "profile contains unsupported top-level state");
+		const info = await lstat(path);
+		if (info.isSymbolicLink() || !info.isFile()) throw new AgentRuntimeError("unsafe-profile-file", "profile state accepts regular files only");
+	}
+}
 async function readProfileSnapshot(config) {
 	const dir = profileDir(config);
 	let directoryPresent = true;
@@ -9636,6 +10395,7 @@ async function readProfileSnapshot(config) {
 		if (error.code !== "ENOENT") throw error;
 		directoryPresent = false;
 	}
+	if (directoryPresent) await validateProfileLayout(dir);
 	const files = {};
 	for (const name of SNAPSHOT_FILES) files[name] = await readRegularOptional(join(dir, name));
 	return {
@@ -9670,6 +10430,14 @@ async function loadState(config, signal) {
 		profileHash: profile.hash,
 		profileSnapshot: profile,
 		dshVersion: await readDshVersion(config, signal)
+	};
+}
+async function loadDesiredManifest(config) {
+	const source = await readFile(config.desiredManifestPath, "utf8");
+	return {
+		manifest: parseFleetManifest(source),
+		manifestDigest: sha256(source),
+		source
 	};
 }
 function planPath(config, planId) {
@@ -10031,10 +10799,12 @@ async function stopDsh(config, signal) {
 		allowFailure: owners.size === 0,
 		signal
 	});
-	const deadline = Date.now() + 5e3;
+	const deadline = Date.now() + 1e4;
 	while (Date.now() < deadline) {
 		throwIfAborted(signal);
-		if ((await Promise.all(ports.map((port) => listenerPids(config, port, signal)))).flat().length === 0) return;
+		const active = (await Promise.all(ports.map((port) => listenerPids(config, port, signal)))).flat();
+		const launchdPid = config.restart.kind === "launchd" ? await currentLaunchdPid(config, signal) : null;
+		if (active.length === 0 && (config.restart.kind === "screen" || launchdPid === null)) return;
 		await new Promise((resolve) => setTimeout(resolve, 100));
 	}
 	if (config.restart.kind === "screen") {
@@ -10052,6 +10822,22 @@ async function stopDsh(config, signal) {
 		if ((await Promise.all(ports.map((port) => listenerPids(config, port, signal)))).flat().length === 0) return;
 	}
 	throw new AgentRuntimeError("restart-cleanup-failed", "managed DSH listeners did not exit cleanly");
+}
+async function currentLaunchdPid(config, signal) {
+	if (config.restart.kind !== "launchd") return null;
+	const result = await runFile(config.restart.launchctlBinary, ["print", config.restart.serviceTarget], {
+		env: controlledEnv(config),
+		timeoutMs: 1e4,
+		allowFailure: true,
+		signal
+	});
+	if (result.code !== 0) return null;
+	const matches = [...result.stdout.matchAll(/^\s*pid = ([0-9]+)\s*$/gm)];
+	if (matches.length === 0) return null;
+	if (matches.length !== 1) throw new AgentRuntimeError("restart-cleanup-failed", "launchd reported an ambiguous DSH process owner");
+	const pid = Number(matches[0][1]);
+	if (!Number.isSafeInteger(pid) || pid <= 0) throw new AgentRuntimeError("restart-cleanup-failed", "launchd reported an invalid DSH process owner");
+	return pid;
 }
 async function startDsh(config, signal) {
 	assertMutationReadyConfig(config);
@@ -10130,6 +10916,7 @@ async function verifyHealth(config, plan, signal, expectedPluginIds = [], expect
 	let targetPending = targetIds.length > 0;
 	let runtimeFailed = false;
 	let manifestPathMismatch = false;
+	let runtimeIdentityInvalid = false;
 	while (Date.now() < deadline) {
 		throwIfAborted(signal);
 		const rpcId = "fleet-agent-health-" + randomUUID();
@@ -10156,7 +10943,14 @@ async function verifyHealth(config, plan, signal, expectedPluginIds = [], expect
 				const fleetHealthy = body.rpcId === rpcId && body.result?.ok === true && body.result.value?.summary?.failed === 0 && runtimeHealthy && !manifestPathMismatch;
 				const plugins = body.result?.value?.plugins ?? [];
 				targetPending = targetIds.some((id) => plugins.find((item) => item.id === id)?.state !== "aligned");
-				if (fleetHealthy && !targetPending) return;
+				let runtimeIdentity = null;
+				if (body.result?.value?.runtimeIdentity !== void 0) try {
+					validateRuntimeIdentity(body.result.value.runtimeIdentity);
+					runtimeIdentity = body.result.value.runtimeIdentity;
+				} catch {
+					runtimeIdentityInvalid = true;
+				}
+				if (fleetHealthy && !targetPending && !runtimeIdentityInvalid) return runtimeIdentity;
 			}
 		} catch {
 			throwIfAborted(signal);
@@ -10165,8 +10959,53 @@ async function verifyHealth(config, plan, signal, expectedPluginIds = [], expect
 	}
 	if (runtimeFailed) throw new AgentRuntimeError("runtime-modules-failed", "DSH Loader reports failed runtime modules");
 	if (manifestPathMismatch) throw new AgentRuntimeError("fleet-runtime-manifest-path-mismatch", "Fleet runtime is not bound to the profile-local manifest");
+	if (runtimeIdentityInvalid) throw new AgentRuntimeError("runtime-identity-invalid", "Fleet RPC returned an invalid runtime identity");
 	if (targetPending) throw new AgentRuntimeError("plugin-not-active", "approved plugin did not become active");
 	throw new AgentRuntimeError("fleet-rpc-unhealthy", "Fleet RPC reported an unhealthy runtime");
+}
+async function inspectManagedReleaseRuntime(config, signal, options = {}) {
+	const [rpcRuntimeIdentity, configuredDshVersion] = await Promise.all([verifyHealth(config, void 0, signal, options.expectedPluginIds ?? [], runtimeManifestPath(config)), readDshVersion(config, signal)]);
+	if (config.restart.kind === "screen") {
+		if (rpcRuntimeIdentity === null) throw new AgentRuntimeError("runtime-identity-unavailable", "screen-managed releases require Fleet RPC runtime identity");
+		if (rpcRuntimeIdentity.dshVersion !== configuredDshVersion) throw new AgentRuntimeError("runtime-identity-mismatch", "configured DSH and running DSH versions do not match");
+		return {
+			runtimeIdentity: rpcRuntimeIdentity,
+			observedRuntimeDigest: rpcRuntimeIdentity.runtimeDigest,
+			observedServiceDefinitionDigest: null
+		};
+	}
+	const printed = await runFile(config.restart.launchctlBinary, ["print", config.restart.serviceTarget], {
+		env: controlledEnv(config),
+		timeoutMs: 1e4,
+		signal
+	});
+	let service;
+	try {
+		service = await inspectLaunchdServiceDefinition({
+			source: printed.stdout,
+			serviceTarget: config.restart.serviceTarget,
+			dshHome: config.dshHome,
+			host: config.restart.host,
+			port: config.restart.port
+		});
+	} catch (error) {
+		throw new AgentRuntimeError("service-definition-invalid", error instanceof Error ? error.message : "launchd service definition is invalid");
+	}
+	const listenerPid = (await listenerPids(config, config.restart.port, signal))[0];
+	if (listenerPid === void 0 || service.pid !== listenerPid) throw new AgentRuntimeError("restart-owner-mismatch", "launchd service PID does not own the configured DSH port");
+	await verifyListenerOwner(config, listenerPid, config.restart.port, signal);
+	if (service.runtimeIdentity.dshVersion !== configuredDshVersion) throw new AgentRuntimeError("runtime-identity-mismatch", "configured DSH and launchd DSH versions do not match");
+	if (rpcRuntimeIdentity === null) {
+		if (options.allowLegacyLaunchdIdentity !== true) throw new AgentRuntimeError("runtime-identity-unavailable", "Fleet RPC did not report the running DSH identity");
+	} else if (rpcRuntimeIdentity.runtimeDigest !== service.runtimeIdentity.runtimeDigest) throw new AgentRuntimeError("runtime-identity-mismatch", "Fleet RPC and launchd report different DSH runtimes");
+	return {
+		runtimeIdentity: service.runtimeIdentity,
+		observedRuntimeDigest: service.runtimeIdentity.runtimeDigest,
+		observedServiceDefinitionDigest: service.serviceDefinitionDigest
+	};
+}
+function assertObservedReleaseRuntime(observation, expected) {
+	if (observation.runtimeIdentity.dshVersion !== expected.observedDshVersion || observation.observedRuntimeDigest !== expected.observedRuntimeDigest || observation.observedServiceDefinitionDigest !== expected.observedServiceDefinitionDigest) throw new FleetProtocolError("approval-mismatch", "running DSH or its service definition changed after the plan was created");
 }
 function installArgument(plan) {
 	return plan.pluginId + "@" + plan.exactToSpec;
@@ -10440,6 +11279,26 @@ function releaseActionPath(config, planId) {
 	if (!/^release-plan:[0-9a-f]{64}$/.test(planId)) throw new AgentRuntimeError("invalid-plan-id", "release plan id is invalid");
 	return join(config.stateDir, "release-actions", planId.slice(13) + ".json");
 }
+function releaseRollbackDescriptorPath(config, transitionPlanId) {
+	if (!/^release-plan:[0-9a-f]{64}$/.test(transitionPlanId)) throw new AgentRuntimeError("invalid-plan-id", "release transition plan id is invalid");
+	return join(config.stateDir, "release-rollbacks", transitionPlanId.slice(13) + ".json");
+}
+function releaseRollbackPlanPath(config, planId) {
+	if (!/^release-rollback-plan:[0-9a-f]{64}$/.test(planId)) throw new AgentRuntimeError("invalid-plan-id", "release rollback plan id is invalid");
+	return join(config.stateDir, "release-rollback-plans", planId.slice(22) + ".json");
+}
+function releaseRollbackActionPath(config, planId) {
+	if (!/^release-rollback-plan:[0-9a-f]{64}$/.test(planId)) throw new AgentRuntimeError("invalid-plan-id", "release rollback plan id is invalid");
+	return join(config.stateDir, "release-rollback-actions", planId.slice(22) + ".json");
+}
+function releaseRetentionPlanPath(config, planId) {
+	if (!/^release-retention-plan:[0-9a-f]{64}$/.test(planId)) throw new AgentRuntimeError("invalid-plan-id", "release retention plan id is invalid");
+	return join(config.stateDir, "release-retention-plans", planId.slice(23) + ".json");
+}
+function releaseRetentionActionPath(config, planId) {
+	if (!/^release-retention-plan:[0-9a-f]{64}$/.test(planId)) throw new AgentRuntimeError("invalid-plan-id", "release retention plan id is invalid");
+	return join(config.stateDir, "release-retention-actions", planId.slice(23) + ".json");
+}
 function appliedReleasePath(config) {
 	return join(config.stateDir, "releases", config.profile + ".json");
 }
@@ -10468,31 +11327,114 @@ async function readAppliedRelease(config) {
 	if (value.deviceId !== config.deviceId || value.profile !== config.profile) throw new AgentRuntimeError("applied-release-mismatch", "applied release identity does not match this Agent");
 	return value;
 }
+const RELEASE_ROLLBACK_DESCRIPTOR_KEYS = [
+	"schemaVersion",
+	"transitionPlanId",
+	"transitionPlanDigest",
+	"deviceId",
+	"profile",
+	"fromManifestDigest",
+	"toManifestDigest",
+	"fromReleaseDigest",
+	"toReleaseDigest",
+	"fromProfileHash",
+	"backupProfile",
+	"previousAppliedRelease",
+	"createdAt"
+];
+function validateReleaseRollbackDescriptor(value) {
+	const body = objectValue(value);
+	if (body === null || Object.keys(body).sort().join(",") !== [...RELEASE_ROLLBACK_DESCRIPTOR_KEYS].sort().join(",")) throw new AgentRuntimeError("rollback-descriptor-invalid", "release rollback descriptor has unsupported or missing fields");
+	const createdAt = typeof body.createdAt === "string" ? Date.parse(body.createdAt) : NaN;
+	if (body.schemaVersion !== 1 || typeof body.transitionPlanId !== "string" || !/^release-plan:[0-9a-f]{64}$/.test(body.transitionPlanId) || typeof body.transitionPlanDigest !== "string" || !/^[0-9a-f]{64}$/.test(body.transitionPlanDigest) || typeof body.deviceId !== "string" || typeof body.profile !== "string" || typeof body.fromManifestDigest !== "string" || !/^[0-9a-f]{64}$/.test(body.fromManifestDigest) || typeof body.toManifestDigest !== "string" || !/^[0-9a-f]{64}$/.test(body.toManifestDigest) || body.fromReleaseDigest !== null && (typeof body.fromReleaseDigest !== "string" || !/^[0-9a-f]{64}$/.test(body.fromReleaseDigest)) || typeof body.toReleaseDigest !== "string" || !/^[0-9a-f]{64}$/.test(body.toReleaseDigest) || typeof body.fromProfileHash !== "string" || !/^[0-9a-f]{64}$/.test(body.fromProfileHash) || body.backupProfile !== null && (typeof body.backupProfile !== "string" || !/^fleet-backup-[0-9a-f]{24}$/.test(body.backupProfile)) || !Number.isFinite(createdAt) || new Date(createdAt).toISOString() !== body.createdAt || body.previousAppliedRelease !== null && typeof body.previousAppliedRelease !== "object") throw new AgentRuntimeError("rollback-descriptor-invalid", "release rollback descriptor is invalid");
+	if (body.transitionPlanId !== "release-plan:" + body.transitionPlanDigest) throw new AgentRuntimeError("rollback-descriptor-invalid", "release rollback descriptor transition digest is invalid");
+	if (body.previousAppliedRelease !== null) validateFleetAppliedRelease(body.previousAppliedRelease);
+}
+async function readReleaseRollbackDescriptor(config, transitionPlanId) {
+	const value = await readJson(releaseRollbackDescriptorPath(config, transitionPlanId));
+	if (value === null) return null;
+	validateReleaseRollbackDescriptor(value);
+	if (value.deviceId !== config.deviceId || value.profile !== config.profile || value.transitionPlanId !== transitionPlanId) throw new AgentRuntimeError("rollback-descriptor-invalid", "release rollback descriptor identity does not match this Agent");
+	return value;
+}
+async function persistReleaseRollbackDescriptor(config, plan, previousAppliedRelease) {
+	const descriptor = {
+		schemaVersion: 1,
+		transitionPlanId: plan.planId,
+		transitionPlanDigest: plan.digest,
+		deviceId: plan.deviceId,
+		profile: plan.profile,
+		fromManifestDigest: plan.fromManifestDigest,
+		toManifestDigest: plan.toManifestDigest,
+		fromReleaseDigest: plan.fromReleaseDigest,
+		toReleaseDigest: plan.toReleaseDigest,
+		fromProfileHash: plan.profileHash,
+		backupProfile: plan.restartRequired ? releaseProfileNames(plan).backupProfile : null,
+		previousAppliedRelease,
+		createdAt: (/* @__PURE__ */ new Date()).toISOString()
+	};
+	validateReleaseRollbackDescriptor(descriptor);
+	const existing = await readReleaseRollbackDescriptor(config, plan.planId);
+	if (existing !== null) {
+		const comparable = {
+			...descriptor,
+			createdAt: existing.createdAt
+		};
+		if (sha256Canonical(existing) !== sha256Canonical(comparable)) throw new AgentRuntimeError("rollback-descriptor-conflict", "release rollback descriptor does not match the approved transition");
+		return {
+			descriptor: existing,
+			digest: sha256Canonical(existing)
+		};
+	}
+	await atomicJson$1(releaseRollbackDescriptorPath(config, plan.planId), descriptor);
+	return {
+		descriptor,
+		digest: sha256Canonical(descriptor)
+	};
+}
+async function restoreAppliedReleaseMarker(config, previous) {
+	if (previous === null) {
+		await ensureDurableDirectory(dirname(appliedReleasePath(config)));
+		await rm(appliedReleasePath(config), { force: true });
+		await syncDirectory(dirname(appliedReleasePath(config)));
+		return;
+	}
+	validateFleetAppliedRelease(previous);
+	await atomicJson$1(appliedReleasePath(config), previous);
+}
 async function currentArtifactDigests(config, state) {
-	const releaseId = state.manifest.v2?.assignments[config.deviceId]?.[config.profile];
-	const release = releaseId === void 0 ? void 0 : state.manifest.v2?.profileReleases[releaseId];
-	const entries = await Promise.all((release?.plugins ?? []).filter((plugin) => plugin.source.kind === "artifact").map(async (plugin) => {
-		const actualSpec = state.dependencies[plugin.id];
-		if (actualSpec === void 0) return null;
+	const entries = await Promise.all(Object.entries(state.dependencies).map(async ([pluginId, actualSpec]) => {
 		const digest = await digestInstalledArtifact(profileDir(config), config.artifactStore, actualSpec);
-		return digest === void 0 ? null : [plugin.id, digest];
+		return digest === void 0 ? null : [pluginId, digest];
 	}));
 	return Object.fromEntries(entries.filter((entry) => entry !== null));
 }
+async function assertReleaseRemovalOwnership(config, state, plan, appliedRelease) {
+	for (const change of plan.changes.filter((candidate) => candidate.action === "remove")) {
+		const previous = appliedRelease?.plugins.find((plugin) => plugin.pluginId === change.pluginId);
+		const liveSpec = state.dependencies[change.pluginId];
+		if (previous === void 0 || liveSpec === void 0) throw new AgentRuntimeError("release-ownership-conflict", "retired plugin is no longer owned by the applied release marker");
+		if (!(previous.sourceKind === "artifact" ? await digestInstalledArtifact(profileDir(config), config.artifactStore, liveSpec) === previous.artifactDigest : liveSpec === previous.exactSpec)) throw new AgentRuntimeError("release-ownership-conflict", "retired plugin binding no longer matches the applied release marker");
+	}
+}
 async function buildReleasePlan(config, now, signal) {
 	const state = await loadState(config, signal);
+	const desired = await loadDesiredManifest(config);
 	const appliedRelease = await readAppliedRelease(config);
-	const runtimeManifestSource = state.profileSnapshot.files[RUNTIME_MANIFEST_FILENAME];
+	const runtime = await inspectManagedReleaseRuntime(config, signal, { allowLegacyLaunchdIdentity: true });
 	return {
 		plan: createReleasePlan({
-			manifest: state.manifest,
-			manifestDigest: state.manifestDigest,
-			runtimeManifestDigest: runtimeManifestSource === null ? null : sha256(runtimeManifestSource),
+			manifest: desired.manifest,
+			manifestDigest: desired.manifestDigest,
+			liveManifestDigest: state.manifestDigest,
+			runtimeManifestDigest: state.manifestDigest,
 			dependencies: state.dependencies,
 			artifactDigests: await currentArtifactDigests(config, state),
 			appliedRelease,
 			profileHash: state.profileHash,
-			observedDshVersion: state.dshVersion,
+			observedDshVersion: runtime.runtimeIdentity.dshVersion,
+			observedRuntimeDigest: runtime.observedRuntimeDigest,
+			observedServiceDefinitionDigest: runtime.observedServiceDefinitionDigest,
 			now,
 			deviceId: config.deviceId,
 			profile: config.profile,
@@ -10505,6 +11447,11 @@ async function buildReleasePlan(config, now, signal) {
 async function inspectReleaseAgent(config, now = /* @__PURE__ */ new Date(), signal) {
 	assertReleaseReadyConfig(config);
 	const { plan, appliedRelease } = await buildReleasePlan(config, now, signal);
+	const executionProfiles = await Promise.all([...config.tasks?.profiles ?? []].sort().map(async (profile) => ({
+		profile,
+		profileHash: await computeExecutionProfileHash(config.dshHome, profile)
+	})));
+	const retention = await releaseRetentionInspection(config);
 	return {
 		protocolVersion: 1,
 		kind: "profile-release",
@@ -10512,6 +11459,10 @@ async function inspectReleaseAgent(config, now = /* @__PURE__ */ new Date(), sig
 		profile: plan.profile,
 		dshVersion: plan.observedDshVersion,
 		manifestDigest: plan.manifestDigest,
+		liveManifestDigest: plan.fromManifestDigest,
+		desiredManifestDigest: plan.toManifestDigest,
+		observedRuntimeDigest: plan.observedRuntimeDigest,
+		observedServiceDefinitionDigest: plan.observedServiceDefinitionDigest,
 		profileHash: plan.profileHash,
 		currentRelease: appliedRelease === null ? null : {
 			releaseId: appliedRelease.releaseId,
@@ -10526,14 +11477,25 @@ async function inspectReleaseAgent(config, now = /* @__PURE__ */ new Date(), sig
 		changes: plan.changes,
 		tasks: {
 			enabled: config.tasks?.enabled === true && config.a2a !== void 0,
+			timeoutMs: config.tasks?.timeoutMs ?? null,
 			workspaceIds: Object.keys(config.tasks?.workspaces ?? {}).sort(),
-			profiles: [...config.tasks?.profiles ?? []].sort()
-		}
+			profiles: [...config.tasks?.profiles ?? []].sort(),
+			executionProfiles,
+			policies: (config.tasks?.policyIds ?? []).flatMap((policyId) => {
+				const policy = config.tasks?.policies?.[policyId];
+				return policy === void 0 ? [] : [{
+					policyId: policy.policyId,
+					policyDigest: policy.policyDigest,
+					permissionMode: policy.permissionMode
+				}];
+			}).sort((left, right) => left.policyId.localeCompare(right.policyId))
+		},
+		retention
 	};
 }
 async function verifyReleaseAgentHealth(config, signal) {
 	assertReleaseReadyConfig(config);
-	await verifyHealth(config, void 0, signal, [], runtimeManifestPath(config));
+	await inspectManagedReleaseRuntime(config, signal, { allowLegacyLaunchdIdentity: true });
 }
 async function createStoredReleasePlan(config, now = /* @__PURE__ */ new Date(), signal) {
 	assertReleaseReadyConfig(config);
@@ -10553,6 +11515,10 @@ async function createStoredReleasePlan(config, now = /* @__PURE__ */ new Date(),
 }
 async function readReleaseAction(config, planId) {
 	return readJson(releaseActionPath(config, planId));
+}
+function assertReleaseActionPlan(record, plan) {
+	const names = releaseProfileNames(plan);
+	if (record.planId !== plan.planId || record.planDigest !== plan.digest || record.deviceId !== plan.deviceId || record.profile !== plan.profile || record.releaseId !== plan.releaseId || record.releaseVersion !== plan.releaseVersion || record.releaseDigest !== plan.toReleaseDigest || record.fromManifestDigest !== plan.fromManifestDigest || record.toManifestDigest !== plan.toManifestDigest || record.fromReleaseDigest !== plan.fromReleaseDigest || record.toReleaseDigest !== plan.toReleaseDigest || record.stageProfile !== names.stageProfile || record.backupProfile !== names.backupProfile || !/^[0-9a-f]{64}$/.test(record.rollbackDescriptorDigest)) throw new AgentRuntimeError("action-state-invalid", "release action record does not match its transition plan");
 }
 async function saveReleaseAction(config, record, state, fields = {}) {
 	const next = {
@@ -10704,7 +11670,12 @@ async function removeChangedReleaseBindings(config, plan) {
 	if (source === null) throw new AgentRuntimeError("profile-missing", "staged release profile is missing");
 	const parsed = JSON.parse(source);
 	const dependencies = parsed.dependencies ?? {};
-	for (const id of removedIds) delete dependencies[id];
+	for (const id of removedIds) {
+		const change = plan.changes.find((candidate) => candidate.pluginId === id);
+		const liveBinding = dependencies[id];
+		if (change === void 0 || change.fromSpecDigest === null || liveBinding === void 0 || sha256(liveBinding) !== change.fromSpecDigest) throw new AgentRuntimeError("release-ownership-conflict", "live release binding no longer matches the approved previous binding");
+		delete dependencies[id];
+	}
 	parsed.dependencies = dependencies;
 	const profile = parsed.dsh?.profile;
 	if (profile !== void 0) profile.bundles = (profile.bundles ?? []).filter((id) => !removedIds.has(id));
@@ -10726,8 +11697,8 @@ async function stageRelease(config, plan, snapshot, signal) {
 		if (source !== null) await durableWriteFile(join(stageDir, name), source);
 	}
 	if (await computeProfileHash(stageConfig) !== plan.profileHash) throw new AgentRuntimeError("profile-stage-mismatch", "staged profile does not match the approved source profile");
-	const runtimeManifestSource = await readRegularOptional(config.manifestPath);
-	if (runtimeManifestSource === null || sha256(runtimeManifestSource) !== plan.manifestDigest) throw new AgentRuntimeError("release-runtime-manifest-mismatch", "approved Fleet runtime manifest is missing or changed");
+	const runtimeManifestSource = await readRegularOptional(config.desiredManifestPath);
+	if (runtimeManifestSource === null || sha256(runtimeManifestSource) !== plan.toManifestDigest) throw new AgentRuntimeError("release-runtime-manifest-mismatch", "approved Fleet runtime manifest is missing or changed");
 	await rm(runtimeManifestPath(stageConfig), { force: true });
 	await durableWriteFile(runtimeManifestPath(stageConfig), runtimeManifestSource);
 	await runFile(config.pnpmBinary, ["--version"], {
@@ -10809,14 +11780,16 @@ async function swapStagedRelease(config, plan, signal) {
 }
 async function persistAppliedRelease(config, plan) {
 	const applied = {
-		schemaVersion: 1,
+		schemaVersion: 2,
 		deviceId: plan.deviceId,
 		profile: plan.profile,
 		releaseId: plan.releaseId,
 		releaseVersion: plan.releaseVersion,
 		releaseDigest: plan.releaseDigest,
 		plugins: plan.plugins,
-		appliedAt: (/* @__PURE__ */ new Date()).toISOString()
+		appliedAt: (/* @__PURE__ */ new Date()).toISOString(),
+		transitionPlanId: plan.planId,
+		transitionPlanDigest: plan.digest
 	};
 	validateFleetAppliedRelease(applied);
 	await atomicJson$1(appliedReleasePath(config), applied);
@@ -10831,7 +11804,14 @@ async function rollbackRelease(config, plan, record, errorCode) {
 	const failedDir = join(profilesRoot, names.failedProfile);
 	let current = (await saveReleaseActionBestEffort(config, record, "rollback", { errorCode })).record;
 	try {
-		if (await regularDirectoryExists(backupDir)) {
+		const descriptor = await readReleaseRollbackDescriptor(config, plan.planId);
+		if (descriptor === null || descriptor.transitionPlanDigest !== plan.digest || sha256Canonical(descriptor) !== record.rollbackDescriptorDigest) throw new AgentRuntimeError("rollback-descriptor-invalid", "release rollback descriptor is missing or does not match the transition");
+		const backupExists = await regularDirectoryExists(backupDir);
+		if (!backupExists && plan.restartRequired) {
+			const liveManifest = await readRegularOptional(runtimeManifestPath(config));
+			if (liveManifest === null || sha256(liveManifest) !== plan.fromManifestDigest || await computeProfileHash(config) !== plan.profileHash) throw new AgentRuntimeError("rollback-backup-missing", "release backup is missing after the live profile changed");
+		}
+		if (backupExists) {
 			try {
 				await stopDsh(config);
 			} catch {
@@ -10849,10 +11829,14 @@ async function rollbackRelease(config, plan, record, errorCode) {
 			recursive: true,
 			force: true
 		});
+		await restoreAppliedReleaseMarker(config, descriptor.previousAppliedRelease);
 		current = await saveReleaseAction(config, current, "rollback-restarting");
 		await ensureServiceStarted(config);
 		current = await saveReleaseAction(config, current, "rollback-verifying");
-		await verifyHealth(config, void 0, void 0, [], runtimeManifestPath(config));
+		assertObservedReleaseRuntime(await inspectManagedReleaseRuntime(config, void 0, {
+			allowLegacyLaunchdIdentity: true,
+			expectedPluginIds: descriptor.previousAppliedRelease?.plugins.map((plugin) => plugin.pluginId) ?? []
+		}), plan);
 		await rm(failedDir, {
 			recursive: true,
 			force: true
@@ -10867,7 +11851,8 @@ async function rollbackRelease(config, plan, record, errorCode) {
 			result: "rolled-back",
 			errorCode
 		});
-	} catch {
+	} catch (rollbackError) {
+		const rollbackErrorCode = typeof rollbackError.code === "string" ? rollbackError.code : "rollback-failed";
 		await auditBestEffort(config, {
 			type: "profile-release/manual-intervention",
 			planId: plan.planId,
@@ -10876,33 +11861,37 @@ async function rollbackRelease(config, plan, record, errorCode) {
 		});
 		return (await saveReleaseActionBestEffort(config, current, "manual-intervention", {
 			result: "manual-intervention",
-			errorCode: "rollback-failed"
+			errorCode: rollbackErrorCode
 		})).record;
 	}
 }
 async function recoverReleaseInterrupted(config, plan, record) {
-	if ((await readAppliedRelease(config))?.releaseDigest === plan.releaseDigest) try {
-		await verifyReleaseProfileFiles(config, plan, config.profile);
-		await ensureServiceStarted(config);
-		await verifyHealth(config, void 0, void 0, plan.plugins.map((plugin) => plugin.pluginId), runtimeManifestPath(config));
-		const names = releaseProfileNames(plan);
-		const profilesRoot = dirname(profileDir(config));
-		await Promise.all([
-			rm(join(profilesRoot, names.stageProfile), {
+	const descriptor = await readReleaseRollbackDescriptor(config, plan.planId);
+	if (descriptor === null || descriptor.transitionPlanDigest !== plan.digest || sha256Canonical(descriptor) !== record.rollbackDescriptorDigest) return (await saveReleaseActionBestEffort(config, record, "manual-intervention", {
+		result: "manual-intervention",
+		errorCode: "rollback-descriptor-invalid"
+	})).record;
+	if ((await readAppliedRelease(config))?.releaseDigest === plan.releaseDigest) {
+		if (descriptor.backupProfile !== null && !await regularDirectoryExists(join(dirname(profileDir(config)), descriptor.backupProfile))) return (await saveReleaseActionBestEffort(config, record, "manual-intervention", {
+			result: "manual-intervention",
+			errorCode: "rollback-backup-missing"
+		})).record;
+		try {
+			await verifyReleaseProfileFiles(config, plan, config.profile);
+			await ensureServiceStarted(config);
+			assertObservedReleaseRuntime(await inspectManagedReleaseRuntime(config, void 0, { expectedPluginIds: plan.plugins.map((plugin) => plugin.pluginId) }), plan);
+			const names = releaseProfileNames(plan);
+			const profilesRoot = dirname(profileDir(config));
+			await Promise.all([rm(join(profilesRoot, names.stageProfile), {
 				recursive: true,
 				force: true
-			}),
-			rm(join(profilesRoot, names.backupProfile), {
+			}), rm(join(profilesRoot, names.failedProfile), {
 				recursive: true,
 				force: true
-			}),
-			rm(join(profilesRoot, names.failedProfile), {
-				recursive: true,
-				force: true
-			})
-		]);
-		return saveReleaseAction(config, record, "succeeded", { result: "success" });
-	} catch {}
+			})]);
+			return saveReleaseAction(config, record, "succeeded", { result: "success" });
+		} catch {}
+	}
 	return rollbackRelease(config, plan, record, "interrupted-action");
 }
 async function applyStoredReleasePlanLocked(config, approval, now, signal) {
@@ -10910,6 +11899,7 @@ async function applyStoredReleasePlanLocked(config, approval, now, signal) {
 	if (plan === null) throw new AgentRuntimeError("plan-not-found", "approved release plan was not found");
 	validateFleetReleasePlan(plan);
 	const existing = await readReleaseAction(config, plan.planId);
+	if (existing !== null) assertReleaseActionPlan(existing, plan);
 	let validation;
 	try {
 		validation = validateFleetReleaseApproval(plan, approval, now);
@@ -10938,8 +11928,13 @@ async function applyStoredReleasePlanLocked(config, approval, now, signal) {
 		return recoverReleaseInterrupted(config, plan, existing);
 	}
 	const current = await loadState(config, signal);
-	if (current.manifestDigest !== plan.manifestDigest || current.profileHash !== plan.profileHash || current.dshVersion !== plan.observedDshVersion) throw new FleetProtocolError("approval-mismatch", "manifest, profile or DSH version changed after the release plan was created");
-	await verifyHealth(config, void 0, signal, [], runtimeManifestPath(config));
+	const desired = await loadDesiredManifest(config);
+	const currentApplied = await readAppliedRelease(config);
+	const currentRuntime = await inspectManagedReleaseRuntime(config, signal, { allowLegacyLaunchdIdentity: true });
+	if (current.manifestDigest !== plan.fromManifestDigest || desired.manifestDigest !== plan.toManifestDigest || current.profileHash !== plan.profileHash || current.dshVersion !== plan.observedDshVersion || (currentApplied?.releaseDigest ?? null) !== plan.fromReleaseDigest) throw new FleetProtocolError("approval-mismatch", "live/desired manifest, applied release, profile or DSH version changed after the release plan was created");
+	assertObservedReleaseRuntime(currentRuntime, plan);
+	await assertReleaseRemovalOwnership(config, current, plan, currentApplied);
+	const rollback = await persistReleaseRollbackDescriptor(config, plan, currentApplied);
 	const names = releaseProfileNames(plan);
 	let record = {
 		planId: plan.planId,
@@ -10952,6 +11947,11 @@ async function applyStoredReleasePlanLocked(config, approval, now, signal) {
 		releaseId: plan.releaseId,
 		releaseVersion: plan.releaseVersion,
 		releaseDigest: plan.releaseDigest,
+		fromManifestDigest: plan.fromManifestDigest,
+		toManifestDigest: plan.toManifestDigest,
+		fromReleaseDigest: plan.fromReleaseDigest,
+		toReleaseDigest: plan.toReleaseDigest,
+		rollbackDescriptorDigest: rollback.digest,
 		stageProfile: names.stageProfile,
 		backupProfile: names.backupProfile,
 		state: "approved",
@@ -10969,7 +11969,7 @@ async function applyStoredReleasePlanLocked(config, approval, now, signal) {
 	try {
 		if (!plan.restartRequired) {
 			await verifyReleaseProfileFiles(config, plan, config.profile);
-			await verifyHealth(config, void 0, signal, plan.plugins.map((plugin) => plugin.pluginId), runtimeManifestPath(config));
+			assertObservedReleaseRuntime(await inspectManagedReleaseRuntime(config, signal, { expectedPluginIds: plan.plugins.map((plugin) => plugin.pluginId) }), plan);
 			await persistAppliedRelease(config, plan);
 			releaseCommitted = true;
 			record = await saveReleaseAction(config, record, "succeeded", { result: "success" });
@@ -10984,7 +11984,15 @@ async function applyStoredReleasePlanLocked(config, approval, now, signal) {
 		record = await saveReleaseAction(config, record, "staging");
 		await stageRelease(config, plan, current.profileSnapshot, signal);
 		throwIfAborted(signal);
-		if (await computeProfileHash(config) !== plan.profileHash) throw new FleetProtocolError("approval-mismatch", "live profile changed while the release was staged");
+		const [preSwapProfileHash, preSwapDshVersion, preSwapDesired, preSwapApplied] = await Promise.all([
+			computeProfileHash(config),
+			readDshVersion(config, signal),
+			loadDesiredManifest(config),
+			readAppliedRelease(config)
+		]);
+		if (preSwapProfileHash !== plan.profileHash || preSwapDshVersion !== plan.observedDshVersion || preSwapDesired.manifestDigest !== plan.toManifestDigest || (preSwapApplied?.releaseDigest ?? null) !== plan.fromReleaseDigest) throw new FleetProtocolError("approval-mismatch", "live profile, DSH, desired manifest, or applied release changed while the release was staged");
+		assertObservedReleaseRuntime(await inspectManagedReleaseRuntime(config, signal, { allowLegacyLaunchdIdentity: true }), plan);
+		await assertReleaseRemovalOwnership(config, current, plan, preSwapApplied);
 		record = await saveReleaseAction(config, record, "staged");
 		record = await saveReleaseAction(config, record, "applying");
 		await swapStagedRelease(config, plan, signal);
@@ -10994,7 +12002,7 @@ async function applyStoredReleasePlanLocked(config, approval, now, signal) {
 		throwIfAborted(signal);
 		record = await saveReleaseAction(config, record, "verifying");
 		await verifyReleaseProfileFiles(config, plan, config.profile);
-		await verifyHealth(config, void 0, signal, plan.plugins.map((plugin) => plugin.pluginId), runtimeManifestPath(config));
+		assertObservedReleaseRuntime(await inspectManagedReleaseRuntime(config, signal, { expectedPluginIds: plan.plugins.map((plugin) => plugin.pluginId) }), plan);
 		throwIfAborted(signal);
 		await persistAppliedRelease(config, plan);
 		releaseCommitted = true;
@@ -11005,11 +12013,6 @@ async function applyStoredReleasePlanLocked(config, approval, now, signal) {
 			releaseId: plan.releaseId,
 			result: "success"
 		});
-		const profilesRoot = dirname(profileDir(config));
-		await rm(join(profilesRoot, names.backupProfile), {
-			recursive: true,
-			force: true
-		}).catch(() => void 0);
 		return record;
 	} catch (error) {
 		if (releaseCommitted) return recoverReleaseInterrupted(config, plan, record);
@@ -11031,15 +12034,750 @@ async function readOrRecoverReleaseAction(config, planId) {
 	assertReleaseReadyConfig(config);
 	return withProfileLock(config, async () => {
 		const record = await readReleaseAction(config, planId);
-		if (record === null || [
+		if (record === null) return null;
+		const plan = await readJson(releasePlanPath(config, planId));
+		if (plan === null) throw new AgentRuntimeError("plan-not-found", "approved release plan was not found");
+		validateFleetReleasePlan(plan);
+		assertReleaseActionPlan(record, plan);
+		if ([
 			"succeeded",
 			"rolled-back",
 			"manual-intervention"
 		].includes(record.state)) return record;
-		const plan = await readJson(releasePlanPath(config, planId));
-		if (plan === null) throw new AgentRuntimeError("plan-not-found", "approved release plan was not found");
-		validateFleetReleasePlan(plan);
 		return recoverReleaseInterrupted(config, plan, record);
+	});
+}
+function releaseRollbackForwardProfile(plan) {
+	return "fleet-rollforward-" + plan.digest.slice(0, 24);
+}
+async function readReleaseRollbackAction(config, planId) {
+	return readJson(releaseRollbackActionPath(config, planId));
+}
+function assertReleaseRollbackActionPlan(record, plan) {
+	if (record.planId !== plan.planId || record.planDigest !== plan.digest || record.transitionPlanId !== plan.transitionPlanId || record.deviceId !== plan.deviceId || record.profile !== plan.profile || record.fromManifestDigest !== plan.fromManifestDigest || record.toManifestDigest !== plan.toManifestDigest || record.fromReleaseDigest !== plan.fromReleaseDigest || record.toReleaseDigest !== plan.toReleaseDigest) throw new AgentRuntimeError("action-state-invalid", "release rollback action record does not match its plan");
+}
+async function saveReleaseRollbackAction(config, record, state, fields = {}) {
+	const next = {
+		...record,
+		...fields,
+		state,
+		updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+	};
+	await atomicJson$1(releaseRollbackActionPath(config, record.planId), next);
+	return next;
+}
+async function saveReleaseRollbackActionBestEffort(config, record, state, fields = {}) {
+	const next = {
+		...record,
+		...fields,
+		state,
+		updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+	};
+	try {
+		await atomicJson$1(releaseRollbackActionPath(config, record.planId), next);
+	} catch {}
+	return next;
+}
+function assertRollbackDescriptorTransition(descriptor, transition) {
+	if (descriptor.transitionPlanId !== transition.planId || descriptor.transitionPlanDigest !== transition.digest || descriptor.fromManifestDigest !== transition.fromManifestDigest || descriptor.toManifestDigest !== transition.toManifestDigest || descriptor.fromReleaseDigest !== transition.fromReleaseDigest || descriptor.toReleaseDigest !== transition.toReleaseDigest || descriptor.fromProfileHash !== transition.profileHash || descriptor.backupProfile !== (transition.restartRequired ? releaseProfileNames(transition).backupProfile : null) || (descriptor.previousAppliedRelease?.releaseDigest ?? null) !== transition.fromReleaseDigest) throw new AgentRuntimeError("rollback-descriptor-invalid", "release rollback descriptor does not match its transition plan");
+}
+function releaseRetentionQuarantineProfile(plan, transitionPlanId) {
+	return "fleet-failed-" + sha256Canonical({
+		kind: "release-retention-quarantine",
+		planId: plan.planId,
+		transitionPlanId
+	}).slice(0, 24);
+}
+async function readRealDirectoryEntries(path) {
+	try {
+		const info = await lstat(path);
+		if (info.isSymbolicLink() || !info.isDirectory()) throw new AgentRuntimeError("unsafe-state-directory", "release retention state accepts real directories only");
+		return readdir(path, { withFileTypes: true });
+	} catch (error) {
+		if (error.code === "ENOENT") return [];
+		throw error;
+	}
+}
+async function readRetentionTransitionMaterial(config, transitionPlanId) {
+	const transition = await readJson(releasePlanPath(config, transitionPlanId));
+	const descriptor = await readReleaseRollbackDescriptor(config, transitionPlanId);
+	const action = await readReleaseAction(config, transitionPlanId);
+	if (transition === null || descriptor === null || action === null) return null;
+	validateFleetReleasePlan(transition);
+	if (transition.deviceId !== config.deviceId || transition.profile !== config.profile) throw new AgentRuntimeError("retention-transition-invalid", "release retention transition belongs to another Agent");
+	assertRollbackDescriptorTransition(descriptor, transition);
+	assertReleaseActionPlan(action, transition);
+	const descriptorDigest = sha256Canonical(descriptor);
+	if (action.state !== "succeeded" || action.result !== "success" || action.rollbackDescriptorDigest !== descriptorDigest) throw new AgentRuntimeError("retention-transition-invalid", "release retention requires a successful transition with its exact descriptor");
+	if (descriptor.backupProfile !== null) {
+		const backup = await profileManifestAndHash(config, descriptor.backupProfile);
+		if (backup.manifestDigest !== descriptor.fromManifestDigest || backup.profileHash !== descriptor.fromProfileHash) throw new AgentRuntimeError("retention-backup-mismatch", "release backup no longer matches its transition descriptor");
+	}
+	return {
+		transition,
+		descriptor,
+		descriptorDigest
+	};
+}
+async function successfullyRolledBackTransitionIds(config) {
+	const result = /* @__PURE__ */ new Set();
+	const entries = (await readRealDirectoryEntries(join(config.stateDir, "release-rollback-actions"))).filter((entry) => /^[0-9a-f]{64}\.json$/.test(entry.name)).sort((left, right) => left.name.localeCompare(right.name));
+	if (entries.length > 4096) throw new AgentRuntimeError("retention-inventory-limit", "release rollback action inventory is too large");
+	for (const entry of entries) {
+		if (entry.isSymbolicLink() || !entry.isFile()) continue;
+		const planId = "release-rollback-plan:" + entry.name.slice(0, 64);
+		try {
+			const plan = await readJson(releaseRollbackPlanPath(config, planId));
+			const action = await readReleaseRollbackAction(config, planId);
+			if (plan === null || action === null) continue;
+			validateFleetReleaseRollbackPlan(plan);
+			assertReleaseRollbackActionPlan(action, plan);
+			if (plan.deviceId === config.deviceId && plan.profile === config.profile && action.state === "succeeded" && action.result === "success") result.add(plan.transitionPlanId);
+		} catch {}
+	}
+	const releaseActionEntries = (await readRealDirectoryEntries(join(config.stateDir, "release-actions"))).filter((entry) => /^[0-9a-f]{64}\.json$/.test(entry.name)).sort((left, right) => left.name.localeCompare(right.name));
+	if (releaseActionEntries.length > 4096) throw new AgentRuntimeError("retention-inventory-limit", "release action inventory is too large");
+	for (const entry of releaseActionEntries) {
+		if (entry.isSymbolicLink() || !entry.isFile()) continue;
+		const transitionPlanId = "release-plan:" + entry.name.slice(0, 64);
+		try {
+			const plan = await readJson(releasePlanPath(config, transitionPlanId));
+			const action = await readReleaseAction(config, transitionPlanId);
+			const descriptor = await readReleaseRollbackDescriptor(config, transitionPlanId);
+			if (plan === null || action === null || descriptor === null) continue;
+			validateFleetReleasePlan(plan);
+			assertReleaseActionPlan(action, plan);
+			assertRollbackDescriptorTransition(descriptor, plan);
+			if (plan.deviceId === config.deviceId && plan.profile === config.profile && action.state === "rolled-back" && action.result === "rolled-back" && action.rollbackDescriptorDigest === sha256Canonical(descriptor)) result.add(transitionPlanId);
+		} catch {}
+	}
+	return result;
+}
+async function discoverReleaseRetention(config, strictChain) {
+	const materials = /* @__PURE__ */ new Map();
+	const legalBackupProfiles = /* @__PURE__ */ new Set();
+	const rolledBackTransitionPlanIds = await successfullyRolledBackTransitionIds(config);
+	let invalidTransitionCount = 0;
+	const descriptorEntries = (await readRealDirectoryEntries(join(config.stateDir, "release-rollbacks"))).filter((entry) => /^[0-9a-f]{64}\.json$/.test(entry.name)).sort((left, right) => left.name.localeCompare(right.name));
+	if (descriptorEntries.length > 4096) throw new AgentRuntimeError("retention-inventory-limit", "release retention descriptor inventory is too large");
+	for (const entry of descriptorEntries) {
+		const transitionPlanId = "release-plan:" + entry.name.slice(0, 64);
+		try {
+			if (entry.isSymbolicLink() || !entry.isFile()) throw new AgentRuntimeError("unsafe-state-file", "release descriptor must be a regular file");
+			if (rolledBackTransitionPlanIds.has(transitionPlanId)) continue;
+			const material = await readRetentionTransitionMaterial(config, transitionPlanId);
+			if (material === null) {
+				invalidTransitionCount += 1;
+				continue;
+			}
+			materials.set(transitionPlanId, material);
+			if (material.descriptor.backupProfile !== null) legalBackupProfiles.add(material.descriptor.backupProfile);
+		} catch {
+			invalidTransitionCount += 1;
+		}
+	}
+	const activeStageProfiles = /* @__PURE__ */ new Set();
+	const activeFailedProfiles = /* @__PURE__ */ new Set();
+	const activeBackupProfiles = /* @__PURE__ */ new Set();
+	const actionEntries = (await readRealDirectoryEntries(join(config.stateDir, "release-actions"))).filter((entry) => /^[0-9a-f]{64}\.json$/.test(entry.name)).sort((left, right) => left.name.localeCompare(right.name));
+	if (actionEntries.length > 4096) throw new AgentRuntimeError("retention-inventory-limit", "release retention action inventory is too large");
+	for (const entry of actionEntries) {
+		if (entry.isSymbolicLink() || !entry.isFile()) continue;
+		const transitionPlanId = "release-plan:" + entry.name.slice(0, 64);
+		try {
+			const transition = await readJson(releasePlanPath(config, transitionPlanId));
+			const action = await readReleaseAction(config, transitionPlanId);
+			if (transition === null || action === null) continue;
+			validateFleetReleasePlan(transition);
+			assertReleaseActionPlan(action, transition);
+			if (![
+				"succeeded",
+				"rolled-back",
+				"manual-intervention"
+			].includes(action.state)) {
+				activeStageProfiles.add(action.stageProfile);
+				activeBackupProfiles.add(action.backupProfile);
+				activeFailedProfiles.add(releaseProfileNames(transition).failedProfile);
+			}
+		} catch {}
+	}
+	const retiredTransitionPlanIds = new Set(rolledBackTransitionPlanIds);
+	const retentionActionEntries = (await readRealDirectoryEntries(join(config.stateDir, "release-retention-actions"))).filter((entry) => /^[0-9a-f]{64}\.json$/.test(entry.name)).sort((left, right) => left.name.localeCompare(right.name));
+	if (retentionActionEntries.length > 4096) throw new AgentRuntimeError("retention-inventory-limit", "release retention cleanup inventory is too large");
+	for (const entry of retentionActionEntries) {
+		if (entry.isSymbolicLink() || !entry.isFile()) continue;
+		const planId = "release-retention-plan:" + entry.name.slice(0, 64);
+		try {
+			const plan = await readJson(releaseRetentionPlanPath(config, planId));
+			if (plan === null) continue;
+			validateFleetReleaseRetentionPlan(plan);
+			const action = await readReleaseRetentionAction(config, plan);
+			if (action === null) continue;
+			if (action.state === "succeeded") for (const transitionPlanId of action.removedTransitionPlanIds) retiredTransitionPlanIds.add(transitionPlanId);
+			else if (action.activeTransitionPlanId !== null) activeFailedProfiles.add(releaseRetentionQuarantineProfile(plan, action.activeTransitionPlanId));
+		} catch {}
+	}
+	const applied = await readAppliedRelease(config);
+	const currentTransitionPlanId = applied?.schemaVersion === 2 ? applied.transitionPlanId : null;
+	const retainedTransitionPlanIds = [];
+	const entries = [];
+	const seen = /* @__PURE__ */ new Set();
+	let marker = applied;
+	let depth = 0;
+	while (marker?.schemaVersion === 2) {
+		const transitionPlanId = marker.transitionPlanId;
+		if (seen.has(transitionPlanId) || seen.size >= 4096) {
+			if (strictChain) throw new AgentRuntimeError("retention-chain-invalid", "release retention transition chain is cyclic or too deep");
+			invalidTransitionCount += 1;
+			break;
+		}
+		seen.add(transitionPlanId);
+		const material = materials.get(transitionPlanId);
+		if (material === void 0) {
+			if (depth > 0 && retiredTransitionPlanIds.has(transitionPlanId)) break;
+			if (strictChain && depth < 2) throw new AgentRuntimeError("retention-chain-invalid", "current or previous release transition has no valid rollback descriptor");
+			break;
+		}
+		if (marker.deviceId !== config.deviceId || marker.profile !== config.profile || marker.transitionPlanDigest !== material.transition.digest || marker.releaseDigest !== material.transition.toReleaseDigest || marker.releaseId !== material.transition.releaseId || marker.releaseVersion !== material.transition.releaseVersion) {
+			if (strictChain) throw new AgentRuntimeError("retention-chain-invalid", "applied release marker does not match its transition chain");
+			invalidTransitionCount += 1;
+			break;
+		}
+		if (depth < 2) retainedTransitionPlanIds.push(transitionPlanId);
+		else entries.push({
+			transitionPlanId,
+			descriptorDigest: material.descriptorDigest,
+			backupProfile: material.descriptor.backupProfile,
+			backupManifestDigest: material.descriptor.backupProfile === null ? null : material.descriptor.fromManifestDigest,
+			backupProfileHash: material.descriptor.backupProfile === null ? null : material.descriptor.fromProfileHash,
+			reason: "superseded"
+		});
+		marker = material.descriptor.previousAppliedRelease;
+		depth += 1;
+	}
+	const orphanBackupProfiles = [];
+	const orphanStageProfiles = [];
+	const orphanFailedProfiles = [];
+	const profilesRoot = dirname(profileDir(config));
+	for (const entry of (await readRealDirectoryEntries(profilesRoot)).sort((left, right) => left.name.localeCompare(right.name))) if (/^fleet-backup-[0-9a-f]{24}$/.test(entry.name) && !legalBackupProfiles.has(entry.name) && !activeBackupProfiles.has(entry.name)) orphanBackupProfiles.push(entry.name);
+	else if (/^fleet-stage-[0-9a-f]{24}$/.test(entry.name) && !activeStageProfiles.has(entry.name)) orphanStageProfiles.push(entry.name);
+	else if (/^fleet-failed-[0-9a-f]{24}$/.test(entry.name) && !activeFailedProfiles.has(entry.name)) orphanFailedProfiles.push(entry.name);
+	return {
+		currentTransitionPlanId,
+		retainedTransitionPlanIds: retainedTransitionPlanIds.sort(),
+		entries: entries.sort((left, right) => left.transitionPlanId.localeCompare(right.transitionPlanId)),
+		orphanBackupProfiles,
+		orphanStageProfiles,
+		orphanFailedProfiles,
+		invalidTransitionCount
+	};
+}
+async function releaseRetentionInspection(config) {
+	const discovery = await discoverReleaseRetention(config, false);
+	const orphanCount = discovery.orphanBackupProfiles.length + discovery.orphanStageProfiles.length + discovery.orphanFailedProfiles.length;
+	return {
+		retainedCount: discovery.retainedTransitionPlanIds.length,
+		eligibleCount: discovery.entries.length,
+		orphanBackupCount: discovery.orphanBackupProfiles.length,
+		orphanStageCount: discovery.orphanStageProfiles.length,
+		orphanFailedCount: discovery.orphanFailedProfiles.length,
+		orphanCount,
+		invalidTransitionCount: discovery.invalidTransitionCount
+	};
+}
+async function buildReleaseRetentionPlan(config, createdAt, expiresAt) {
+	const discovery = await discoverReleaseRetention(config, true);
+	return createFleetReleaseRetentionPlan({
+		protocolVersion: 1,
+		kind: "profile-release-retention",
+		deviceId: config.deviceId,
+		profile: config.profile,
+		currentTransitionPlanId: discovery.currentTransitionPlanId,
+		retainedTransitionPlanIds: discovery.retainedTransitionPlanIds,
+		entries: discovery.entries,
+		orphanBackupProfiles: discovery.orphanBackupProfiles,
+		orphanStageProfiles: discovery.orphanStageProfiles,
+		orphanFailedProfiles: discovery.orphanFailedProfiles,
+		createdAt,
+		expiresAt
+	});
+}
+const RELEASE_RETENTION_ACTION_KEYS = [
+	"planId",
+	"planDigest",
+	"approvalId",
+	"principalId",
+	"idempotencyKey",
+	"deviceId",
+	"profile",
+	"currentTransitionPlanId",
+	"state",
+	"removedTransitionPlanIds",
+	"activeTransitionPlanId",
+	"activeBackupQuarantinePrepared",
+	"activeBackupRemoved",
+	"updatedAt",
+	"result"
+];
+function validateReleaseRetentionAction(value, plan) {
+	const body = objectValue(value);
+	if (body === null || Object.keys(body).sort().join(",") !== [...RELEASE_RETENTION_ACTION_KEYS].sort().join(",")) throw new AgentRuntimeError("action-state-invalid", "release retention action has unsupported or missing fields");
+	const updatedAt = typeof body.updatedAt === "string" ? Date.parse(body.updatedAt) : NaN;
+	if (body.planId !== plan.planId || body.planDigest !== plan.digest || body.deviceId !== plan.deviceId || body.profile !== plan.profile || body.currentTransitionPlanId !== plan.currentTransitionPlanId || typeof body.approvalId !== "string" || typeof body.principalId !== "string" || typeof body.idempotencyKey !== "string" || !/^[0-9a-f]{64}$/.test(body.idempotencyKey) || ![
+		"approved",
+		"applying",
+		"succeeded"
+	].includes(body.state) || !Array.isArray(body.removedTransitionPlanIds) || body.removedTransitionPlanIds.some((id) => typeof id !== "string") || body.activeTransitionPlanId !== null && typeof body.activeTransitionPlanId !== "string" || typeof body.activeBackupQuarantinePrepared !== "boolean" || typeof body.activeBackupRemoved !== "boolean" || !Number.isFinite(updatedAt) || new Date(updatedAt).toISOString() !== body.updatedAt || body.result !== null && body.result !== "success") throw new AgentRuntimeError("action-state-invalid", "release retention action is invalid");
+	const entryIds = plan.entries.map((entry) => entry.transitionPlanId);
+	const removed = body.removedTransitionPlanIds;
+	if (new Set(removed).size !== removed.length || removed.some((id, index) => !entryIds.includes(id) || index > 0 && id <= removed[index - 1]) || body.activeTransitionPlanId !== null && (!entryIds.includes(body.activeTransitionPlanId) || removed.includes(body.activeTransitionPlanId)) || body.activeTransitionPlanId === null && (body.activeBackupQuarantinePrepared === true || body.activeBackupRemoved === true) || body.activeBackupQuarantinePrepared === true && body.activeBackupRemoved === true || body.state === "succeeded" && (body.result !== "success" || removed.length !== entryIds.length || body.activeTransitionPlanId !== null) || body.state !== "succeeded" && body.result !== null) throw new AgentRuntimeError("action-state-invalid", "release retention action progress is invalid");
+}
+async function readReleaseRetentionAction(config, plan) {
+	const value = await readJson(releaseRetentionActionPath(config, plan.planId));
+	if (value === null) return null;
+	validateReleaseRetentionAction(value, plan);
+	return value;
+}
+async function saveReleaseRetentionAction(config, value, fields) {
+	const next = {
+		...value,
+		...fields,
+		updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+	};
+	await atomicJson$1(releaseRetentionActionPath(config, value.planId), next);
+	return next;
+}
+function assertRetentionEntryDescriptor(entry, descriptor) {
+	if (descriptor.transitionPlanId !== entry.transitionPlanId || sha256Canonical(descriptor) !== entry.descriptorDigest || descriptor.backupProfile !== entry.backupProfile || (descriptor.backupProfile === null ? entry.backupManifestDigest !== null || entry.backupProfileHash !== null : descriptor.fromManifestDigest !== entry.backupManifestDigest || descriptor.fromProfileHash !== entry.backupProfileHash)) throw new AgentRuntimeError("retention-entry-mismatch", "release retention entry no longer matches its descriptor");
+}
+async function executeReleaseRetention(config, plan, initial) {
+	let record = initial;
+	for (const entry of plan.entries) {
+		if (record.removedTransitionPlanIds.includes(entry.transitionPlanId)) continue;
+		if (record.activeTransitionPlanId !== null && record.activeTransitionPlanId !== entry.transitionPlanId) throw new AgentRuntimeError("action-state-invalid", "release retention action has ambiguous progress");
+		if (record.activeTransitionPlanId === null) {
+			const material = await readRetentionTransitionMaterial(config, entry.transitionPlanId);
+			if (material === null) throw new AgentRuntimeError("retention-entry-mismatch", "release retention descriptor disappeared before cleanup");
+			assertRetentionEntryDescriptor(entry, material.descriptor);
+			record = await saveReleaseRetentionAction(config, record, {
+				state: "applying",
+				activeTransitionPlanId: entry.transitionPlanId,
+				activeBackupQuarantinePrepared: false,
+				activeBackupRemoved: entry.backupProfile === null
+			});
+		}
+		if (!record.activeBackupRemoved) {
+			const descriptor = await readReleaseRollbackDescriptor(config, entry.transitionPlanId);
+			if (descriptor === null) throw new AgentRuntimeError("retention-entry-mismatch", "release retention descriptor disappeared before its backup");
+			assertRetentionEntryDescriptor(entry, descriptor);
+			if (entry.backupProfile === null || entry.backupManifestDigest === null || entry.backupProfileHash === null) throw new AgentRuntimeError("retention-entry-mismatch", "release retention backup binding is incomplete");
+			const profilesRoot = dirname(profileDir(config));
+			const backupPath = join(profilesRoot, entry.backupProfile);
+			const quarantinePath = join(profilesRoot, releaseRetentionQuarantineProfile(plan, entry.transitionPlanId));
+			if (!record.activeBackupQuarantinePrepared) {
+				if (await regularDirectoryExists(quarantinePath)) throw new AgentRuntimeError("retention-layout-conflict", "release retention quarantine path is unexpectedly occupied");
+				const backup = await profileManifestAndHash(config, entry.backupProfile);
+				if (backup.manifestDigest !== entry.backupManifestDigest || backup.profileHash !== entry.backupProfileHash) throw new AgentRuntimeError("retention-backup-mismatch", "release retention backup changed after approval");
+				record = await saveReleaseRetentionAction(config, record, { activeBackupQuarantinePrepared: true });
+			}
+			const backupExists = await regularDirectoryExists(backupPath);
+			const quarantineExists = await regularDirectoryExists(quarantinePath);
+			if (backupExists && quarantineExists) throw new AgentRuntimeError("retention-layout-conflict", "release retention backup and quarantine both exist");
+			if (backupExists) {
+				const backup = await profileManifestAndHash(config, entry.backupProfile);
+				if (backup.manifestDigest !== entry.backupManifestDigest || backup.profileHash !== entry.backupProfileHash) throw new AgentRuntimeError("retention-backup-mismatch", "release retention backup changed before quarantine");
+				await rename(backupPath, quarantinePath);
+				await syncDirectory(profilesRoot);
+			}
+			if (await regularDirectoryExists(quarantinePath)) {
+				await rm(quarantinePath, { recursive: true });
+				await syncDirectory(profilesRoot);
+			}
+			record = await saveReleaseRetentionAction(config, record, {
+				activeBackupQuarantinePrepared: false,
+				activeBackupRemoved: true
+			});
+		} else if (entry.backupProfile !== null && (await regularDirectoryExists(join(dirname(profileDir(config)), entry.backupProfile)) || await regularDirectoryExists(join(dirname(profileDir(config)), releaseRetentionQuarantineProfile(plan, entry.transitionPlanId))))) throw new AgentRuntimeError("action-state-invalid", "a removed release backup or quarantine reappeared during retention");
+		const descriptor = await readReleaseRollbackDescriptor(config, entry.transitionPlanId);
+		if (descriptor !== null) {
+			assertRetentionEntryDescriptor(entry, descriptor);
+			await rm(releaseRollbackDescriptorPath(config, entry.transitionPlanId));
+			await syncDirectory(dirname(releaseRollbackDescriptorPath(config, entry.transitionPlanId)));
+		}
+		record = await saveReleaseRetentionAction(config, record, {
+			removedTransitionPlanIds: [...record.removedTransitionPlanIds, entry.transitionPlanId].sort(),
+			activeTransitionPlanId: null,
+			activeBackupQuarantinePrepared: false,
+			activeBackupRemoved: false
+		});
+		await auditBestEffort(config, {
+			type: "profile-release/retention-entry-removed",
+			planId: plan.planId,
+			transitionPlanId: entry.transitionPlanId,
+			backupProfile: entry.backupProfile
+		});
+	}
+	record = await saveReleaseRetentionAction(config, record, {
+		state: "succeeded",
+		result: "success"
+	});
+	await auditBestEffort(config, {
+		type: "profile-release/retention-applied",
+		planId: plan.planId,
+		removedTransitionPlanIds: record.removedTransitionPlanIds
+	});
+	return record;
+}
+async function createStoredReleaseRetentionPlan(config, now = /* @__PURE__ */ new Date()) {
+	assertReleaseReadyConfig(config);
+	return withProfileLock(config, async () => {
+		if (!Number.isFinite(now.getTime())) throw new AgentRuntimeError("invalid-time", "release retention plan time is invalid");
+		const plan = await buildReleaseRetentionPlan(config, now.toISOString(), new Date(now.getTime() + Math.min(config.planTtlMs, 36e5)).toISOString());
+		await atomicJson$1(releaseRetentionPlanPath(config, plan.planId), plan);
+		await audit(config, {
+			type: "profile-release/retention-plan-created",
+			planId: plan.planId,
+			retainedCount: plan.retainedTransitionPlanIds.length,
+			eligibleCount: plan.entries.length,
+			orphanCount: plan.orphanBackupProfiles.length + plan.orphanStageProfiles.length + plan.orphanFailedProfiles.length
+		});
+		return plan;
+	});
+}
+async function applyStoredReleaseRetentionPlan(config, approval, now = /* @__PURE__ */ new Date()) {
+	assertReleaseReadyConfig(config);
+	return withProfileLock(config, async () => {
+		const plan = await readJson(releaseRetentionPlanPath(config, approval.planId));
+		if (plan === null) throw new AgentRuntimeError("plan-not-found", "approved release retention plan was not found");
+		validateFleetReleaseRetentionPlan(plan);
+		let existing = await readReleaseRetentionAction(config, plan);
+		const identity = validateFleetReleaseRetentionApproval(plan, approval, approval.approvedAt);
+		if (existing !== null) {
+			if (existing.idempotencyKey !== identity.idempotencyKey) throw new AgentRuntimeError("idempotency-conflict", "release retention plan already has a different approval");
+			if (existing.state === "succeeded") return existing;
+			const current = await readAppliedRelease(config);
+			if ((current?.schemaVersion === 2 ? current.transitionPlanId : null) !== plan.currentTransitionPlanId) throw new AgentRuntimeError("retention-plan-stale", "a new release invalidated the in-progress retention plan");
+			if (existing.state === "approved" && existing.removedTransitionPlanIds.length === 0 && existing.activeTransitionPlanId === null) {
+				if ((await buildReleaseRetentionPlan(config, plan.createdAt, plan.expiresAt)).digest !== plan.digest) throw new AgentRuntimeError("retention-plan-stale", "release retention state changed after approval");
+			}
+			return executeReleaseRetention(config, plan, existing);
+		}
+		validateFleetReleaseRetentionApproval(plan, approval, now);
+		if ((await buildReleaseRetentionPlan(config, plan.createdAt, plan.expiresAt)).digest !== plan.digest) throw new AgentRuntimeError("retention-plan-stale", "release retention state changed after the plan was created");
+		existing = {
+			planId: plan.planId,
+			planDigest: plan.digest,
+			approvalId: approval.approvalId,
+			principalId: approval.principalId,
+			idempotencyKey: identity.idempotencyKey,
+			deviceId: plan.deviceId,
+			profile: plan.profile,
+			currentTransitionPlanId: plan.currentTransitionPlanId,
+			state: "approved",
+			removedTransitionPlanIds: [],
+			activeTransitionPlanId: null,
+			activeBackupQuarantinePrepared: false,
+			activeBackupRemoved: false,
+			updatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+			result: null
+		};
+		await atomicJson$1(releaseRetentionActionPath(config, plan.planId), existing);
+		await audit(config, {
+			type: "profile-release/retention-approved",
+			planId: plan.planId,
+			approvalId: approval.approvalId,
+			principalId: approval.principalId
+		});
+		return executeReleaseRetention(config, plan, existing);
+	});
+}
+async function readReleaseRetentionActionStatus(config, planId) {
+	assertReleaseReadyConfig(config);
+	return withProfileLock(config, async () => {
+		const plan = await readJson(releaseRetentionPlanPath(config, planId));
+		if (plan === null) throw new AgentRuntimeError("plan-not-found", "release retention plan was not found");
+		validateFleetReleaseRetentionPlan(plan);
+		return readReleaseRetentionAction(config, plan);
+	});
+}
+async function readRollbackTransition(config, transitionPlanId) {
+	const transition = await readJson(releasePlanPath(config, transitionPlanId));
+	if (transition === null) throw new AgentRuntimeError("plan-not-found", "release transition plan was not found");
+	validateFleetReleasePlan(transition);
+	if (transition.deviceId !== config.deviceId || transition.profile !== config.profile) throw new AgentRuntimeError("rollback-descriptor-invalid", "release transition identity does not match this Agent");
+	const descriptor = await readReleaseRollbackDescriptor(config, transition.planId);
+	if (descriptor === null) throw new AgentRuntimeError("rollback-not-available", "release transition has no durable rollback descriptor");
+	assertRollbackDescriptorTransition(descriptor, transition);
+	return {
+		transition,
+		descriptor
+	};
+}
+function assertRollbackPlanDescriptor(plan, transition, descriptor) {
+	if (transition.digest !== plan.transitionPlanDigest || transition.deviceId !== plan.deviceId || transition.profile !== plan.profile || descriptor.toManifestDigest !== plan.fromManifestDigest || descriptor.fromManifestDigest !== plan.toManifestDigest || descriptor.toReleaseDigest !== plan.fromReleaseDigest || descriptor.fromReleaseDigest !== plan.toReleaseDigest || descriptor.fromProfileHash !== plan.toProfileHash) throw new AgentRuntimeError("rollback-descriptor-invalid", "release rollback plan no longer matches its transition descriptor");
+}
+async function profileManifestAndHash(config, profile) {
+	const targetConfig = configForProfile(config, profile);
+	if (!await regularDirectoryExists(profileDir(targetConfig))) throw new AgentRuntimeError("rollback-target-mismatch", "rollback profile directory is missing");
+	const source = await readRegularOptional(runtimeManifestPath(targetConfig));
+	if (source === null) throw new AgentRuntimeError("release-runtime-manifest-mismatch", "rollback profile has no Fleet runtime manifest");
+	parseFleetManifest(source);
+	return {
+		manifestDigest: sha256(source),
+		profileHash: await computeProfileHash(targetConfig)
+	};
+}
+function releaseDigestOf(applied) {
+	return applied?.releaseDigest ?? null;
+}
+async function assertRollbackSourceState(config, plan, descriptor, signal) {
+	const current = await loadState(config, signal);
+	const currentApplied = await readAppliedRelease(config);
+	const runtime = await inspectManagedReleaseRuntime(config, signal);
+	if (current.manifestDigest !== plan.fromManifestDigest || current.profileHash !== plan.fromProfileHash || current.dshVersion !== plan.observedDshVersion || releaseDigestOf(currentApplied) !== plan.fromReleaseDigest) throw new AgentRuntimeError("release-ownership-conflict", "live release no longer matches the approved rollback source");
+	assertObservedReleaseRuntime(runtime, plan);
+	if (descriptor.backupProfile !== null) {
+		const backup = await profileManifestAndHash(config, descriptor.backupProfile);
+		if (backup.manifestDigest !== plan.toManifestDigest || backup.profileHash !== plan.toProfileHash) throw new AgentRuntimeError("rollback-target-mismatch", "retained release backup no longer matches the approved rollback target");
+	}
+	return currentApplied;
+}
+async function assertRollbackTargetProfile(config, plan, descriptor) {
+	const target = await profileManifestAndHash(config, config.profile);
+	if (target.manifestDigest !== plan.toManifestDigest || target.profileHash !== plan.toProfileHash) throw new AgentRuntimeError("rollback-target-mismatch", "restored release profile does not match the approved rollback target");
+	await restoreAppliedReleaseMarker(config, descriptor.previousAppliedRelease);
+	if (releaseDigestOf(await readAppliedRelease(config)) !== plan.toReleaseDigest) throw new AgentRuntimeError("rollback-target-mismatch", "restored applied release marker does not match the approved rollback target");
+	await ensureServiceStarted(config);
+	assertObservedReleaseRuntime(await inspectManagedReleaseRuntime(config, void 0, {
+		allowLegacyLaunchdIdentity: true,
+		expectedPluginIds: descriptor.previousAppliedRelease?.plugins.map((plugin) => plugin.pluginId) ?? []
+	}), plan);
+}
+async function rollbackCurrentReleaseAfterFailure(config, plan, descriptor, currentApplied) {
+	if (descriptor.backupProfile !== null) {
+		const profilesRoot = dirname(profileDir(config));
+		const liveDir = profileDir(config);
+		const backupDir = join(profilesRoot, descriptor.backupProfile);
+		const forwardDir = join(profilesRoot, releaseRollbackForwardProfile(plan));
+		if (await regularDirectoryExists(forwardDir)) {
+			try {
+				await stopDsh(config);
+			} catch {
+				if ((await listenerPids(config, config.restart.port))[0] !== void 0) throw new AgentRuntimeError("restart-cleanup-failed", "cannot stop the failed rollback target");
+			}
+			if (await regularDirectoryExists(backupDir)) throw new AgentRuntimeError("rollback-layout-conflict", "rollback backup path is unexpectedly occupied");
+			if (await regularDirectoryExists(liveDir)) await rename(liveDir, backupDir);
+			await rename(forwardDir, liveDir);
+			await syncDirectory(profilesRoot);
+		}
+	}
+	await restoreAppliedReleaseMarker(config, currentApplied);
+	await ensureServiceStarted(config);
+	assertObservedReleaseRuntime(await inspectManagedReleaseRuntime(config, void 0, { expectedPluginIds: currentApplied?.plugins.map((plugin) => plugin.pluginId) ?? [] }), plan);
+}
+async function executeStoredReleaseRollback(config, plan, descriptor, record, signal) {
+	let currentApplied;
+	try {
+		currentApplied = await assertRollbackSourceState(config, plan, descriptor, signal);
+	} catch (error) {
+		return saveReleaseRollbackActionBestEffort(config, record, "manual-intervention", {
+			result: "manual-intervention",
+			errorCode: typeof error.code === "string" ? error.code : "release-rollback-failed"
+		});
+	}
+	let currentRecord = await saveReleaseRollbackAction(config, record, "applying");
+	try {
+		if (descriptor.backupProfile !== null) {
+			const profilesRoot = dirname(profileDir(config));
+			const liveDir = profileDir(config);
+			const backupDir = join(profilesRoot, descriptor.backupProfile);
+			const forwardDir = join(profilesRoot, releaseRollbackForwardProfile(plan));
+			await rm(forwardDir, {
+				recursive: true,
+				force: true
+			});
+			await stopDsh(config, signal);
+			throwIfAborted(signal);
+			await rename(liveDir, forwardDir);
+			await syncDirectory(profilesRoot);
+			try {
+				await rename(backupDir, liveDir);
+				await syncDirectory(profilesRoot);
+			} catch (error) {
+				await rename(forwardDir, liveDir);
+				await syncDirectory(profilesRoot);
+				await startDsh(config);
+				throw error;
+			}
+		}
+		currentRecord = await saveReleaseRollbackAction(config, currentRecord, "restarting");
+		await ensureServiceStarted(config);
+		throwIfAborted(signal);
+		currentRecord = await saveReleaseRollbackAction(config, currentRecord, "verifying");
+		await assertRollbackTargetProfile(config, plan, descriptor);
+		throwIfAborted(signal);
+		if (descriptor.backupProfile !== null) await rm(join(dirname(profileDir(config)), releaseRollbackForwardProfile(plan)), {
+			recursive: true,
+			force: true
+		});
+		currentRecord = await saveReleaseRollbackAction(config, currentRecord, "succeeded", { result: "success" });
+		await auditBestEffort(config, {
+			type: "profile-release/rollback-applied",
+			planId: plan.planId,
+			transitionPlanId: plan.transitionPlanId,
+			result: "success"
+		});
+		return currentRecord;
+	} catch (error) {
+		const errorCode = typeof error.code === "string" ? error.code : "release-rollback-failed";
+		try {
+			await rollbackCurrentReleaseAfterFailure(config, plan, descriptor, currentApplied);
+		} catch {
+			return saveReleaseRollbackActionBestEffort(config, currentRecord, "manual-intervention", {
+				result: "manual-intervention",
+				errorCode: "rollback-recovery-failed"
+			});
+		}
+		await auditBestEffort(config, {
+			type: "profile-release/rollback-failed",
+			planId: plan.planId,
+			transitionPlanId: plan.transitionPlanId,
+			result: errorCode
+		});
+		return saveReleaseRollbackActionBestEffort(config, currentRecord, "manual-intervention", {
+			result: "manual-intervention",
+			errorCode
+		});
+	}
+}
+async function createStoredReleaseRollbackPlan(config, transitionPlanId, now = /* @__PURE__ */ new Date(), signal) {
+	assertReleaseReadyConfig(config);
+	return withProfileLock(config, async () => {
+		const { transition, descriptor } = await readRollbackTransition(config, transitionPlanId);
+		const transitionAction = await readReleaseAction(config, transition.planId);
+		if (transitionAction?.state !== "succeeded" || transitionAction.result !== "success") throw new AgentRuntimeError("rollback-not-available", "only a successfully applied release transition can be rolled back");
+		const current = await loadState(config, signal);
+		const applied = await readAppliedRelease(config);
+		const runtime = await inspectManagedReleaseRuntime(config, signal);
+		if (current.manifestDigest !== descriptor.toManifestDigest || releaseDigestOf(applied) !== descriptor.toReleaseDigest) throw new AgentRuntimeError("release-ownership-conflict", "live release no longer belongs to the requested transition");
+		if (descriptor.backupProfile !== null) {
+			const backup = await profileManifestAndHash(config, descriptor.backupProfile);
+			if (backup.manifestDigest !== descriptor.fromManifestDigest || backup.profileHash !== descriptor.fromProfileHash) throw new AgentRuntimeError("rollback-target-mismatch", "retained release backup no longer matches the transition source");
+		} else if (current.profileHash !== descriptor.fromProfileHash) throw new AgentRuntimeError("rollback-target-mismatch", "marker-only rollback profile no longer matches the transition source");
+		if (!Number.isFinite(now.getTime())) throw new AgentRuntimeError("invalid-time", "rollback plan time is invalid");
+		const createdAt = now.toISOString();
+		const plan = createFleetReleaseRollbackPlan({
+			protocolVersion: 2,
+			kind: "profile-release-rollback",
+			transitionPlanId: transition.planId,
+			transitionPlanDigest: transition.digest,
+			deviceId: transition.deviceId,
+			profile: transition.profile,
+			fromManifestDigest: transition.toManifestDigest,
+			toManifestDigest: transition.fromManifestDigest,
+			fromReleaseDigest: transition.toReleaseDigest,
+			toReleaseDigest: transition.fromReleaseDigest,
+			fromProfileHash: current.profileHash,
+			toProfileHash: descriptor.fromProfileHash,
+			observedDshVersion: runtime.runtimeIdentity.dshVersion,
+			observedRuntimeDigest: runtime.observedRuntimeDigest,
+			observedServiceDefinitionDigest: runtime.observedServiceDefinitionDigest,
+			createdAt,
+			expiresAt: new Date(now.getTime() + config.planTtlMs).toISOString()
+		});
+		await atomicJson$1(releaseRollbackPlanPath(config, plan.planId), plan);
+		await audit(config, {
+			type: "profile-release/rollback-plan-created",
+			planId: plan.planId,
+			transitionPlanId: transition.planId
+		});
+		return plan;
+	});
+}
+async function recoverStoredReleaseRollback(config, plan, record) {
+	const { transition, descriptor } = await readRollbackTransition(config, plan.transitionPlanId);
+	assertRollbackPlanDescriptor(plan, transition, descriptor);
+	const liveDir = profileDir(config);
+	const forwardDir = join(dirname(liveDir), releaseRollbackForwardProfile(plan));
+	if (!await regularDirectoryExists(liveDir) && await regularDirectoryExists(forwardDir)) {
+		await rename(forwardDir, liveDir);
+		await syncDirectory(dirname(liveDir));
+	}
+	try {
+		const current = await loadState(config);
+		const applied = await readAppliedRelease(config);
+		if (current.manifestDigest === plan.toManifestDigest && current.profileHash === plan.toProfileHash) {
+			if (releaseDigestOf(applied) !== plan.fromReleaseDigest && releaseDigestOf(applied) !== plan.toReleaseDigest) throw new AgentRuntimeError("release-ownership-conflict", "applied release marker no longer belongs to this rollback action");
+			await assertRollbackTargetProfile(config, plan, descriptor);
+			await rm(forwardDir, {
+				recursive: true,
+				force: true
+			});
+			return saveReleaseRollbackAction(config, record, "succeeded", { result: "success" });
+		}
+		if (current.manifestDigest === plan.fromManifestDigest && current.profileHash === plan.fromProfileHash && releaseDigestOf(applied) === plan.fromReleaseDigest) return executeStoredReleaseRollback(config, plan, descriptor, record);
+	} catch {}
+	return saveReleaseRollbackActionBestEffort(config, record, "manual-intervention", {
+		result: "manual-intervention",
+		errorCode: "rollback-recovery-ambiguous"
+	});
+}
+async function applyStoredReleaseRollbackPlan(config, approval, now = /* @__PURE__ */ new Date(), signal) {
+	assertReleaseReadyConfig(config);
+	return withProfileLock(config, async () => {
+		const plan = await readJson(releaseRollbackPlanPath(config, approval.planId));
+		if (plan === null) throw new AgentRuntimeError("plan-not-found", "approved release rollback plan was not found");
+		validateFleetReleaseRollbackPlan(plan);
+		const existing = await readReleaseRollbackAction(config, plan.planId);
+		if (existing !== null) assertReleaseRollbackActionPlan(existing, plan);
+		const identity = validateFleetReleaseRollbackApproval(plan, approval, approval.approvedAt);
+		if (existing !== null) {
+			if (existing.idempotencyKey !== identity.idempotencyKey) throw new AgentRuntimeError("idempotency-conflict", "release rollback plan already has a different approval");
+			if (existing.state === "succeeded" || existing.state === "manual-intervention") return existing;
+			return recoverStoredReleaseRollback(config, plan, existing);
+		}
+		const validation = validateFleetReleaseRollbackApproval(plan, approval, now);
+		const { transition, descriptor } = await readRollbackTransition(config, plan.transitionPlanId);
+		assertRollbackPlanDescriptor(plan, transition, descriptor);
+		await assertRollbackSourceState(config, plan, descriptor, signal);
+		let record = {
+			planId: plan.planId,
+			planDigest: plan.digest,
+			transitionPlanId: plan.transitionPlanId,
+			approvalId: approval.approvalId,
+			principalId: approval.principalId,
+			idempotencyKey: validation.idempotencyKey,
+			deviceId: plan.deviceId,
+			profile: plan.profile,
+			fromManifestDigest: plan.fromManifestDigest,
+			toManifestDigest: plan.toManifestDigest,
+			fromReleaseDigest: plan.fromReleaseDigest,
+			toReleaseDigest: plan.toReleaseDigest,
+			state: "approved",
+			updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+		};
+		record = await saveReleaseRollbackAction(config, record, "approved");
+		await audit(config, {
+			type: "profile-release/rollback-approved",
+			planId: plan.planId,
+			transitionPlanId: plan.transitionPlanId,
+			approvalId: approval.approvalId,
+			principalId: approval.principalId
+		});
+		return executeStoredReleaseRollback(config, plan, descriptor, record, signal);
+	});
+}
+async function readOrRecoverReleaseRollbackAction(config, planId) {
+	assertReleaseReadyConfig(config);
+	return withProfileLock(config, async () => {
+		const record = await readReleaseRollbackAction(config, planId);
+		if (record === null) return null;
+		const plan = await readJson(releaseRollbackPlanPath(config, planId));
+		if (plan === null) throw new AgentRuntimeError("plan-not-found", "release rollback plan was not found");
+		validateFleetReleaseRollbackPlan(plan);
+		assertReleaseRollbackActionPlan(record, plan);
+		if (record.state === "succeeded" || record.state === "manual-intervention") return record;
+		return recoverStoredReleaseRollback(config, plan, record);
 	});
 }
 function safeRuntimeError(error) {
@@ -11064,9 +12802,254 @@ function safeRuntimeError(error) {
 			"unsafe-mutation-config": "mutation requires restart and loopback Fleet RPC health verification",
 			"health-timeout": "DSH did not become healthy before timeout",
 			"plugin-not-active": "plugin did not become active; profile was rolled back",
-			"runtime-modules-failed": "DSH runtime has failed modules; profile was rolled back"
+			"runtime-modules-failed": "DSH runtime has failed modules; profile was rolled back",
+			"profile-layout-unsupported": "profile contains unsupported top-level state and cannot be changed safely",
+			"release-ownership-conflict": "live release binding is no longer owned by the approved transition",
+			"rollback-not-available": "the release transition has no usable rollback state",
+			"rollback-target-mismatch": "the retained rollback target no longer matches the approved state",
+			"rollback-descriptor-invalid": "the durable rollback descriptor is missing or invalid",
+			"rollback-backup-missing": "the retained release backup is missing",
+			"rollback-recovery-ambiguous": "release rollback recovery requires manual intervention",
+			"retention-chain-invalid": "current release retention chain is incomplete or invalid",
+			"retention-transition-invalid": "release transition is not eligible for retention cleanup",
+			"retention-backup-mismatch": "release backup changed and cannot be removed safely",
+			"retention-entry-mismatch": "release retention entry no longer matches its durable descriptor",
+			"retention-plan-stale": "release retention state changed after the plan was created",
+			"retention-layout-conflict": "release retention backup and quarantine layout is unsafe",
+			"retention-inventory-limit": "release retention inventory is too large to inspect safely",
+			"idempotency-conflict": "the release action already has a different approval",
+			"action-state-invalid": "the stored release action no longer matches its approved plan"
 		}[code] ?? "fleet agent request failed"
 	};
+}
+//#endregion
+//#region src/worker/policy.ts
+var TaskPolicyResolutionError = class extends Error {
+	code;
+	constructor(code, message) {
+		super(message);
+		this.name = "TaskPolicyResolutionError";
+		this.code = code;
+	}
+};
+function isTaskPolicyId(value) {
+	return TASK_POLICY_IDS.includes(value);
+}
+function policyBody(policy) {
+	const { policyDigest: _policyDigest, ...body } = policy;
+	return body;
+}
+function hasValidLocalDigest(policy) {
+	if (!isTaskPolicyId(policy.policyId)) return false;
+	const installed = LOCAL_TASK_POLICIES[policy.policyId];
+	return policy.policyDigest === installed.policyDigest && calculateTaskPolicyDigest(policyBody(policy)) === installed.policyDigest;
+}
+function resolveTaskPolicy(tasks, policyId, policyDigest) {
+	if (!isTaskPolicyId(policyId)) throw new TaskPolicyResolutionError("unknown-policy", "requested task policy is not installed");
+	if (!/^[0-9a-f]{64}$/.test(policyDigest)) throw new TaskPolicyResolutionError("policy-digest-mismatch", "requested task policy digest is invalid");
+	if (tasks.policyIds?.includes(policyId) !== true) throw new TaskPolicyResolutionError("policy-not-enabled", "requested task policy is not enabled locally");
+	const policy = tasks.policies?.[policyId];
+	if (policy === void 0 || !hasValidLocalDigest(policy)) throw new TaskPolicyResolutionError("invalid-local-policy", "local task policy is missing or has lost integrity");
+	if (policy.policyDigest !== policyDigest) throw new TaskPolicyResolutionError("policy-digest-mismatch", "requested task policy digest does not match the local policy");
+	return policy;
+}
+function isRecord$3(value) {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function isWorkspacePath(workspacePath, value, optional) {
+	if (value === void 0) return optional;
+	if (typeof value !== "string" || value.trim().length === 0 || value.includes("\0")) return false;
+	const root = resolve(workspacePath);
+	const target = resolve(root, value);
+	const fromRoot = relative(root, target);
+	return fromRoot === "" || !fromRoot.startsWith(".." + sep) && fromRoot !== ".." && !isAbsolute(fromRoot);
+}
+function globPatternStaysWithinWorkspace(value) {
+	if (typeof value !== "string" || value.length === 0 || value.includes("\0") || isAbsolute(value) || /^[A-Za-z]:[\\/]/.test(value)) return false;
+	return !value.split(/[\\/]+/).includes("..");
+}
+function workspaceScopedToolArguments(toolName, toolArguments, workspacePath) {
+	if (toolName === "read" || toolName === "read_image" || toolName === "write" || toolName === "edit") return isWorkspacePath(workspacePath, toolArguments.file_path, false);
+	if (toolName === "glob") return isWorkspacePath(workspacePath, toolArguments.path, true) && globPatternStaysWithinWorkspace(toolArguments.pattern);
+	if (toolName === "grep") return isWorkspacePath(workspacePath, toolArguments.path, true);
+	if (toolName === "bash" || toolName === "pwsh") return isWorkspacePath(workspacePath, toolArguments.workdir, true);
+	return true;
+}
+function contained(root, target) {
+	const fromRoot = relative(root, target);
+	return fromRoot === "" || !fromRoot.startsWith(".." + sep) && fromRoot !== ".." && !isAbsolute(fromRoot);
+}
+function filesystemTarget(toolName, toolArguments) {
+	if (toolName === "read" || toolName === "read_image") return typeof toolArguments.file_path === "string" ? {
+		path: toolArguments.file_path,
+		mutable: false
+	} : null;
+	if (toolName === "write" || toolName === "edit") return typeof toolArguments.file_path === "string" ? {
+		path: toolArguments.file_path,
+		mutable: true
+	} : null;
+	if (toolName === "glob" || toolName === "grep" || toolName === "bash" || toolName === "pwsh") {
+		const value = toolArguments.path ?? toolArguments.workdir ?? ".";
+		return typeof value === "string" ? {
+			path: value,
+			mutable: false
+		} : null;
+	}
+	return null;
+}
+/**
+* Re-resolves filesystem targets immediately before execution. Lexical scope
+* checks alone are insufficient because a path inside the workspace may be a
+* symlink to data outside it. Mutable targets also reject every symlink path
+* component and existing hard-linked files.
+*/
+async function validateTaskToolFilesystemScope(input) {
+	if (!isAbsolute(input.workspacePath) || resolve(input.workspacePath) !== input.workspacePath || !isRecord$3(input.arguments)) return false;
+	const targetInput = filesystemTarget(input.toolName, input.arguments);
+	if (targetInput === null) return true;
+	let root;
+	try {
+		root = await realpath(input.workspacePath);
+	} catch {
+		return false;
+	}
+	if (root !== input.workspacePath) return false;
+	const target = resolve(root, targetInput.path);
+	if (!contained(root, target)) return false;
+	if (!targetInput.mutable) try {
+		return contained(root, await realpath(target));
+	} catch {
+		return false;
+	}
+	const pathFromRoot = relative(root, target);
+	if (pathFromRoot === "") return false;
+	let current = root;
+	const segments = pathFromRoot.split(sep);
+	for (let index = 0; index < segments.length; index += 1) {
+		current = join(current, segments[index]);
+		let info;
+		try {
+			info = await lstat(current);
+		} catch (error) {
+			if (error.code === "ENOENT") return true;
+			return false;
+		}
+		if (info.isSymbolicLink()) return false;
+		let resolved;
+		try {
+			resolved = await realpath(current);
+		} catch {
+			return false;
+		}
+		if (!contained(root, resolved)) return false;
+		if (index === segments.length - 1 && info.isFile() && info.nlink > 1) return false;
+	}
+	return true;
+}
+function capabilityFor(toolName) {
+	if (toolName === "write" || toolName === "edit") return "workspace-mutation";
+	if (toolName === "bash" || toolName === "pwsh") return "command-execution";
+	if (toolName === "web_search" || toolName === "web_fetch") return "network-access";
+	return null;
+}
+function denied(reason, argumentsDigest) {
+	return {
+		decision: "deny",
+		capability: null,
+		argumentsDigest,
+		reason
+	};
+}
+function classifyTaskToolCall(input) {
+	if (!hasValidLocalDigest(input.policy)) return denied("invalid-policy", null);
+	if (!isAbsolute(input.workspacePath) || resolve(input.workspacePath) !== input.workspacePath || !isRecord$3(input.arguments)) return denied("invalid-arguments", null);
+	let argumentsDigest;
+	try {
+		argumentsDigest = digestToolArguments(input.arguments, input.policy.maxArgumentsBytes);
+	} catch (error) {
+		return denied(error instanceof WorkerPolicyError && error.code === "arguments-too-large" ? "arguments-too-large" : "invalid-arguments", null);
+	}
+	if (input.policy.hardDeniedTools.includes(input.toolName)) return denied("hard-denied-tool", argumentsDigest);
+	const isSafe = input.policy.safeTools.includes(input.toolName);
+	const needsApproval = input.policy.approvalRequiredTools.includes(input.toolName);
+	if (!isSafe && !needsApproval) return denied(Object.values(LOCAL_TASK_POLICIES).some((policy) => policy.safeTools.includes(input.toolName) || policy.approvalRequiredTools.includes(input.toolName) || policy.hardDeniedTools.includes(input.toolName)) ? "not-permitted-by-policy" : "unknown-tool", argumentsDigest);
+	if (!workspaceScopedToolArguments(input.toolName, input.arguments, input.workspacePath)) return denied("workspace-scope-denied", argumentsDigest);
+	if ((input.toolName === "bash" || input.toolName === "pwsh") && input.arguments.run_in_background === true) return denied("background-execution-denied", argumentsDigest);
+	if (Object.hasOwn(input.arguments, "sandbox_permissions") || Object.hasOwn(input.arguments, "justification")) return denied("permission-escalation-denied", argumentsDigest);
+	if (isSafe) return {
+		decision: "safe",
+		capability: null,
+		argumentsDigest,
+		reason: "safe-read"
+	};
+	const capability = capabilityFor(input.toolName);
+	if (capability === null) return denied("invalid-policy", argumentsDigest);
+	return {
+		decision: "ask",
+		capability,
+		argumentsDigest,
+		reason: "signed-approval-required"
+	};
+}
+function record(value, keys, field) {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) throw new TypeError(field + " must be an object");
+	const raw = value;
+	const actual = Object.keys(raw).sort();
+	const expected = [...keys].sort();
+	if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) throw new TypeError(field + " has unsupported or missing fields");
+	return raw;
+}
+function text$1(value, field, max = 128) {
+	if (typeof value !== "string" || value.length === 0 || value !== value.trim() || value.length > max || /[\r\n\0]/.test(value)) throw new TypeError(field + " must be bounded text");
+	return value;
+}
+function id(value, field, prefix) {
+	const result = text$1(value, field, 64);
+	if (!new RegExp("^" + prefix + ":[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$").test(result)) throw new TypeError(field + " must be a namespaced UUID");
+	return result;
+}
+function digest$2(value, field) {
+	if (typeof value !== "string" || !/^[0-9a-f]{64}$/.test(value)) throw new TypeError(field + " must be a SHA-256 digest");
+	return value;
+}
+function timestamp(value, field) {
+	if (typeof value !== "string" || !Number.isFinite(Date.parse(value)) || new Date(Date.parse(value)).toISOString() !== value) throw new TypeError(field + " must be a canonical timestamp");
+	return value;
+}
+function parseTaskApprovalIntent(value) {
+	const raw = record(value, [
+		"schemaVersion",
+		"approvalId",
+		"taskId",
+		"taskBindingDigest",
+		"executionProfileHash",
+		"toolCallId",
+		"toolName",
+		"arguments",
+		"argumentsDigest",
+		"capability",
+		"expiresAt"
+	], "task approval intent");
+	if (raw.schemaVersion !== 2 || raw.capability !== "workspace-mutation" && raw.capability !== "command-execution" && raw.capability !== "network-access") throw new TypeError("task approval intent schema or capability is invalid");
+	if (typeof raw.arguments !== "object" || raw.arguments === null || Array.isArray(raw.arguments)) throw new TypeError("task approval intent arguments must be an object");
+	const argumentsDigest = digest$2(raw.argumentsDigest, "argumentsDigest");
+	if (digestToolArguments(raw.arguments) !== argumentsDigest) throw new TypeError("task approval intent arguments digest does not match");
+	return {
+		schemaVersion: 2,
+		approvalId: id(raw.approvalId, "approvalId", "approval"),
+		taskId: id(raw.taskId, "taskId", "task"),
+		taskBindingDigest: digest$2(raw.taskBindingDigest, "taskBindingDigest"),
+		executionProfileHash: digest$2(raw.executionProfileHash, "executionProfileHash"),
+		toolCallId: text$1(raw.toolCallId, "toolCallId"),
+		toolName: text$1(raw.toolName, "toolName", 64),
+		arguments: raw.arguments,
+		argumentsDigest,
+		capability: raw.capability,
+		expiresAt: timestamp(raw.expiresAt, "expiresAt")
+	};
+}
+function approvalSegment(approvalId) {
+	return id(approvalId, "approvalId", "approval").slice(9);
 }
 const FLEET_A2A_KINDS = [
 	"task.submit",
@@ -11074,11 +13057,22 @@ const FLEET_A2A_KINDS = [
 	"task.cancel",
 	"task.progress",
 	"task.result",
+	"task.approval.request",
+	"task.approval.decision",
 	"approval.request",
 	"approval.decision",
 	"handoff",
 	"receipt"
 ];
+const FEDERATION_ADVISORY_KINDS = /* @__PURE__ */ new Set([
+	"approval.request",
+	"approval.decision",
+	"handoff",
+	"receipt"
+]);
+function isFleetFederationAdvisoryKind(kind) {
+	return FEDERATION_ADVISORY_KINDS.has(kind);
+}
 var FleetA2AError = class extends Error {
 	code;
 	constructor(code, message) {
@@ -11105,15 +13099,16 @@ const SENDER_KEYS = [
 	"deviceId",
 	"keyId"
 ];
-const RECIPIENT_KEYS = ["deviceId"];
+const RECIPIENT_KEYS = ["teamId", "deviceId"];
 const MAX_PAYLOAD_BYTES = 49152;
 const DEFAULT_TTL_MS = 3e5;
 const DEFAULT_MAX_TTL_MS = 9e5;
-function isRecord$1(value) {
+const ABSOLUTE_MAX_TTL_MS = 864e5;
+function isRecord$2(value) {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-function exactKeys$1(value, keys, field) {
-	if (!isRecord$1(value)) throw new FleetA2AError("invalid-envelope", field + " must be an object");
+function exactKeys$2(value, keys, field) {
+	if (!isRecord$2(value)) throw new FleetA2AError("invalid-envelope", field + " must be an object");
 	const actual = Object.keys(value).sort();
 	const expected = [...keys].sort();
 	if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) throw new FleetA2AError("invalid-envelope", field + " has unsupported or missing fields");
@@ -11126,21 +13121,21 @@ function longText(value, field, maxLength) {
 	if (typeof value !== "string" || value.trim().length === 0 || value.length > maxLength || value.includes("\0")) throw new FleetA2AError("invalid-payload", field + " must be bounded non-empty text");
 	return value;
 }
-function identifier(value, field) {
+function identifier$1(value, field) {
 	const result = text(value, field, 64);
 	if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(result)) throw new FleetA2AError("invalid-payload", field + " is invalid");
 	return result;
 }
-function messageId(value, field, prefix) {
+function messageId$1(value, field, prefix) {
 	const result = text(value, field, 64);
 	if (!new RegExp("^" + prefix + ":[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$").test(result)) throw new FleetA2AError("invalid-payload", field + " must be a namespaced UUID");
 	return result;
 }
-function digest(value, field) {
+function digest$1(value, field) {
 	if (typeof value !== "string" || !/^[0-9a-f]{64}$/.test(value)) throw new FleetA2AError("invalid-envelope", field + " must be a lowercase SHA-256 digest");
 	return value;
 }
-function canonicalTime(value, field) {
+function canonicalTime$1(value, field) {
 	if (typeof value !== "string") throw new FleetA2AError("invalid-time", field + " must be a canonical ISO timestamp");
 	const timestamp = Date.parse(value);
 	if (!Number.isFinite(timestamp) || new Date(timestamp).toISOString() !== value) throw new FleetA2AError("invalid-time", field + " must be a canonical ISO timestamp");
@@ -11156,21 +13151,33 @@ function exactPayload(payload, keys, kind) {
 	if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) throw new FleetA2AError("invalid-payload", kind + " payload has unsupported or missing fields");
 }
 function taskId(value) {
-	return messageId(value, "payload.taskId", "task");
+	return messageId$1(value, "payload.taskId", "task");
 }
 function validateA2APayload(kind, payload) {
-	if (!isRecord$1(payload)) throw new FleetA2AError("invalid-payload", kind + " payload must be an object");
+	if (!isRecord$2(payload)) throw new FleetA2AError("invalid-payload", kind + " payload must be an object");
 	if (Buffer.byteLength(canonicalJson(payload), "utf8") > MAX_PAYLOAD_BYTES) throw new FleetA2AError("invalid-payload", "A2A payload exceeds the size limit");
 	if (kind === "task.submit") {
 		exactPayload(payload, [
 			"taskId",
 			"workspaceId",
 			"profile",
+			"executionProfileHash",
+			"manifestDigest",
+			"releaseDigest",
+			"policyId",
+			"policyDigest",
+			"deadline",
 			"prompt"
 		], kind);
 		taskId(payload.taskId);
-		identifier(payload.workspaceId, "payload.workspaceId");
-		identifier(payload.profile, "payload.profile");
+		identifier$1(payload.workspaceId, "payload.workspaceId");
+		identifier$1(payload.profile, "payload.profile");
+		digest$1(payload.executionProfileHash, "payload.executionProfileHash");
+		digest$1(payload.manifestDigest, "payload.manifestDigest");
+		digest$1(payload.releaseDigest, "payload.releaseDigest");
+		identifier$1(payload.policyId, "payload.policyId");
+		digest$1(payload.policyDigest, "payload.policyDigest");
+		canonicalTime$1(payload.deadline, "payload.deadline");
 		longText(payload.prompt, "payload.prompt", 32768);
 		return;
 	}
@@ -11191,7 +13198,7 @@ function validateA2APayload(kind, payload) {
 			"running",
 			"cancel-requested"
 		].includes(text(payload.state, "payload.state", 24))) throw new FleetA2AError("invalid-payload", "task progress state is invalid");
-		canonicalTime(payload.updatedAt, "payload.updatedAt");
+		canonicalTime$1(payload.updatedAt, "payload.updatedAt");
 		return;
 	}
 	if (kind === "task.result") {
@@ -11210,11 +13217,69 @@ function validateA2APayload(kind, payload) {
 			"failed",
 			"cancelled"
 		].includes(text(payload.state, "payload.state", 16))) throw new FleetA2AError("invalid-payload", "task result state is invalid");
-		canonicalTime(payload.updatedAt, "payload.updatedAt");
-		if (payload.resultDigest !== null) digest(payload.resultDigest, "payload.resultDigest");
+		canonicalTime$1(payload.updatedAt, "payload.updatedAt");
+		if (payload.resultDigest !== null) digest$1(payload.resultDigest, "payload.resultDigest");
 		if (payload.result !== null) longText(payload.result, "payload.result", 32768);
 		if (typeof payload.truncated !== "boolean") throw new FleetA2AError("invalid-payload", "payload.truncated must be boolean");
-		if (payload.errorCode !== null) identifier(payload.errorCode, "payload.errorCode");
+		if (payload.errorCode !== null) identifier$1(payload.errorCode, "payload.errorCode");
+		return;
+	}
+	if (kind === "task.approval.request") {
+		exactPayload(payload, [
+			"approvalId",
+			"taskId",
+			"taskBindingDigest",
+			"toolCallId",
+			"toolName",
+			"arguments",
+			"argumentsDigest",
+			"capability",
+			"summary",
+			"expiresAt"
+		], kind);
+		messageId$1(payload.approvalId, "payload.approvalId", "approval");
+		taskId(payload.taskId);
+		digest$1(payload.taskBindingDigest, "payload.taskBindingDigest");
+		text(payload.toolCallId, "payload.toolCallId");
+		identifier$1(payload.toolName, "payload.toolName");
+		let argumentsDigest;
+		try {
+			argumentsDigest = digestToolArguments(payload.arguments, MAX_TASK_TOOL_ARGUMENT_BYTES);
+		} catch {
+			throw new FleetA2AError("invalid-payload", "task approval arguments must be a bounded canonical JSON object");
+		}
+		digest$1(payload.argumentsDigest, "payload.argumentsDigest");
+		if (payload.argumentsDigest !== argumentsDigest) throw new FleetA2AError("invalid-payload", "task approval argumentsDigest does not match arguments");
+		if (![
+			"workspace-mutation",
+			"command-execution",
+			"network-access"
+		].includes(text(payload.capability, "payload.capability", 32))) throw new FleetA2AError("invalid-payload", "task approval capability is invalid");
+		longText(payload.summary, "payload.summary", 2048);
+		canonicalTime$1(payload.expiresAt, "payload.expiresAt");
+		return;
+	}
+	if (kind === "task.approval.decision") {
+		exactPayload(payload, [
+			"approvalId",
+			"taskId",
+			"approvalRequestMessageId",
+			"approvalRequestPayloadDigest",
+			"taskBindingDigest",
+			"toolCallId",
+			"argumentsDigest",
+			"decision",
+			"decidedAt"
+		], kind);
+		messageId$1(payload.approvalId, "payload.approvalId", "approval");
+		taskId(payload.taskId);
+		messageId$1(payload.approvalRequestMessageId, "payload.approvalRequestMessageId", "msg");
+		digest$1(payload.approvalRequestPayloadDigest, "payload.approvalRequestPayloadDigest");
+		digest$1(payload.taskBindingDigest, "payload.taskBindingDigest");
+		text(payload.toolCallId, "payload.toolCallId");
+		digest$1(payload.argumentsDigest, "payload.argumentsDigest");
+		if (!["allowed-once", "rejected"].includes(text(payload.decision, "payload.decision", 16))) throw new FleetA2AError("invalid-payload", "task approval decision is invalid");
+		canonicalTime$1(payload.decidedAt, "payload.decidedAt");
 		return;
 	}
 	if (kind === "approval.request") {
@@ -11224,26 +13289,32 @@ function validateA2APayload(kind, payload) {
 			"summary",
 			"expiresAt"
 		], kind);
-		messageId(payload.approvalId, "payload.approvalId", "approval");
+		messageId$1(payload.approvalId, "payload.approvalId", "approval");
 		taskId(payload.taskId);
 		longText(payload.summary, "payload.summary", 2048);
-		canonicalTime(payload.expiresAt, "payload.expiresAt");
+		canonicalTime$1(payload.expiresAt, "payload.expiresAt");
 		return;
 	}
 	if (kind === "approval.decision") {
 		exactPayload(payload, [
 			"approvalId",
 			"taskId",
-			"decision"
+			"approvalRequestMessageId",
+			"approvalRequestPayloadDigest",
+			"decision",
+			"decidedAt"
 		], kind);
-		messageId(payload.approvalId, "payload.approvalId", "approval");
+		messageId$1(payload.approvalId, "payload.approvalId", "approval");
 		taskId(payload.taskId);
-		if (!["approved", "denied"].includes(text(payload.decision, "payload.decision", 16))) throw new FleetA2AError("invalid-payload", "approval decision is invalid");
+		messageId$1(payload.approvalRequestMessageId, "payload.approvalRequestMessageId", "msg");
+		digest$1(payload.approvalRequestPayloadDigest, "payload.approvalRequestPayloadDigest");
+		if (!["endorsed", "declined"].includes(text(payload.decision, "payload.decision", 16))) throw new FleetA2AError("invalid-payload", "federation approval decision is invalid");
+		canonicalTime$1(payload.decidedAt, "payload.decidedAt");
 		return;
 	}
 	if (kind === "receipt") {
 		exactPayload(payload, ["requestMessageId", "status"], kind);
-		messageId(payload.requestMessageId, "payload.requestMessageId", "msg");
+		messageId$1(payload.requestMessageId, "payload.requestMessageId", "msg");
 		if (!["accepted", "stored"].includes(text(payload.status, "payload.status", 16))) throw new FleetA2AError("invalid-payload", "receipt status is invalid");
 		return;
 	}
@@ -11253,7 +13324,7 @@ function validateA2APayload(kind, payload) {
 		"summary",
 		"artifactRefs"
 	], kind);
-	messageId(payload.handoffId, "payload.handoffId", "handoff");
+	messageId$1(payload.handoffId, "payload.handoffId", "handoff");
 	if (payload.taskId !== null) taskId(payload.taskId);
 	longText(payload.summary, "payload.summary", 8192);
 	if (!Array.isArray(payload.artifactRefs) || payload.artifactRefs.length > 32 || payload.artifactRefs.some((ref) => {
@@ -11284,7 +13355,7 @@ function a2aKeyId(key) {
 	});
 	return "ed25519:" + sha256Canonical({ der: Buffer.from(der).toString("base64") });
 }
-function nowIso(value) {
+function nowIso$1(value) {
 	const date = value === void 0 ? /* @__PURE__ */ new Date() : value instanceof Date ? new Date(value.getTime()) : new Date(value);
 	if (!Number.isFinite(date.getTime())) throw new FleetA2AError("invalid-time", "now must be a valid timestamp");
 	return date.toISOString();
@@ -11293,19 +13364,22 @@ function createA2AEnvelope(input) {
 	if (!FLEET_A2A_KINDS.includes(input.kind)) throw new FleetA2AError("invalid-payload", "unsupported A2A kind");
 	validateA2APayload(input.kind, input.payload);
 	const key = privateKey(input.privateKey);
-	const issuedAt = nowIso(input.now);
+	const issuedAt = nowIso$1(input.now);
 	const ttlMs = input.ttlMs ?? DEFAULT_TTL_MS;
-	boundedInteger(ttlMs, "ttlMs", 1e3, DEFAULT_MAX_TTL_MS);
+	boundedInteger(ttlMs, "ttlMs", 1e3, ABSOLUTE_MAX_TTL_MS);
 	const body = {
-		schemaVersion: 1,
-		teamId: identifier(input.teamId, "teamId"),
-		messageId: input.messageId === void 0 ? "msg:" + randomUUID() : messageId(input.messageId, "messageId", "msg"),
+		schemaVersion: 2,
+		teamId: identifier$1(input.teamId, "teamId"),
+		messageId: input.messageId === void 0 ? "msg:" + randomUUID() : messageId$1(input.messageId, "messageId", "msg"),
 		sender: {
-			principalId: identifier(input.sender.principalId, "sender.principalId"),
+			principalId: identifier$1(input.sender.principalId, "sender.principalId"),
 			deviceId: normalizeDeviceId(input.sender.deviceId, "sender.deviceId"),
 			keyId: a2aKeyId(key)
 		},
-		recipient: { deviceId: normalizeDeviceId(input.recipient.deviceId, "recipient.deviceId") },
+		recipient: {
+			teamId: identifier$1(input.recipient.teamId ?? input.teamId, "recipient.teamId"),
+			deviceId: normalizeDeviceId(input.recipient.deviceId, "recipient.deviceId")
+		},
 		kind: input.kind,
 		issuedAt,
 		expiresAt: new Date(Date.parse(issuedAt) + ttlMs).toISOString(),
@@ -11323,36 +13397,622 @@ function trustEntry(trust, keyId) {
 	return trust[keyId];
 }
 function verifyA2AEnvelope(value, input) {
-	exactKeys$1(value, ENVELOPE_KEYS, "A2A envelope");
+	exactKeys$2(value, ENVELOPE_KEYS, "A2A envelope");
 	const envelope = value;
-	if (envelope.schemaVersion !== 1 || !FLEET_A2A_KINDS.includes(envelope.kind)) throw new FleetA2AError("invalid-envelope", "unsupported A2A envelope version or kind");
-	exactKeys$1(envelope.sender, SENDER_KEYS, "sender");
-	exactKeys$1(envelope.recipient, RECIPIENT_KEYS, "recipient");
-	identifier(envelope.teamId, "teamId");
-	messageId(envelope.messageId, "messageId", "msg");
-	identifier(envelope.sender.principalId, "sender.principalId");
+	if (envelope.schemaVersion !== 2 || !FLEET_A2A_KINDS.includes(envelope.kind)) throw new FleetA2AError("invalid-envelope", "unsupported A2A envelope version or kind");
+	exactKeys$2(envelope.sender, SENDER_KEYS, "sender");
+	exactKeys$2(envelope.recipient, RECIPIENT_KEYS, "recipient");
+	identifier$1(envelope.teamId, "teamId");
+	messageId$1(envelope.messageId, "messageId", "msg");
+	identifier$1(envelope.sender.principalId, "sender.principalId");
 	normalizeDeviceId(envelope.sender.deviceId, "sender.deviceId");
+	identifier$1(envelope.recipient.teamId, "recipient.teamId");
 	normalizeDeviceId(envelope.recipient.deviceId, "recipient.deviceId");
 	if (!/^ed25519:[0-9a-f]{64}$/.test(envelope.sender.keyId)) throw new FleetA2AError("invalid-envelope", "sender.keyId is invalid");
-	digest(envelope.payloadDigest, "payloadDigest");
+	digest$1(envelope.payloadDigest, "payloadDigest");
 	validateA2APayload(envelope.kind, envelope.payload);
 	if (sha256Canonical(envelope.payload) !== envelope.payloadDigest) throw new FleetA2AError("signature-invalid", "A2A payload digest does not match");
-	const issuedAt = canonicalTime(envelope.issuedAt, "issuedAt");
-	const expiresAt = canonicalTime(envelope.expiresAt, "expiresAt");
-	const now = Date.parse(nowIso(input.now));
+	const issuedAt = canonicalTime$1(envelope.issuedAt, "issuedAt");
+	const expiresAt = canonicalTime$1(envelope.expiresAt, "expiresAt");
+	const now = Date.parse(nowIso$1(input.now));
 	const maxTtlMs = input.maxTtlMs ?? DEFAULT_MAX_TTL_MS;
-	boundedInteger(maxTtlMs, "maxTtlMs", 1e3, 864e5);
+	boundedInteger(maxTtlMs, "maxTtlMs", 1e3, ABSOLUTE_MAX_TTL_MS);
 	if (expiresAt <= issuedAt || expiresAt - issuedAt > maxTtlMs || issuedAt > now + 3e4) throw new FleetA2AError("invalid-time", "A2A envelope validity window is invalid");
 	if (now >= expiresAt) throw new FleetA2AError("message-expired", "A2A envelope has expired");
-	if (envelope.teamId !== input.expectedTeamId || envelope.recipient.deviceId !== input.expectedDeviceId) throw new FleetA2AError("recipient-mismatch", "A2A envelope targets a different team or device");
+	if (envelope.recipient.teamId !== input.expectedTeamId || envelope.recipient.deviceId !== input.expectedDeviceId) throw new FleetA2AError("recipient-mismatch", "A2A envelope targets a different team or device");
+	if (envelope.teamId !== input.expectedTeamId && !isFleetFederationAdvisoryKind(envelope.kind)) throw new FleetA2AError("trust-denied", "foreign teams may send advisory federation messages only");
 	const trusted = trustEntry(input.trust, envelope.sender.keyId);
-	if (trusted === void 0 || trusted.principalId !== envelope.sender.principalId || trusted.deviceId !== envelope.sender.deviceId || !trusted.allowedKinds.includes(envelope.kind)) throw new FleetA2AError("trust-denied", "A2A sender is not trusted for this message kind");
+	if (trusted === void 0 || trusted.teamId !== envelope.teamId || trusted.principalId !== envelope.sender.principalId || trusted.deviceId !== envelope.sender.deviceId || !trusted.allowedKinds.includes(envelope.kind)) throw new FleetA2AError("trust-denied", "A2A sender is not trusted for this message kind");
 	if (a2aKeyId(trusted.publicKeyPem) !== trusted.keyId || trusted.keyId !== envelope.sender.keyId) throw new FleetA2AError("trust-denied", "A2A trust entry key identity is invalid");
 	if (typeof envelope.signature !== "string" || !/^[A-Za-z0-9_-]{86}$/.test(envelope.signature)) throw new FleetA2AError("signature-invalid", "A2A signature encoding is invalid");
 	const signature = Buffer.from(envelope.signature, "base64url");
 	const body = Object.fromEntries(BODY_KEYS.map((key) => [key, envelope[key]]));
 	if (!verify(null, Buffer.from(canonicalJson(body), "utf8"), publicKey(trusted.publicKeyPem), signature)) throw new FleetA2AError("signature-invalid", "A2A signature is invalid");
 	return envelope;
+}
+//#endregion
+//#region src/federation/inbox.ts
+const INBOX_SCHEMA_VERSION = 1;
+const ACK_SCHEMA_VERSION = 1;
+const MAX_STATE_FILE_BYTES = 65536;
+const MESSAGE_ID_PATTERN = /^msg:([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/;
+const KEY_ID_PATTERN = /^ed25519:[0-9a-f]{64}$/;
+const DIGEST_PATTERN = /^[0-9a-f]{64}$/;
+const SIGNATURE_PATTERN = /^[A-Za-z0-9_-]{86}$/;
+const IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+var FleetFederationError = class extends Error {
+	code;
+	constructor(code, message) {
+		super(message);
+		this.name = "FleetFederationError";
+		this.code = code;
+	}
+};
+function isRecord$1(value) {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function exactKeys$1(value, keys, field) {
+	if (!isRecord$1(value)) throw new FleetFederationError("invalid-state", field + " must be an object");
+	const actual = Object.keys(value).sort();
+	const expected = [...keys].sort();
+	if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) throw new FleetFederationError("invalid-state", field + " has unsupported or missing fields");
+}
+function identifier(value, field) {
+	if (typeof value !== "string" || !IDENTIFIER_PATTERN.test(value)) throw new FleetFederationError("invalid-state", field + " is invalid");
+	return value;
+}
+function messageId(value, field = "messageId") {
+	if (typeof value !== "string" || !MESSAGE_ID_PATTERN.test(value)) throw new FleetFederationError("invalid-state", field + " is invalid");
+	return value;
+}
+function digest(value, field) {
+	if (typeof value !== "string" || !DIGEST_PATTERN.test(value)) throw new FleetFederationError("invalid-state", field + " is invalid");
+	return value;
+}
+function canonicalTime(value, field) {
+	if (typeof value !== "string") throw new FleetFederationError("invalid-state", field + " is invalid");
+	const timestamp = Date.parse(value);
+	if (!Number.isFinite(timestamp) || new Date(timestamp).toISOString() !== value) throw new FleetFederationError("invalid-state", field + " is invalid");
+	return value;
+}
+function nowIso(value) {
+	const date = value === void 0 ? /* @__PURE__ */ new Date() : value instanceof Date ? new Date(value.getTime()) : new Date(value);
+	if (!Number.isFinite(date.getTime())) throw new FleetFederationError("invalid-state", "time must be valid");
+	return date.toISOString();
+}
+function stateRoot(value) {
+	if (typeof value !== "string" || value.length === 0 || value.length > 1024 || value.includes("\0") || !isAbsolute(value) || normalize(value) !== value || value === "/") throw new FleetFederationError("unsafe-state-path", "federation inbox root must be a normalized absolute non-root path");
+	return value;
+}
+function messageSegment(value) {
+	const match = MESSAGE_ID_PATTERN.exec(value);
+	if (match?.[1] === void 0) throw new FleetFederationError("invalid-state", "messageId is invalid");
+	return match[1];
+}
+function inboxDirectory(rootDirectory) {
+	return join(rootDirectory, "inbox");
+}
+function acknowledgementsDirectory(rootDirectory) {
+	return join(rootDirectory, "acknowledgements");
+}
+function locksDirectory(rootDirectory) {
+	return join(rootDirectory, "locks");
+}
+function inboxPath(rootDirectory, id) {
+	return join(inboxDirectory(rootDirectory), messageSegment(id) + ".json");
+}
+function acknowledgementPath(rootDirectory, id) {
+	return join(acknowledgementsDirectory(rootDirectory), messageSegment(id) + ".json");
+}
+function lockPath(rootDirectory, id) {
+	return join(locksDirectory(rootDirectory), messageSegment(id) + ".lock");
+}
+function assertOwned(info, field) {
+	if (typeof process.getuid === "function" && info.uid !== process.getuid()) throw new FleetFederationError("unsafe-state-permissions", field + " must be owned by the current user");
+}
+async function assertPrivateDirectory(path, field) {
+	const info = await lstat(path);
+	if (info.isSymbolicLink() || !info.isDirectory()) throw new FleetFederationError("unsafe-state-path", field + " must be a real directory, not a symlink");
+	assertOwned(info, field);
+	if ((info.mode & 63) !== 0) throw new FleetFederationError("unsafe-state-permissions", field + " must be owner-only (0700)");
+}
+async function ensureLayout(rootValue) {
+	const rootDirectory = stateRoot(rootValue);
+	await mkdir(rootDirectory, {
+		recursive: true,
+		mode: 448
+	});
+	await assertPrivateDirectory(rootDirectory, "federation inbox root");
+	for (const directory of [
+		inboxDirectory(rootDirectory),
+		acknowledgementsDirectory(rootDirectory),
+		locksDirectory(rootDirectory)
+	]) {
+		await mkdir(directory, {
+			recursive: true,
+			mode: 448
+		});
+		await assertPrivateDirectory(directory, "federation inbox directory");
+	}
+	return rootDirectory;
+}
+async function readPrivateJson(path) {
+	let handle;
+	try {
+		handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+		const info = await handle.stat();
+		if (!info.isFile() || info.size > MAX_STATE_FILE_BYTES) throw new FleetFederationError("invalid-state", "federation state must be a bounded regular file");
+		assertOwned(info, "federation state file");
+		if ((info.mode & 63) !== 0) throw new FleetFederationError("unsafe-state-permissions", "federation state files must be owner-only (0600)");
+		const source = await handle.readFile("utf8");
+		try {
+			return JSON.parse(source);
+		} catch {
+			throw new FleetFederationError("invalid-state", "federation state file must contain JSON");
+		}
+	} catch (error) {
+		if (error.code === "ELOOP") throw new FleetFederationError("unsafe-state-path", "federation state files cannot be symlinks");
+		throw error;
+	} finally {
+		await handle?.close();
+	}
+}
+async function createExclusivePrivateJson(path, value) {
+	const directory = path.slice(0, path.lastIndexOf("/"));
+	const temporaryPath = join(directory, ".tmp-" + randomUUID());
+	let handle;
+	try {
+		handle = await open(temporaryPath, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), 384);
+		await handle.writeFile(JSON.stringify(value, null, 2) + "\n", "utf8");
+		await handle.sync();
+		await handle.close();
+		handle = void 0;
+		try {
+			await link(temporaryPath, path);
+			return "created";
+		} catch (error) {
+			if (error.code === "EEXIST") return "exists";
+			throw error;
+		}
+	} finally {
+		await handle?.close();
+		try {
+			await unlink(temporaryPath);
+		} catch (error) {
+			if (error.code !== "ENOENT") throw error;
+		}
+	}
+}
+async function assertPrivateRegularFile(path, field) {
+	const info = await lstat(path);
+	if (info.isSymbolicLink() || !info.isFile()) throw new FleetFederationError("unsafe-state-path", field + " must be a real regular file, not a symlink");
+	assertOwned(info, field);
+	if ((info.mode & 63) !== 0) throw new FleetFederationError("unsafe-state-permissions", field + " must be owner-only (0600)");
+}
+async function acquireMessageLock(rootDirectory, id) {
+	const path = lockPath(rootDirectory, id);
+	let handle;
+	try {
+		handle = await open(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), 384);
+		await handle.writeFile(JSON.stringify({
+			pid: process.pid,
+			createdAt: (/* @__PURE__ */ new Date()).toISOString()
+		}) + "\n", "utf8");
+		await handle.sync();
+	} catch (error) {
+		const created = handle !== void 0;
+		await handle?.close();
+		if (created) try {
+			await unlink(path);
+		} catch (cleanupError) {
+			if (cleanupError.code !== "ENOENT") throw cleanupError;
+		}
+		if (error.code === "EEXIST") {
+			await assertPrivateRegularFile(path, "federation message lock");
+			return null;
+		}
+		if (error.code === "ELOOP") throw new FleetFederationError("unsafe-state-path", "federation message lock cannot be a symlink");
+		throw error;
+	}
+	await handle.close();
+	return async () => {
+		await assertPrivateRegularFile(path, "federation message lock");
+		await unlink(path);
+	};
+}
+function parseStoredEnvelope(value) {
+	exactKeys$1(value, [
+		"schemaVersion",
+		"teamId",
+		"messageId",
+		"sender",
+		"recipient",
+		"kind",
+		"issuedAt",
+		"expiresAt",
+		"payloadDigest",
+		"payload",
+		"signature"
+	], "stored federation envelope");
+	if (value.schemaVersion !== 2 || typeof value.kind !== "string" || !FLEET_A2A_KINDS.includes(value.kind) || !isFleetFederationAdvisoryKind(value.kind)) throw new FleetFederationError("invalid-state", "stored federation envelope schema or kind is invalid");
+	exactKeys$1(value.sender, [
+		"principalId",
+		"deviceId",
+		"keyId"
+	], "stored federation sender");
+	exactKeys$1(value.recipient, ["teamId", "deviceId"], "stored federation recipient");
+	const teamId = identifier(value.teamId, "stored federation sender teamId");
+	identifier(value.sender.principalId, "stored federation sender principalId");
+	identifier(value.sender.deviceId, "stored federation sender deviceId");
+	if (typeof value.sender.keyId !== "string" || !KEY_ID_PATTERN.test(value.sender.keyId)) throw new FleetFederationError("invalid-state", "stored federation sender keyId is invalid");
+	const recipientTeamId = identifier(value.recipient.teamId, "stored federation recipient teamId");
+	identifier(value.recipient.deviceId, "stored federation recipient deviceId");
+	if (teamId === recipientTeamId) throw new FleetFederationError("invalid-state", "federation inbox accepts foreign-team messages only");
+	messageId(value.messageId);
+	const issuedAt = canonicalTime(value.issuedAt, "stored federation issuedAt");
+	const expiresAt = canonicalTime(value.expiresAt, "stored federation expiresAt");
+	if (Date.parse(expiresAt) <= Date.parse(issuedAt)) throw new FleetFederationError("invalid-state", "stored federation validity window is invalid");
+	const payloadDigest = digest(value.payloadDigest, "stored federation payloadDigest");
+	try {
+		validateA2APayload(value.kind, value.payload);
+	} catch {
+		throw new FleetFederationError("invalid-state", "stored federation payload is invalid");
+	}
+	if (sha256Canonical(value.payload) !== payloadDigest) throw new FleetFederationError("invalid-state", "stored federation payload digest does not match");
+	if (typeof value.signature !== "string" || !SIGNATURE_PATTERN.test(value.signature)) throw new FleetFederationError("invalid-state", "stored federation signature is invalid");
+	return value;
+}
+function parseFederationInboxRecord(value) {
+	exactKeys$1(value, [
+		"schemaVersion",
+		"receivedAt",
+		"envelope"
+	], "federation inbox record");
+	if (value.schemaVersion !== INBOX_SCHEMA_VERSION) throw new FleetFederationError("invalid-state", "federation inbox record schema is invalid");
+	return {
+		schemaVersion: INBOX_SCHEMA_VERSION,
+		receivedAt: canonicalTime(value.receivedAt, "federation receivedAt"),
+		envelope: parseStoredEnvelope(value.envelope)
+	};
+}
+function parseFederationAcknowledgement(value) {
+	exactKeys$1(value, [
+		"schemaVersion",
+		"messageId",
+		"payloadDigest",
+		"disposition",
+		"acknowledgedAt"
+	], "federation acknowledgement");
+	if (value.schemaVersion !== ACK_SCHEMA_VERSION || value.disposition !== "acknowledged" && value.disposition !== "dismissed") throw new FleetFederationError("invalid-state", "federation acknowledgement schema or disposition is invalid");
+	return {
+		schemaVersion: ACK_SCHEMA_VERSION,
+		messageId: messageId(value.messageId),
+		payloadDigest: digest(value.payloadDigest, "federation acknowledgement payloadDigest"),
+		disposition: value.disposition,
+		acknowledgedAt: canonicalTime(value.acknowledgedAt, "federation acknowledgedAt")
+	};
+}
+function verifyForeignFederationEnvelope(value, input) {
+	const envelope = verifyA2AEnvelope(value, input);
+	if (envelope.teamId === input.expectedTeamId || !isFleetFederationAdvisoryKind(envelope.kind)) throw new FleetFederationError("not-foreign-advisory", "federation inbox accepts verified foreign advisory messages only");
+	return envelope;
+}
+async function receiveFederationEnvelope(input) {
+	const receivedAt = nowIso(input.receivedAt ?? input.verification.now);
+	const envelope = verifyForeignFederationEnvelope(input.value, {
+		...input.verification,
+		now: receivedAt
+	});
+	const path = inboxPath(await ensureLayout(input.rootDirectory), envelope.messageId);
+	const record = {
+		schemaVersion: INBOX_SCHEMA_VERSION,
+		receivedAt,
+		envelope
+	};
+	if (await createExclusivePrivateJson(path, record) === "created") return {
+		status: "stored",
+		record
+	};
+	const existing = parseFederationInboxRecord(await readPrivateJson(path));
+	if (canonicalJson(existing.envelope) !== canonicalJson(envelope)) throw new FleetFederationError("message-conflict", "messageId is already bound to a different signed envelope");
+	return {
+		status: "duplicate",
+		record: existing
+	};
+}
+async function readInboxRecord(rootDirectory, id) {
+	try {
+		return parseFederationInboxRecord(await readPrivateJson(inboxPath(rootDirectory, id)));
+	} catch (error) {
+		if (error.code === "ENOENT") throw new FleetFederationError("message-not-found", "federation inbox message was not found");
+		throw error;
+	}
+}
+async function readAcknowledgement(rootDirectory, id) {
+	try {
+		return parseFederationAcknowledgement(await readPrivateJson(acknowledgementPath(rootDirectory, id)));
+	} catch (error) {
+		if (error.code === "ENOENT") return null;
+		throw error;
+	}
+}
+async function acknowledgeFederationMessage(input) {
+	const rootDirectory = await ensureLayout(input.rootDirectory);
+	const id = messageId(input.messageId);
+	const expectedPayloadDigest = digest(input.expectedPayloadDigest, "expectedPayloadDigest");
+	if (input.disposition !== "acknowledged" && input.disposition !== "dismissed") throw new FleetFederationError("invalid-state", "acknowledgement disposition is invalid");
+	const release = await acquireMessageLock(rootDirectory, id);
+	if (release === null) throw new FleetFederationError("message-busy", "federation message is being updated");
+	try {
+		const record = await readInboxRecord(rootDirectory, id);
+		if (record.envelope.payloadDigest !== expectedPayloadDigest) throw new FleetFederationError("acknowledgement-conflict", "acknowledgement payload digest does not match the stored message");
+		const acknowledgedAt = nowIso(input.acknowledgedAt);
+		if (Date.parse(acknowledgedAt) < Date.parse(record.receivedAt)) throw new FleetFederationError("invalid-state", "acknowledgement cannot predate receipt");
+		const acknowledgement = {
+			schemaVersion: ACK_SCHEMA_VERSION,
+			messageId: id,
+			payloadDigest: expectedPayloadDigest,
+			disposition: input.disposition,
+			acknowledgedAt
+		};
+		const path = acknowledgementPath(rootDirectory, id);
+		if (await createExclusivePrivateJson(path, acknowledgement) === "created") return {
+			status: "acknowledged",
+			acknowledgement
+		};
+		const existing = parseFederationAcknowledgement(await readPrivateJson(path));
+		if (existing.messageId !== id || existing.payloadDigest !== expectedPayloadDigest || existing.disposition !== input.disposition) throw new FleetFederationError("acknowledgement-conflict", "the first federation acknowledgement is final");
+		return {
+			status: "duplicate",
+			acknowledgement: existing
+		};
+	} finally {
+		await release();
+	}
+}
+async function existingPrivateDirectory(path, field) {
+	try {
+		await assertPrivateDirectory(path, field);
+		return true;
+	} catch (error) {
+		if (error.code === "ENOENT") return false;
+		throw error;
+	}
+}
+async function readAllFederationInbox(rootDirectory, now) {
+	if (!await existingPrivateDirectory(rootDirectory, "federation inbox root") || !await existingPrivateDirectory(inboxDirectory(rootDirectory), "federation inbox directory")) return [];
+	const hasAcknowledgements = await existingPrivateDirectory(acknowledgementsDirectory(rootDirectory), "federation acknowledgements directory");
+	const entries = await readdir(inboxDirectory(rootDirectory), { withFileTypes: true });
+	const records = [];
+	for (const entry of entries) {
+		if (!entry.isFile() || !/^[0-9a-f-]{36}\.json$/.test(entry.name)) continue;
+		const record = parseFederationInboxRecord(await readPrivateJson(join(inboxDirectory(rootDirectory), entry.name)));
+		if (entry.name !== messageSegment(record.envelope.messageId) + ".json") throw new FleetFederationError("invalid-state", "federation inbox filename does not match its message id");
+		const acknowledgement = hasAcknowledgements ? await readAcknowledgement(rootDirectory, record.envelope.messageId) : null;
+		if (acknowledgement !== null && (acknowledgement.messageId !== record.envelope.messageId || acknowledgement.payloadDigest !== record.envelope.payloadDigest)) throw new FleetFederationError("invalid-state", "federation acknowledgement does not match its inbox message");
+		records.push({
+			record,
+			acknowledgement,
+			expired: now >= Date.parse(record.envelope.expiresAt)
+		});
+	}
+	records.sort((left, right) => {
+		const time = Date.parse(right.record.receivedAt) - Date.parse(left.record.receivedAt);
+		return time === 0 ? left.record.envelope.messageId.localeCompare(right.record.envelope.messageId) : time;
+	});
+	return records;
+}
+async function listFederationInbox(rootValue, options = {}) {
+	const rootDirectory = stateRoot(rootValue);
+	const now = Date.parse(nowIso(options.now));
+	const limit = options.limit ?? 100;
+	if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500) throw new FleetFederationError("invalid-state", "federation inbox limit must be an integer from 1 to 500");
+	return (await readAllFederationInbox(rootDirectory, now)).slice(0, limit);
+}
+/** All federation messages are merely stored; a receipt never means task or tool authorization. */
+function federationReceiptPayload(record) {
+	return {
+		requestMessageId: record.envelope.messageId,
+		status: "stored"
+	};
+}
+function retentionInteger(value, field, min, max) {
+	if (!Number.isSafeInteger(value) || value < min || value > max) throw new FleetFederationError("retention-invalid", `${field} must be an integer from ${min} to ${max}`);
+	return value;
+}
+/**
+* Pure retention planner. Unexpired messages and fresh unacknowledged
+* messages are never selected, even if the inbox is above maxEntries.
+*/
+function planFederationInboxPrune(items, policy, nowValue = /* @__PURE__ */ new Date()) {
+	const now = Date.parse(nowIso(nowValue));
+	const acknowledgedRetentionMs = retentionInteger(policy.acknowledgedRetentionMs, "acknowledgedRetentionMs", 6e4, 31536e6);
+	const expiredRetentionMs = retentionInteger(policy.expiredRetentionMs, "expiredRetentionMs", 6e4, 31536e6);
+	const maxEntries = retentionInteger(policy.maxEntries, "maxEntries", 1, 1e5);
+	const selected = /* @__PURE__ */ new Map();
+	const ordered = [...items].sort((left, right) => Date.parse(left.record.receivedAt) - Date.parse(right.record.receivedAt));
+	const seen = /* @__PURE__ */ new Set();
+	for (const item of ordered) {
+		const id = item.record.envelope.messageId;
+		messageId(id);
+		digest(item.record.envelope.payloadDigest, "retention payloadDigest");
+		canonicalTime(item.record.receivedAt, "retention receivedAt");
+		canonicalTime(item.record.envelope.expiresAt, "retention expiresAt");
+		if (seen.has(id)) throw new FleetFederationError("invalid-state", "retention items must have unique message ids");
+		seen.add(id);
+		if (item.acknowledgement !== null && (item.acknowledgement.messageId !== id || item.acknowledgement.payloadDigest !== item.record.envelope.payloadDigest)) throw new FleetFederationError("invalid-state", "retention acknowledgement does not match its message");
+		if (item.acknowledgement !== null) canonicalTime(item.acknowledgement.acknowledgedAt, "retention acknowledgedAt");
+		const expired = now >= Date.parse(item.record.envelope.expiresAt);
+		if (expired && item.acknowledgement !== null && now - Date.parse(item.acknowledgement.acknowledgedAt) >= acknowledgedRetentionMs) selected.set(id, {
+			messageId: id,
+			payloadDigest: item.record.envelope.payloadDigest,
+			reason: "acknowledged-retention"
+		});
+		else if (expired && item.acknowledgement === null && now - Date.parse(item.record.envelope.expiresAt) >= expiredRetentionMs) selected.set(id, {
+			messageId: id,
+			payloadDigest: item.record.envelope.payloadDigest,
+			reason: "expired-retention"
+		});
+	}
+	let remaining = ordered.length - selected.size;
+	if (remaining > maxEntries) for (const item of ordered) {
+		if (remaining <= maxEntries) break;
+		const id = item.record.envelope.messageId;
+		if (selected.has(id)) continue;
+		if (now < Date.parse(item.record.envelope.expiresAt)) continue;
+		selected.set(id, {
+			messageId: id,
+			payloadDigest: item.record.envelope.payloadDigest,
+			reason: "capacity"
+		});
+		remaining -= 1;
+	}
+	return ordered.flatMap((item) => {
+		const candidate = selected.get(item.record.envelope.messageId);
+		return candidate === void 0 ? [] : [candidate];
+	});
+}
+function parsePruneCandidate(value) {
+	exactKeys$1(value, [
+		"messageId",
+		"payloadDigest",
+		"reason"
+	], "federation prune candidate");
+	if (value.reason !== "acknowledged-retention" && value.reason !== "expired-retention" && value.reason !== "capacity") throw new FleetFederationError("retention-invalid", "federation prune candidate reason is invalid");
+	return {
+		messageId: messageId(value.messageId, "federation prune candidate messageId"),
+		payloadDigest: digest(value.payloadDigest, "federation prune candidate payloadDigest"),
+		reason: value.reason
+	};
+}
+async function deleteFederationInboxItem(rootDirectory, expected) {
+	const id = expected.record.envelope.messageId;
+	let currentRecord;
+	try {
+		currentRecord = await readInboxRecord(rootDirectory, id);
+	} catch (error) {
+		if (error instanceof FleetFederationError && error.code === "message-not-found") return false;
+		throw error;
+	}
+	const currentAcknowledgement = await readAcknowledgement(rootDirectory, id);
+	if (canonicalJson(currentRecord) !== canonicalJson(expected.record) || canonicalJson(currentAcknowledgement) !== canonicalJson(expected.acknowledgement)) return false;
+	if (currentAcknowledgement !== null) {
+		const path = acknowledgementPath(rootDirectory, id);
+		await assertPrivateRegularFile(path, "federation acknowledgement");
+		await unlink(path);
+	}
+	const path = inboxPath(rootDirectory, id);
+	await assertPrivateRegularFile(path, "federation inbox record");
+	await unlink(path);
+	return true;
+}
+/**
+* Applies only candidates that still occur in a freshly recomputed retention
+* plan. Every message is locked, reread and compared before its fixed inbox
+* and acknowledgement paths are removed. No caller-provided path is used.
+*/
+async function applyFederationInboxPrune(input) {
+	const nowText = nowIso(input.now);
+	const now = Date.parse(nowText);
+	planFederationInboxPrune([], input.policy, nowText);
+	if (!Array.isArray(input.candidates)) throw new FleetFederationError("retention-invalid", "federation prune candidates must be an array");
+	const candidates = input.candidates.map(parsePruneCandidate);
+	const seen = /* @__PURE__ */ new Set();
+	for (const candidate of candidates) {
+		if (seen.has(candidate.messageId)) throw new FleetFederationError("retention-invalid", "federation prune candidates must have unique message ids");
+		seen.add(candidate.messageId);
+	}
+	if (candidates.length === 0) return {
+		pruned: [],
+		skipped: []
+	};
+	const rootDirectory = await ensureLayout(input.rootDirectory);
+	const result = {
+		pruned: [],
+		skipped: []
+	};
+	for (const candidate of candidates) {
+		const release = await acquireMessageLock(rootDirectory, candidate.messageId);
+		if (release === null) {
+			result.skipped.push({
+				candidate,
+				reason: "busy"
+			});
+			continue;
+		}
+		try {
+			const items = await readAllFederationInbox(rootDirectory, now);
+			const current = items.find((item) => item.record.envelope.messageId === candidate.messageId);
+			if (current === void 0) {
+				result.skipped.push({
+					candidate,
+					reason: "missing"
+				});
+				continue;
+			}
+			if (current.record.envelope.payloadDigest !== candidate.payloadDigest) {
+				result.skipped.push({
+					candidate,
+					reason: "changed"
+				});
+				continue;
+			}
+			const planned = planFederationInboxPrune(items, input.policy, nowText).find((item) => item.messageId === candidate.messageId);
+			if (planned === void 0) {
+				result.skipped.push({
+					candidate,
+					reason: "not-eligible"
+				});
+				continue;
+			}
+			if (planned.payloadDigest !== candidate.payloadDigest || planned.reason !== candidate.reason) {
+				result.skipped.push({
+					candidate,
+					reason: "plan-changed"
+				});
+				continue;
+			}
+			if (now < Date.parse(current.record.envelope.expiresAt)) {
+				result.skipped.push({
+					candidate,
+					reason: "not-eligible"
+				});
+				continue;
+			}
+			if (!await deleteFederationInboxItem(rootDirectory, current)) {
+				result.skipped.push({
+					candidate,
+					reason: "changed"
+				});
+				continue;
+			}
+			result.pruned.push(candidate);
+		} finally {
+			await release();
+		}
+	}
+	return result;
+}
+function safeFederationError(error) {
+	const raw = typeof error.code === "string" ? error.code : "internal";
+	const messages = {
+		"not-foreign-advisory": "only signed foreign advisory messages are accepted",
+		"invalid-state": "federation inbox state or request is invalid",
+		"unsafe-state-path": "federation inbox contains an unsafe path",
+		"unsafe-state-permissions": "federation inbox permissions are unsafe",
+		"message-conflict": "federation message id is already bound to different content",
+		"acknowledgement-conflict": "the first federation acknowledgement is final",
+		"message-not-found": "federation message was not found",
+		"message-busy": "federation message is being updated",
+		"retention-invalid": "federation retention request is invalid"
+	};
+	return Object.hasOwn(messages, raw) ? {
+		code: raw,
+		message: messages[raw]
+	} : {
+		code: "internal",
+		message: "federation request failed"
+	};
 }
 //#endregion
 //#region src/a2a/runtime.ts
@@ -11366,6 +14026,34 @@ var FleetA2ARuntimeError = class extends Error {
 };
 function hash(value) {
 	return createHash("sha256").update(value, "utf8").digest("hex");
+}
+function readStoredReceipt(value, envelope) {
+	const raw = stateRecord(value, [
+		"schemaVersion",
+		"requestEnvelopeDigest",
+		"receiptDigest",
+		"receipt"
+	], "A2A receipt state");
+	if (raw.schemaVersion !== 1 || typeof raw.requestEnvelopeDigest !== "string" || !/^[0-9a-f]{64}$/.test(raw.requestEnvelopeDigest) || typeof raw.receiptDigest !== "string" || !/^[0-9a-f]{64}$/.test(raw.receiptDigest)) throw new FleetA2ARuntimeError("receipt-state-invalid", "A2A receipt state is invalid or legacy-unbound");
+	if (raw.requestEnvelopeDigest !== sha256Canonical(envelope)) throw new FleetA2ARuntimeError("message-id-conflict", "A2A message id is already bound to a different signed envelope");
+	const receiptRaw = stateRecord(raw.receipt, ["requestMessageId", "response"], "A2A receipt");
+	if (receiptRaw.requestMessageId !== envelope.messageId || sha256Canonical(raw.receipt) !== raw.receiptDigest || typeof receiptRaw.response !== "object" || receiptRaw.response === null || Array.isArray(receiptRaw.response)) throw new FleetA2ARuntimeError("receipt-state-invalid", "A2A receipt state does not match its request");
+	const response = receiptRaw.response;
+	try {
+		validateA2APayload(response.kind, response.payload);
+	} catch {
+		throw new FleetA2ARuntimeError("receipt-state-invalid", "A2A receipt response payload is invalid");
+	}
+	if (response.recipient?.teamId !== envelope.teamId || response.recipient.deviceId !== envelope.sender.deviceId) throw new FleetA2ARuntimeError("receipt-state-invalid", "A2A receipt response targets another sender");
+	return raw.receipt;
+}
+function storedReceipt(envelope, receipt) {
+	return {
+		schemaVersion: 1,
+		requestEnvelopeDigest: sha256Canonical(envelope),
+		receiptDigest: sha256Canonical(receipt),
+		receipt
+	};
 }
 async function ensureDirectory(path) {
 	await mkdir(path, {
@@ -11407,13 +14095,27 @@ async function atomicText(path, value) {
 		throw error;
 	}
 }
+async function exclusiveJson(path, value) {
+	await ensureDirectory(dirname(path));
+	let handle;
+	try {
+		handle = await open(path, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW, 384);
+		await handle.writeFile(JSON.stringify(value, null, 2) + "\n");
+		await handle.sync();
+	} catch (error) {
+		if (error.code === "ELOOP") throw new FleetA2ARuntimeError("unsafe-state-file", "A2A state accepts regular files only");
+		throw error;
+	} finally {
+		await handle?.close();
+	}
+}
 async function readRegularFile(path, privateFile = false) {
 	let handle;
 	try {
 		handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
 		const info = await handle.stat();
 		if (!info.isFile()) throw new FleetA2ARuntimeError("unsafe-state-file", "A2A state accepts regular files only");
-		if (privateFile && (info.mode & 63) !== 0) throw new FleetA2ARuntimeError("unsafe-key-permissions", "A2A private key must not be accessible by group or others");
+		if (privateFile && ((info.mode & 63) !== 0 || typeof process.getuid === "function" && info.uid !== process.getuid())) throw new FleetA2ARuntimeError("unsafe-state-permissions", "private A2A state must be owner-only and owned by the current user");
 		return await handle.readFile("utf8");
 	} catch (error) {
 		if (error.code === "ELOOP") throw new FleetA2ARuntimeError("unsafe-state-file", "A2A state accepts regular files only");
@@ -11435,11 +14137,18 @@ async function readA2ATrustStore(config) {
 		"teamId",
 		"entries"
 	], "trust store");
-	if (raw.schemaVersion !== 1 || raw.teamId !== config.a2a.teamId || !Array.isArray(raw.entries)) throw new FleetA2ARuntimeError("invalid-config", "trust store schema or team identity is invalid");
+	if (raw.schemaVersion !== 1 && raw.schemaVersion !== 2 || raw.teamId !== config.a2a.teamId || !Array.isArray(raw.entries)) throw new FleetA2ARuntimeError("invalid-config", "trust store schema or team identity is invalid");
 	const trust = /* @__PURE__ */ new Map();
 	for (let index = 0; index < raw.entries.length; index += 1) {
 		const entry = raw.entries[index];
-		exactKeys(entry, [
+		exactKeys(entry, raw.schemaVersion === 1 ? [
+			"keyId",
+			"principalId",
+			"deviceId",
+			"publicKeyPem",
+			"allowedKinds"
+		] : [
+			"teamId",
 			"keyId",
 			"principalId",
 			"deviceId",
@@ -11447,35 +14156,51 @@ async function readA2ATrustStore(config) {
 			"allowedKinds"
 		], `trust store entries[${index}]`);
 		if (typeof entry.keyId !== "string" || typeof entry.principalId !== "string" || typeof entry.deviceId !== "string" || typeof entry.publicKeyPem !== "string" || !Array.isArray(entry.allowedKinds) || entry.allowedKinds.some((kind) => typeof kind !== "string" || !FLEET_A2A_KINDS.includes(kind))) throw new FleetA2ARuntimeError("invalid-config", "trust store entry is invalid");
-		if (!/^ed25519:[0-9a-f]{64}$/.test(entry.keyId) || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(entry.principalId) || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(entry.deviceId) || new Set(entry.allowedKinds).size !== entry.allowedKinds.length) throw new FleetA2ARuntimeError("invalid-config", "trust store entry identity or capabilities are invalid");
+		const senderTeamId = raw.schemaVersion === 1 ? config.a2a.teamId : entry.teamId;
+		if (typeof senderTeamId !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(senderTeamId) || !/^ed25519:[0-9a-f]{64}$/.test(entry.keyId) || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(entry.principalId) || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(entry.deviceId) || new Set(entry.allowedKinds).size !== entry.allowedKinds.length) throw new FleetA2ARuntimeError("invalid-config", "trust store entry identity or capabilities are invalid");
 		try {
 			if (a2aKeyId(entry.publicKeyPem) !== entry.keyId) throw new Error("key mismatch");
 		} catch {
 			throw new FleetA2ARuntimeError("invalid-config", "trust store entry key identity is invalid");
 		}
 		if (trust.has(entry.keyId)) throw new FleetA2ARuntimeError("invalid-config", "trust store key ids must be unique");
-		trust.set(entry.keyId, entry);
+		trust.set(entry.keyId, {
+			...entry,
+			teamId: senderTeamId
+		});
 	}
 	return trust;
 }
 async function privateKeyPem(config) {
 	return readRegularFile(config.a2a.privateKeyPath, true);
 }
-async function signA2AMessage(config, recipientDeviceId, kind, payload, now = /* @__PURE__ */ new Date()) {
+async function signA2AMessage(config, recipientDeviceId, kind, payload, now = /* @__PURE__ */ new Date(), recipientTeamId) {
 	assertA2AReadyConfig(config);
+	const ttlMs = messageTtlMs(config, kind, payload, now, recipientTeamId !== void 0 && recipientTeamId !== config.a2a.teamId);
 	return createA2AEnvelope({
 		teamId: config.a2a.teamId,
 		sender: {
 			principalId: config.a2a.principalId,
 			deviceId: config.deviceId
 		},
-		recipient: { deviceId: recipientDeviceId },
+		recipient: {
+			teamId: recipientTeamId ?? config.a2a.teamId,
+			deviceId: recipientDeviceId
+		},
 		kind,
 		payload,
 		privateKey: await privateKeyPem(config),
 		now,
-		ttlMs: Math.min(3e5, config.a2a.maxMessageTtlMs)
+		ttlMs
 	});
+}
+function messageTtlMs(config, kind, payload, now, foreign) {
+	const shortTtlMs = Math.min(3e5, config.a2a.maxMessageTtlMs);
+	if (!foreign || !isFleetFederationAdvisoryKind(kind)) return shortTtlMs;
+	if (kind !== "approval.request") return config.a2a.maxMessageTtlMs;
+	const remainingMs = (typeof payload.expiresAt === "string" ? Date.parse(payload.expiresAt) : NaN) - now.getTime();
+	if (!Number.isFinite(remainingMs) || remainingMs < 1e3) throw new FleetA2ARuntimeError("message-expired", "federation approval request expires too soon to sign");
+	return Math.min(config.a2a.maxMessageTtlMs, remainingMs);
 }
 async function verifyA2AMessage(config, value, now = /* @__PURE__ */ new Date()) {
 	assertA2AReadyConfig(config);
@@ -11525,7 +14250,10 @@ function stateDigest(value, field, nullable = false) {
 	return value;
 }
 function parseTaskRecord(value, expectedTaskId) {
-	const raw = stateRecord(value, [
+	const schema = typeof value === "object" && value !== null && !Array.isArray(value) ? value.schemaVersion : void 0;
+	const legacy = schema === 1;
+	const executionBound = schema === 3;
+	const raw = stateRecord(value, legacy ? [
 		"schemaVersion",
 		"taskId",
 		"requestMessageId",
@@ -11540,21 +14268,74 @@ function parseTaskRecord(value, expectedTaskId) {
 		"deadlineAt",
 		"resultDigest",
 		"errorCode"
+	] : executionBound ? [
+		"schemaVersion",
+		"taskId",
+		"requestMessageId",
+		"senderDeviceId",
+		"senderPrincipalId",
+		"senderKeyId",
+		"workspaceId",
+		"workspacePath",
+		"profile",
+		"executionProfileHash",
+		"promptDigest",
+		"manifestDigest",
+		"releaseDigest",
+		"policyId",
+		"policyDigest",
+		"taskBindingDigest",
+		"state",
+		"createdAt",
+		"updatedAt",
+		"deadlineAt",
+		"resultDigest",
+		"errorCode"
+	] : [
+		"schemaVersion",
+		"taskId",
+		"requestMessageId",
+		"senderDeviceId",
+		"senderPrincipalId",
+		"senderKeyId",
+		"workspaceId",
+		"workspacePath",
+		"profile",
+		"promptDigest",
+		"manifestDigest",
+		"releaseDigest",
+		"policyId",
+		"policyDigest",
+		"taskBindingDigest",
+		"state",
+		"createdAt",
+		"updatedAt",
+		"deadlineAt",
+		"resultDigest",
+		"errorCode"
 	], "task record");
 	const taskId = stateText(raw.taskId, "task record.taskId");
 	taskSegment(taskId);
 	const state = stateText(raw.state, "task record.state", 24);
-	if (raw.schemaVersion !== 1 || taskId !== expectedTaskId || !TASK_STATES.has(state)) throw new FleetA2ARuntimeError("invalid-task-state", "task record identity, schema or state is invalid");
+	if (raw.schemaVersion !== 1 && raw.schemaVersion !== 2 && raw.schemaVersion !== 3 || taskId !== expectedTaskId || !TASK_STATES.has(state)) throw new FleetA2ARuntimeError("invalid-task-state", "task record identity, schema or state is invalid");
 	const errorCode = raw.errorCode === null ? null : stateText(raw.errorCode, "task record.errorCode", 64);
 	return {
-		schemaVersion: 1,
+		schemaVersion: raw.schemaVersion,
 		taskId,
 		requestMessageId: stateText(raw.requestMessageId, "task record.requestMessageId", 64),
 		senderDeviceId: stateText(raw.senderDeviceId, "task record.senderDeviceId", 64),
 		senderPrincipalId: stateText(raw.senderPrincipalId, "task record.senderPrincipalId", 64),
+		senderKeyId: legacy ? null : stateText(raw.senderKeyId, "task record.senderKeyId", 80),
 		workspaceId: stateText(raw.workspaceId, "task record.workspaceId", 64),
+		workspacePath: legacy ? null : stateText(raw.workspacePath, "task record.workspacePath", 4096),
 		profile: stateText(raw.profile, "task record.profile", 64),
+		executionProfileHash: executionBound ? stateDigest(raw.executionProfileHash, "task record.executionProfileHash") : null,
 		promptDigest: stateDigest(raw.promptDigest, "task record.promptDigest"),
+		manifestDigest: legacy ? null : stateDigest(raw.manifestDigest, "task record.manifestDigest"),
+		releaseDigest: legacy ? null : stateDigest(raw.releaseDigest, "task record.releaseDigest"),
+		policyId: legacy ? null : stateText(raw.policyId, "task record.policyId", 64),
+		policyDigest: legacy ? null : stateDigest(raw.policyDigest, "task record.policyDigest"),
+		taskBindingDigest: legacy ? null : stateDigest(raw.taskBindingDigest, "task record.taskBindingDigest"),
 		state,
 		createdAt: stateTime(raw.createdAt, "task record.createdAt"),
 		updatedAt: stateTime(raw.updatedAt, "task record.updatedAt"),
@@ -11564,7 +14345,10 @@ function parseTaskRecord(value, expectedTaskId) {
 	};
 }
 function parseTaskRequest(value, expectedTaskId) {
-	const raw = stateRecord(value, [
+	const schema = typeof value === "object" && value !== null && !Array.isArray(value) ? value.schemaVersion : void 0;
+	const legacy = schema === 1;
+	const executionBound = schema === 3;
+	const raw = stateRecord(value, legacy ? [
 		"schemaVersion",
 		"taskId",
 		"requestMessageId",
@@ -11574,19 +14358,65 @@ function parseTaskRequest(value, expectedTaskId) {
 		"profile",
 		"promptDigest",
 		"prompt"
+	] : executionBound ? [
+		"schemaVersion",
+		"taskId",
+		"requestMessageId",
+		"senderDeviceId",
+		"senderPrincipalId",
+		"senderKeyId",
+		"workspaceId",
+		"workspacePath",
+		"profile",
+		"executionProfileHash",
+		"promptDigest",
+		"manifestDigest",
+		"releaseDigest",
+		"policyId",
+		"policyDigest",
+		"taskBindingDigest",
+		"deadline",
+		"prompt"
+	] : [
+		"schemaVersion",
+		"taskId",
+		"requestMessageId",
+		"senderDeviceId",
+		"senderPrincipalId",
+		"senderKeyId",
+		"workspaceId",
+		"workspacePath",
+		"profile",
+		"promptDigest",
+		"manifestDigest",
+		"releaseDigest",
+		"policyId",
+		"policyDigest",
+		"taskBindingDigest",
+		"deadline",
+		"prompt"
 	], "task request");
-	if (raw.schemaVersion !== 1 || raw.taskId !== expectedTaskId || typeof raw.prompt !== "string" || raw.prompt.length === 0 || raw.prompt.includes("\0")) throw new FleetA2ARuntimeError("invalid-task-state", "task request identity, schema or prompt is invalid");
+	if (raw.schemaVersion !== 1 && raw.schemaVersion !== 2 && raw.schemaVersion !== 3 || raw.taskId !== expectedTaskId || typeof raw.prompt !== "string" || raw.prompt.length === 0 || raw.prompt.includes("\0")) throw new FleetA2ARuntimeError("invalid-task-state", "task request identity, schema or prompt is invalid");
 	const promptDigest = stateDigest(raw.promptDigest, "task request.promptDigest");
 	if (hash(raw.prompt) !== promptDigest) throw new FleetA2ARuntimeError("invalid-task-state", "task request prompt digest is invalid");
 	return {
-		schemaVersion: 1,
+		schemaVersion: raw.schemaVersion,
 		taskId: expectedTaskId,
 		requestMessageId: stateText(raw.requestMessageId, "task request.requestMessageId", 64),
 		senderDeviceId: stateText(raw.senderDeviceId, "task request.senderDeviceId", 64),
 		senderPrincipalId: stateText(raw.senderPrincipalId, "task request.senderPrincipalId", 64),
+		senderKeyId: legacy ? null : stateText(raw.senderKeyId, "task request.senderKeyId", 80),
 		workspaceId: stateText(raw.workspaceId, "task request.workspaceId", 64),
+		workspacePath: legacy ? null : stateText(raw.workspacePath, "task request.workspacePath", 4096),
 		profile: stateText(raw.profile, "task request.profile", 64),
+		executionProfileHash: executionBound ? stateDigest(raw.executionProfileHash, "task request.executionProfileHash") : null,
 		promptDigest,
+		manifestDigest: legacy ? null : stateDigest(raw.manifestDigest, "task request.manifestDigest"),
+		releaseDigest: legacy ? null : stateDigest(raw.releaseDigest, "task request.releaseDigest"),
+		policyId: legacy ? null : stateText(raw.policyId, "task request.policyId", 64),
+		policyDigest: legacy ? null : stateDigest(raw.policyDigest, "task request.policyDigest"),
+		taskBindingDigest: legacy ? null : stateDigest(raw.taskBindingDigest, "task request.taskBindingDigest"),
+		deadline: legacy ? null : stateTime(raw.deadline, "task request.deadline"),
 		prompt: raw.prompt
 	};
 }
@@ -11597,6 +14427,74 @@ async function readTaskRecord(config, taskId) {
 		if (error.code === "ENOENT") return null;
 		throw error;
 	}
+}
+async function taskDirectoryEntries(config) {
+	const root = join(config.stateDir, "tasks");
+	let info;
+	try {
+		info = await lstat(root);
+	} catch (error) {
+		if (error.code === "ENOENT") return [];
+		throw error;
+	}
+	if (info.isSymbolicLink() || !info.isDirectory()) throw new FleetA2ARuntimeError("unsafe-state-file", "task state root must be a real directory");
+	if ((info.mode & 63) !== 0) throw new FleetA2ARuntimeError("unsafe-state-permissions", "task state root must be owner-only");
+	return (await readdir(root, { withFileTypes: true })).flatMap((entry) => entry.isDirectory() && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(entry.name) ? [{ name: entry.name }] : []);
+}
+async function listFleetTasks(config, limit = 50, now = /* @__PURE__ */ new Date()) {
+	assertA2AReadyConfig(config);
+	if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new FleetA2ARuntimeError("invalid-payload", "task list limit must be an integer from 1 to 100");
+	const tasks = (await Promise.all((await taskDirectoryEntries(config)).map(async (entry) => readTaskRecord(config, "task:" + entry.name)))).flatMap((record) => record === null ? [] : [{
+		taskId: record.taskId,
+		state: record.state,
+		targetDeviceId: config.deviceId,
+		workspaceId: record.workspaceId,
+		profile: record.profile,
+		createdAt: record.createdAt,
+		updatedAt: record.updatedAt,
+		errorCode: record.errorCode,
+		resultDigest: record.resultDigest
+	}]).sort((left, right) => right.updatedAt.localeCompare(left.updatedAt) || right.taskId.localeCompare(left.taskId)).slice(0, limit);
+	return {
+		generatedAt: now.toISOString(),
+		tasks
+	};
+}
+async function pruneFleetTasks(config, input) {
+	assertA2AReadyConfig(config);
+	const olderThanMs = Date.parse(input.olderThan);
+	if (!Number.isFinite(olderThanMs) || new Date(olderThanMs).toISOString() !== input.olderThan) throw new FleetA2ARuntimeError("invalid-payload", "tasks prune olderThan must be a canonical timestamp");
+	const allowed = /* @__PURE__ */ new Set([
+		"succeeded",
+		"failed",
+		"cancelled"
+	]);
+	if (!Array.isArray(input.states) || input.states.length === 0 || input.states.length > allowed.size || input.states.some((state) => !allowed.has(state)) || new Set(input.states).size !== input.states.length) throw new FleetA2ARuntimeError("invalid-payload", "tasks prune states must be unique terminal task states");
+	const selected = new Set(input.states);
+	let pruned = 0;
+	let skippedActive = 0;
+	for (const entry of await taskDirectoryEntries(config)) {
+		const taskId = "task:" + entry.name;
+		const record = await readTaskRecord(config, taskId);
+		if (record === null || Date.parse(record.updatedAt) >= olderThanMs) continue;
+		if (!selected.has(record.state)) {
+			if (!allowed.has(record.state)) skippedActive += 1;
+			continue;
+		}
+		if (await processLockActive(join(taskDirectory(config, taskId), "worker.lock"))) {
+			skippedActive += 1;
+			continue;
+		}
+		await rm(taskDirectory(config, taskId), {
+			recursive: true,
+			force: false
+		});
+		pruned += 1;
+	}
+	return {
+		pruned,
+		skippedActive
+	};
 }
 async function readTaskRequest(config, taskId) {
 	try {
@@ -11685,72 +14583,228 @@ async function launchTaskWorker(launch, taskId) {
 	child.stdin.end(JSON.stringify({ taskId }) + "\n");
 	child.unref();
 }
-async function staleProcessLock(path) {
-	let source;
+async function readProcessLockSnapshot(path) {
+	let handle;
 	try {
-		source = await readRegularFile(path);
+		handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+		const info = await handle.stat();
+		if (!info.isFile()) throw new FleetA2ARuntimeError("unsafe-state-file", "A2A lock must be a regular file");
+		return {
+			source: await handle.readFile("utf8"),
+			dev: info.dev,
+			ino: info.ino,
+			mtimeMs: info.mtimeMs
+		};
 	} catch (error) {
-		if (error.code === "ENOENT") return true;
+		if (error.code === "ENOENT") return null;
+		if (error.code === "ELOOP") throw new FleetA2ARuntimeError("unsafe-state-file", "A2A lock must not be a symbolic link");
+		throw error;
+	} finally {
+		await handle?.close();
+	}
+}
+async function observeProcessLock(path) {
+	const snapshot = await readProcessLockSnapshot(path);
+	if (snapshot === null) return { state: "missing" };
+	try {
+		const owner = JSON.parse(snapshot.source);
+		if (typeof owner.pid === "number" && Number.isSafeInteger(owner.pid) && owner.pid > 0 && typeof owner.token === "string") return await processAlive(owner.pid) ? { state: "active" } : {
+			state: "stale",
+			snapshot
+		};
+	} catch {}
+	return Date.now() - snapshot.mtimeMs > 3e4 ? {
+		state: "stale",
+		snapshot
+	} : { state: "active" };
+}
+function sameProcessLockIdentity(snapshot, expected) {
+	return snapshot !== null && snapshot.dev === expected.dev && snapshot.ino === expected.ino;
+}
+async function casUnlinkProcessLock(path, expected) {
+	const claimPath = path + ".reap-" + hash(expected.source);
+	try {
+		await link(path, claimPath);
+	} catch (error) {
+		if (error.code === "ENOENT" || error.code === "EEXIST") return false;
 		throw error;
 	}
 	try {
-		const owner = JSON.parse(source);
-		if (typeof owner.pid === "number" && Number.isSafeInteger(owner.pid) && owner.pid > 0 && typeof owner.token === "string") return !await processAlive(owner.pid);
-	} catch {}
-	const info = await lstat(path);
-	return Date.now() - info.mtimeMs > 3e4;
+		const [claimed, current] = await Promise.all([readProcessLockSnapshot(claimPath), readProcessLockSnapshot(path)]);
+		if (!sameProcessLockIdentity(claimed, expected) || !sameProcessLockIdentity(current, expected)) return false;
+		await rm(path);
+		return true;
+	} finally {
+		await rm(claimPath, { force: true });
+	}
 }
-async function acquireProcessLock(path, busyCode, busyMessage) {
+async function reclaimStaleProcessLock(path, observation, hooks) {
+	await hooks?.beforeStaleLockClaim?.(path);
+	return casUnlinkProcessLock(path, observation.snapshot);
+}
+async function createProcessLock(path, fields = {}) {
+	const token = randomUUID();
+	let handle;
+	let createdLock;
+	try {
+		handle = await open(path, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW, 384);
+		const info = await handle.stat();
+		createdLock = {
+			path,
+			token,
+			dev: info.dev,
+			ino: info.ino
+		};
+		await handle.writeFile(JSON.stringify({
+			...fields,
+			pid: process.pid,
+			token,
+			at: (/* @__PURE__ */ new Date()).toISOString()
+		}) + "\n");
+		await handle.sync();
+		return createdLock;
+	} catch (error) {
+		if (error.code === "EEXIST") return null;
+		if (createdLock !== void 0) try {
+			await releaseProcessLock(createdLock);
+		} catch {}
+		throw error;
+	} finally {
+		await handle?.close();
+	}
+}
+async function acquireProcessLock(path, busyCode, busyMessage, hooks) {
 	await ensureDirectory(dirname(path));
-	for (let attempt = 0; attempt < 3; attempt += 1) {
-		const token = randomUUID();
-		let handle;
-		try {
-			handle = await open(path, "wx", 384);
-			await handle.writeFile(JSON.stringify({
-				pid: process.pid,
-				token,
-				at: (/* @__PURE__ */ new Date()).toISOString()
-			}) + "\n");
-			await handle.sync();
-			return {
-				path,
-				token
-			};
-		} catch (error) {
-			if (error.code !== "EEXIST") throw error;
-			if (!await staleProcessLock(path)) throw new FleetA2ARuntimeError(busyCode, busyMessage);
-			await rm(path, { force: true });
-		} finally {
-			await handle?.close();
+	for (let attempt = 0; attempt < 4; attempt += 1) {
+		const created = await createProcessLock(path);
+		if (created !== null) return created;
+		const observation = await observeProcessLock(path);
+		if (observation.state === "missing") continue;
+		if (observation.state === "active") throw new FleetA2ARuntimeError(busyCode, busyMessage);
+		if (!await reclaimStaleProcessLock(path, observation, hooks)) {
+			if ((await observeProcessLock(path)).state === "active") throw new FleetA2ARuntimeError(busyCode, busyMessage);
 		}
 	}
 	throw new FleetA2ARuntimeError(busyCode, busyMessage);
 }
 async function releaseProcessLock(lock) {
 	try {
-		if (JSON.parse(await readRegularFile(lock.path)).token === lock.token) await rm(lock.path, { force: true });
+		const snapshot = await readProcessLockSnapshot(lock.path);
+		if (snapshot === null || snapshot.dev !== lock.dev || snapshot.ino !== lock.ino) return;
+		if (JSON.parse(snapshot.source).token === lock.token) await casUnlinkProcessLock(lock.path, snapshot);
 	} catch (error) {
 		if (error.code !== "ENOENT") throw error;
 	}
 }
 async function processLockActive(path) {
-	try {
-		if (!await staleProcessLock(path)) return true;
-		await rm(path, { force: true });
-		return false;
-	} catch (error) {
-		if (error.code === "ENOENT") return false;
-		throw error;
+	for (let attempt = 0; attempt < 3; attempt += 1) {
+		const observation = await observeProcessLock(path);
+		if (observation.state === "missing") return false;
+		if (observation.state === "active") return true;
+		if (await reclaimStaleProcessLock(path, observation)) return false;
 	}
+	return true;
 }
 function taskMatchesEnvelope(record, envelope, payload) {
-	return record.promptDigest === hash(payload.prompt) && record.senderDeviceId === envelope.sender.deviceId && record.senderPrincipalId === envelope.sender.principalId && record.workspaceId === payload.workspaceId && record.profile === payload.profile;
+	if (record.schemaVersion !== 3 || record.workspacePath === null || record.executionProfileHash === null || record.taskBindingDigest === null) return false;
+	let binding;
+	try {
+		binding = createTaskBindingDigest({
+			teamId: envelope.teamId,
+			submitMessageId: envelope.messageId,
+			submitPayloadDigest: envelope.payloadDigest,
+			sender: envelope.sender,
+			recipientDeviceId: envelope.recipient.deviceId,
+			taskId: payload.taskId,
+			workspaceId: payload.workspaceId,
+			workspacePath: record.workspacePath,
+			profile: payload.profile,
+			executionProfileHash: payload.executionProfileHash,
+			manifestDigest: payload.manifestDigest,
+			releaseDigest: payload.releaseDigest,
+			policyId: payload.policyId,
+			policyDigest: payload.policyDigest,
+			deadline: payload.deadline
+		});
+	} catch {
+		return false;
+	}
+	return record.promptDigest === hash(payload.prompt) && record.senderDeviceId === envelope.sender.deviceId && record.senderPrincipalId === envelope.sender.principalId && record.senderKeyId === envelope.sender.keyId && record.workspaceId === payload.workspaceId && record.profile === payload.profile && record.executionProfileHash === payload.executionProfileHash && record.manifestDigest === payload.manifestDigest && record.releaseDigest === payload.releaseDigest && record.policyId === payload.policyId && record.policyDigest === payload.policyDigest && record.deadlineAt === payload.deadline && record.taskBindingDigest === binding;
+}
+async function taskWorkspace(config, workspaceId) {
+	const configured = config.tasks.workspaces[workspaceId];
+	if (configured === void 0) throw new FleetA2ARuntimeError("task-policy-denied", "task workspace is not allowed by local policy");
+	const info = await lstat(configured).catch(() => void 0);
+	if (info === void 0 || info.isSymbolicLink() || !info.isDirectory()) throw new FleetA2ARuntimeError("task-policy-denied", "task workspace must be an existing real directory");
+	return realpath(configured);
+}
+async function assertTaskReleaseBinding(config, manifestDigest, releaseDigest) {
+	if (hash(await readRegularFile(config.manifestPath)) !== manifestDigest) throw new FleetA2ARuntimeError("task-release-mismatch", "task manifest does not match the active profile manifest");
+	const applied = await readAppliedRelease(config);
+	if (applied === null || applied.releaseDigest !== releaseDigest) throw new FleetA2ARuntimeError("task-release-mismatch", "task release does not match the active applied release");
+}
+async function assertTaskExecutionProfile(config, profile, executionProfileHash) {
+	try {
+		await assertExecutionProfileHash(config.dshHome, profile, executionProfileHash);
+	} catch {
+		throw new FleetA2ARuntimeError("task-execution-profile-mismatch", "task execution profile no longer matches its signed profile hash");
+	}
+}
+function taskPolicy(config, policyId, policyDigest) {
+	try {
+		return resolveTaskPolicy(config.tasks, policyId, policyDigest);
+	} catch {
+		throw new FleetA2ARuntimeError("task-policy-denied", "task policy is not installed, enabled, or digest-matched locally");
+	}
+}
+function assertTaskOwner(record, envelope) {
+	if (record.schemaVersion !== 2 && record.schemaVersion !== 3 || record.senderKeyId === null) throw new FleetA2ARuntimeError("legacy-task-owner-unbound", "legacy tasks cannot be controlled through the signed task channel");
+	if (record.senderDeviceId !== envelope.sender.deviceId || record.senderPrincipalId !== envelope.sender.principalId || record.senderKeyId !== envelope.sender.keyId) throw new FleetA2ARuntimeError("task-owner-mismatch", "the signed caller does not own this task");
+}
+function assertBoundTaskState(record, request) {
+	if (record.schemaVersion !== 3 || request.schemaVersion !== 3 || record.senderKeyId === null || record.workspacePath === null || record.manifestDigest === null || record.releaseDigest === null || record.executionProfileHash === null || record.policyId === null || record.policyDigest === null || record.taskBindingDigest === null || request.senderKeyId !== record.senderKeyId || request.workspacePath !== record.workspacePath || request.executionProfileHash !== record.executionProfileHash || request.manifestDigest !== record.manifestDigest || request.releaseDigest !== record.releaseDigest || request.policyId !== record.policyId || request.policyDigest !== record.policyDigest || request.taskBindingDigest !== record.taskBindingDigest || request.deadline !== record.deadlineAt) throw new FleetA2ARuntimeError("task-binding-invalid", "task execution requires an intact schema-v3 release, profile and policy binding");
+}
+async function assertExecutableTaskBinding(config, record, request) {
+	assertBoundTaskState(record, request);
+	if (request.requestMessageId !== record.requestMessageId || request.senderDeviceId !== record.senderDeviceId || request.senderPrincipalId !== record.senderPrincipalId || request.workspaceId !== record.workspaceId || request.profile !== record.profile || request.promptDigest !== record.promptDigest) throw new FleetA2ARuntimeError("task-request-mismatch", "task request does not match its durable record");
+	if (Date.now() >= Date.parse(record.deadlineAt)) throw new FleetA2ARuntimeError("task-timeout", "task deadline has expired");
+	await assertTaskReleaseBinding(config, record.manifestDigest, record.releaseDigest);
+	await assertTaskExecutionProfile(config, record.profile, record.executionProfileHash);
+	const policy = taskPolicy(config, record.policyId, record.policyDigest);
+	const workspacePath = await taskWorkspace(config, record.workspaceId);
+	if (workspacePath !== record.workspacePath) throw new FleetA2ARuntimeError("task-policy-denied", "task workspace binding changed after acceptance");
+	return {
+		workspacePath,
+		policy
+	};
 }
 async function acceptTask(config, envelope, launch) {
 	if (!config.tasks.enabled) throw new FleetA2ARuntimeError("tasks-disabled", "remote tasks are disabled on this device");
 	const payload = envelope.payload;
-	if (config.tasks.workspaces[payload.workspaceId] === void 0 || !config.tasks.profiles.includes(payload.profile)) throw new FleetA2ARuntimeError("task-policy-denied", "task workspace or profile is not allowed by local policy");
+	if (!config.tasks.profiles.includes(payload.profile)) throw new FleetA2ARuntimeError("task-policy-denied", "task workspace or profile is not allowed by local policy");
+	const deadline = Date.parse(payload.deadline);
+	if (deadline <= Date.now() || deadline > Date.parse(envelope.issuedAt) + config.tasks.timeoutMs) throw new FleetA2ARuntimeError("task-policy-denied", "task deadline is expired or exceeds the local task timeout");
+	await assertTaskReleaseBinding(config, payload.manifestDigest, payload.releaseDigest);
+	await assertTaskExecutionProfile(config, payload.profile, payload.executionProfileHash);
+	taskPolicy(config, payload.policyId, payload.policyDigest);
+	const workspacePath = await taskWorkspace(config, payload.workspaceId);
+	const taskBindingDigest = createTaskBindingDigest({
+		teamId: envelope.teamId,
+		submitMessageId: envelope.messageId,
+		submitPayloadDigest: envelope.payloadDigest,
+		sender: envelope.sender,
+		recipientDeviceId: config.deviceId,
+		taskId: payload.taskId,
+		workspaceId: payload.workspaceId,
+		workspacePath,
+		profile: payload.profile,
+		executionProfileHash: payload.executionProfileHash,
+		manifestDigest: payload.manifestDigest,
+		releaseDigest: payload.releaseDigest,
+		policyId: payload.policyId,
+		policyDigest: payload.policyDigest,
+		deadline: payload.deadline
+	});
 	const directory = taskDirectory(config, payload.taskId);
 	const promptDigest = hash(payload.prompt);
 	await ensureDirectory(directory);
@@ -11776,33 +14830,50 @@ async function acceptTask(config, envelope, launch) {
 			return existing;
 		}
 		const storedRequest = await readTaskRequest(config, payload.taskId);
-		if (storedRequest !== null && (storedRequest.promptDigest !== promptDigest || storedRequest.prompt !== payload.prompt || storedRequest.senderDeviceId !== envelope.sender.deviceId || storedRequest.senderPrincipalId !== envelope.sender.principalId || storedRequest.workspaceId !== payload.workspaceId || storedRequest.profile !== payload.profile)) throw new FleetA2ARuntimeError("task-id-conflict", "task id is already bound to a different request");
+		if (storedRequest !== null && (storedRequest.schemaVersion !== 3 || storedRequest.promptDigest !== promptDigest || storedRequest.prompt !== payload.prompt || storedRequest.senderDeviceId !== envelope.sender.deviceId || storedRequest.senderPrincipalId !== envelope.sender.principalId || storedRequest.senderKeyId !== envelope.sender.keyId || storedRequest.workspaceId !== payload.workspaceId || storedRequest.workspacePath !== workspacePath || storedRequest.profile !== payload.profile || storedRequest.executionProfileHash !== payload.executionProfileHash || storedRequest.manifestDigest !== payload.manifestDigest || storedRequest.releaseDigest !== payload.releaseDigest || storedRequest.policyId !== payload.policyId || storedRequest.policyDigest !== payload.policyDigest || storedRequest.taskBindingDigest !== taskBindingDigest || storedRequest.deadline !== payload.deadline)) throw new FleetA2ARuntimeError("task-id-conflict", "task id is already bound to a different request");
 		const request = storedRequest ?? {
-			schemaVersion: 1,
+			schemaVersion: 3,
 			taskId: payload.taskId,
 			requestMessageId: envelope.messageId,
 			senderDeviceId: envelope.sender.deviceId,
 			senderPrincipalId: envelope.sender.principalId,
+			senderKeyId: envelope.sender.keyId,
 			workspaceId: payload.workspaceId,
+			workspacePath,
 			profile: payload.profile,
+			executionProfileHash: payload.executionProfileHash,
 			promptDigest,
+			manifestDigest: payload.manifestDigest,
+			releaseDigest: payload.releaseDigest,
+			policyId: payload.policyId,
+			policyDigest: payload.policyDigest,
+			taskBindingDigest,
+			deadline: payload.deadline,
 			prompt: payload.prompt
 		};
 		if (storedRequest === null) await atomicJson(join(directory, "request.json"), request);
 		const createdAt = (/* @__PURE__ */ new Date()).toISOString();
 		const record = {
-			schemaVersion: 1,
+			schemaVersion: 3,
 			taskId: payload.taskId,
 			requestMessageId: request.requestMessageId,
 			senderDeviceId: request.senderDeviceId,
 			senderPrincipalId: request.senderPrincipalId,
+			senderKeyId: envelope.sender.keyId,
 			workspaceId: request.workspaceId,
+			workspacePath,
 			profile: request.profile,
+			executionProfileHash: payload.executionProfileHash,
 			promptDigest: request.promptDigest,
+			manifestDigest: payload.manifestDigest,
+			releaseDigest: payload.releaseDigest,
+			policyId: payload.policyId,
+			policyDigest: payload.policyDigest,
+			taskBindingDigest,
 			state: "accepted",
 			createdAt,
 			updatedAt: createdAt,
-			deadlineAt: new Date(Date.parse(createdAt) + config.tasks.timeoutMs).toISOString(),
+			deadlineAt: payload.deadline,
 			resultDigest: null,
 			errorCode: null
 		};
@@ -11813,9 +14884,164 @@ async function acceptTask(config, envelope, launch) {
 		await releaseProcessLock(creationLock);
 	}
 }
-async function requestCancellation(config, taskId) {
+async function approvalDirectories(config, taskId) {
+	const root = join(taskDirectory(config, taskId), "approvals");
+	let info;
+	try {
+		info = await lstat(root);
+	} catch (error) {
+		if (error.code === "ENOENT") return [];
+		throw error;
+	}
+	if (!info.isDirectory() || info.isSymbolicLink() || (info.mode & 63) !== 0 || typeof process.getuid === "function" && info.uid !== process.getuid()) throw new FleetA2ARuntimeError("unsafe-state-permissions", "task approval state must be an owner-only real directory");
+	return (await readdir(root, { withFileTypes: true })).flatMap((entry) => entry.isDirectory() && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(entry.name) ? [join(root, entry.name)] : []).sort();
+}
+async function readApprovalIntent(path) {
+	try {
+		return parseTaskApprovalIntent(JSON.parse(await readRegularFile(path, true)));
+	} catch (error) {
+		if (error.code === "ENOENT") throw error;
+		if (error instanceof FleetA2ARuntimeError) throw error;
+		throw new FleetA2ARuntimeError("task-approval-state-invalid", "task approval intent is invalid");
+	}
+}
+async function validatePendingApproval(config, record, policy, intent) {
+	if (intent.taskId !== record.taskId || intent.taskBindingDigest !== record.taskBindingDigest || intent.executionProfileHash !== record.executionProfileHash) throw new FleetA2ARuntimeError("task-approval-state-invalid", "task approval intent is bound to another task");
+	await assertTaskExecutionProfile(config, record.profile, record.executionProfileHash);
+	const classification = classifyTaskToolCall({
+		policy,
+		workspacePath: record.workspacePath,
+		toolName: intent.toolName,
+		arguments: intent.arguments
+	});
+	if (classification.decision !== "ask" || classification.capability !== intent.capability || classification.argumentsDigest !== intent.argumentsDigest) throw new FleetA2ARuntimeError("task-approval-state-invalid", "task approval intent no longer matches local policy");
+	if (!await validateTaskToolFilesystemScope({
+		workspacePath: record.workspacePath,
+		toolName: intent.toolName,
+		arguments: intent.arguments
+	})) throw new FleetA2ARuntimeError("task-approval-state-invalid", "task approval intent resolves outside the workspace boundary");
+}
+async function verifyCachedApprovalRequest(config, record, value, now) {
+	const privatePem = await privateKeyPem(config);
+	const publicPem = createPublicKey(privatePem).export({
+		type: "spki",
+		format: "pem"
+	}).toString();
+	const keyId = a2aKeyId(publicPem);
+	const envelope = verifyA2AEnvelope(value, {
+		expectedTeamId: config.a2a.teamId,
+		expectedDeviceId: record.senderDeviceId,
+		trust: /* @__PURE__ */ new Map([[keyId, {
+			teamId: config.a2a.teamId,
+			keyId,
+			principalId: config.a2a.principalId,
+			deviceId: config.deviceId,
+			publicKeyPem: publicPem,
+			allowedKinds: ["task.approval.request"]
+		}]]),
+		now,
+		maxTtlMs: config.a2a.maxMessageTtlMs
+	});
+	if (envelope.kind !== "task.approval.request") throw new FleetA2ARuntimeError("task-approval-state-invalid", "cached task approval request has the wrong kind");
+	return envelope;
+}
+async function approvalRequestEnvelope(config, record, approvalDirectory, intent, now) {
+	const path = join(approvalDirectory, "request-envelope.json");
+	try {
+		return await verifyCachedApprovalRequest(config, record, JSON.parse(await readRegularFile(path, true)), now);
+	} catch (error) {
+		if (error.code !== "ENOENT") throw error;
+	}
+	const lock = await acquireProcessLock(path + ".lock", "task-approval-in-progress", "task approval request is being prepared");
+	try {
+		try {
+			return await verifyCachedApprovalRequest(config, record, JSON.parse(await readRegularFile(path, true)), now);
+		} catch (error) {
+			if (error.code !== "ENOENT") throw error;
+		}
+		const payload = {
+			approvalId: intent.approvalId,
+			taskId: record.taskId,
+			taskBindingDigest: record.taskBindingDigest,
+			toolCallId: intent.toolCallId,
+			toolName: intent.toolName,
+			arguments: intent.arguments,
+			argumentsDigest: intent.argumentsDigest,
+			capability: intent.capability,
+			summary: `${intent.toolName} requests one ${intent.capability} execution`,
+			expiresAt: intent.expiresAt
+		};
+		validateA2APayload("task.approval.request", payload);
+		const envelope = await signA2AMessage(config, record.senderDeviceId, "task.approval.request", payload, now);
+		await atomicJson(path, envelope);
+		return envelope;
+	} finally {
+		await releaseProcessLock(lock);
+	}
+}
+async function pendingApprovalResponse(config, record, now) {
+	if (record.schemaVersion !== 3 || record.workspacePath === null || record.executionProfileHash === null || record.policyId === null || record.policyDigest === null || record.taskBindingDigest === null) return null;
+	const bound = record;
+	const policy = taskPolicy(config, bound.policyId, bound.policyDigest);
+	for (const directory of await approvalDirectories(config, record.taskId)) {
+		if (existsSync(join(directory, "decision.json")) || existsSync(join(directory, "consumed.json"))) continue;
+		const intent = await readApprovalIntent(join(directory, "intent.json"));
+		if (Date.parse(intent.expiresAt) <= now.getTime()) continue;
+		await validatePendingApproval(config, bound, policy, intent);
+		return approvalRequestEnvelope(config, bound, directory, intent, now);
+	}
+	return null;
+}
+async function acceptApprovalDecision(config, envelope, now) {
+	const payload = envelope.payload;
+	const record = await readTaskRecord(config, payload.taskId);
+	if (record === null) throw new FleetA2ARuntimeError("task-not-found", "task was not found");
+	assertTaskOwner(record, envelope);
+	if (record.schemaVersion !== 3 || record.workspacePath === null || record.executionProfileHash === null || record.policyId === null || record.policyDigest === null || record.taskBindingDigest === null || record.taskBindingDigest !== payload.taskBindingDigest) throw new FleetA2ARuntimeError("task-binding-invalid", "approval decision does not match an executable task");
+	if (record.state === "succeeded" || record.state === "failed" || record.state === "cancelled") throw new FleetA2ARuntimeError("task-not-active", "approval decisions are accepted only for active tasks");
+	const directory = join(taskDirectory(config, payload.taskId), "approvals", approvalSegment(payload.approvalId));
+	const intent = await readApprovalIntent(join(directory, "intent.json"));
+	await validatePendingApproval(config, record, taskPolicy(config, record.policyId, record.policyDigest), intent);
+	const request = await verifyCachedApprovalRequest(config, record, JSON.parse(await readRegularFile(join(directory, "request-envelope.json"), true)), now);
+	const requestPayload = request.payload;
+	if (payload.approvalId !== intent.approvalId || payload.approvalRequestMessageId !== request.messageId || payload.approvalRequestPayloadDigest !== request.payloadDigest || payload.toolCallId !== intent.toolCallId || payload.argumentsDigest !== intent.argumentsDigest || requestPayload.approvalId !== intent.approvalId || requestPayload.taskBindingDigest !== record.taskBindingDigest) throw new FleetA2ARuntimeError("task-approval-mismatch", "approval decision does not match the signed approval request");
+	const decidedAt = Date.parse(payload.decidedAt);
+	if (decidedAt < Date.parse(request.issuedAt) || decidedAt > now.getTime() + 3e4 || decidedAt >= Date.parse(intent.expiresAt)) throw new FleetA2ARuntimeError("task-approval-expired", "approval decision is outside the signed approval window");
+	const token = payload.decision === "allowed-once" ? createAllowedOnceToken({
+		approvalId: payload.approvalId,
+		approvalRequestMessageId: request.messageId,
+		approvalRequestPayloadDigest: request.payloadDigest,
+		decisionMessageId: envelope.messageId,
+		decisionPayloadDigest: envelope.payloadDigest,
+		taskBindingDigest: record.taskBindingDigest,
+		executionProfileHash: record.executionProfileHash,
+		toolCallId: intent.toolCallId,
+		toolName: intent.toolName,
+		argumentsDigest: intent.argumentsDigest,
+		expiresAt: intent.expiresAt
+	}) : null;
+	const decision = {
+		schemaVersion: 2,
+		decision: payload.decision,
+		decisionEnvelope: envelope,
+		token
+	};
+	const lock = await acquireProcessLock(join(directory, "decision.lock"), "task-approval-in-progress", "task approval decision is being recorded");
+	try {
+		if (existsSync(join(directory, "decision.json"))) {
+			if (sha256Canonical(JSON.parse(await readRegularFile(join(directory, "decision.json"), true))) === sha256Canonical(decision)) return;
+			throw new FleetA2ARuntimeError("task-approval-already-decided", "the first signed approval decision is final");
+		}
+		await exclusiveJson(join(directory, "decision.json"), decision);
+	} finally {
+		await releaseProcessLock(lock);
+	}
+}
+async function requestCancellation(config, envelope) {
+	const taskId = envelope.payload.taskId;
 	const record = await readTaskRecord(config, taskId);
 	if (record === null) throw new FleetA2ARuntimeError("task-not-found", "task was not found");
+	assertTaskOwner(record, envelope);
 	if (record.state === "succeeded" || record.state === "failed" || record.state === "cancelled") return record;
 	const marker = join(taskDirectory(config, taskId), "cancel");
 	let handle;
@@ -11832,12 +15058,42 @@ async function requestCancellation(config, taskId) {
 }
 async function receiptResponse(config, envelope, launch, now) {
 	let response;
-	if (envelope.kind === "task.submit") response = workerPayload(await acceptTask(config, envelope, launch), null);
+	if (envelope.teamId !== config.a2a.teamId) response = {
+		kind: "receipt",
+		payload: federationReceiptPayload((await receiveFederationEnvelope({
+			rootDirectory: join(config.stateDir, "federation"),
+			value: envelope,
+			verification: {
+				expectedTeamId: config.a2a.teamId,
+				expectedDeviceId: config.deviceId,
+				trust: await readA2ATrustStore(config),
+				now,
+				maxTtlMs: config.a2a.maxMessageTtlMs
+			},
+			receivedAt: now
+		})).record)
+	};
+	else if (envelope.kind === "task.submit") response = workerPayload(await acceptTask(config, envelope, launch), null);
 	else if (envelope.kind === "task.status") {
-		const { record, result } = await taskResult(config, envelope.payload.taskId);
+		const taskId = envelope.payload.taskId;
+		const ownerRecord = await readTaskRecord(config, taskId);
+		if (ownerRecord === null) throw new FleetA2ARuntimeError("task-not-found", "task was not found");
+		assertTaskOwner(ownerRecord, envelope);
+		const approval = await pendingApprovalResponse(config, ownerRecord, now);
+		if (approval !== null) return approval;
+		const { record, result } = await taskResult(config, taskId);
 		response = workerPayload(record, result);
-	} else if (envelope.kind === "task.cancel") response = workerPayload(await requestCancellation(config, envelope.payload.taskId), null);
-	else {
+	} else if (envelope.kind === "task.cancel") response = workerPayload(await requestCancellation(config, envelope), null);
+	else if (envelope.kind === "task.approval.decision") {
+		await acceptApprovalDecision(config, envelope, now);
+		response = {
+			kind: "receipt",
+			payload: {
+				requestMessageId: envelope.messageId,
+				status: "accepted"
+			}
+		};
+	} else {
 		await atomicJson(join(config.stateDir, "a2a", "inbox", hash(envelope.messageId) + ".json"), envelope);
 		response = {
 			kind: "receipt",
@@ -11853,28 +15109,45 @@ async function receiptResponse(config, envelope, launch, now) {
 			principalId: config.a2a.principalId,
 			deviceId: config.deviceId
 		},
-		recipient: { deviceId: envelope.sender.deviceId },
+		recipient: {
+			teamId: envelope.teamId,
+			deviceId: envelope.sender.deviceId
+		},
 		kind: response.kind,
 		payload: response.payload,
 		privateKey: await privateKeyPem(config),
 		now,
-		ttlMs: Math.min(3e5, config.a2a.maxMessageTtlMs)
+		ttlMs: messageTtlMs(config, response.kind, response.payload, now, envelope.teamId !== config.a2a.teamId)
 	});
 }
-async function receiveA2AMessage(config, value, launch, now = /* @__PURE__ */ new Date()) {
+async function receiveA2AMessage(config, value, launch, now = /* @__PURE__ */ new Date(), lockHooks) {
 	assertA2AReadyConfig(config);
 	const envelope = await verifyA2AMessage(config, value, now);
 	const receiptPath = join(config.stateDir, "a2a", "receipts", hash(envelope.messageId) + ".json");
 	const lockPath = receiptPath + ".lock";
 	try {
-		return JSON.parse(await readRegularFile(receiptPath));
+		return readStoredReceipt(JSON.parse(await readRegularFile(receiptPath)), envelope);
 	} catch (error) {
 		if (error.code !== "ENOENT") throw error;
 	}
-	const lock = await acquireProcessLock(lockPath, "message-in-progress", "A2A message is already being processed");
+	let lock;
+	try {
+		lock = await acquireProcessLock(lockPath, "message-in-progress", "A2A message is already being processed", lockHooks);
+	} catch (error) {
+		if (error.code !== "message-in-progress") throw error;
+		for (let attempt = 0; attempt < 80; attempt += 1) {
+			try {
+				return readStoredReceipt(JSON.parse(await readRegularFile(receiptPath)), envelope);
+			} catch (readError) {
+				if (readError.code !== "ENOENT") throw readError;
+			}
+			await new Promise((resolve) => setTimeout(resolve, 25));
+		}
+		throw error;
+	}
 	try {
 		try {
-			return JSON.parse(await readRegularFile(receiptPath));
+			return readStoredReceipt(JSON.parse(await readRegularFile(receiptPath)), envelope);
 		} catch (error) {
 			if (error.code !== "ENOENT") throw error;
 		}
@@ -11883,13 +15156,13 @@ async function receiveA2AMessage(config, value, launch, now = /* @__PURE__ */ ne
 			requestMessageId: envelope.messageId,
 			response
 		};
-		await atomicJson(receiptPath, receipt);
+		await atomicJson(receiptPath, storedReceipt(envelope, receipt));
 		return receipt;
 	} finally {
 		await releaseProcessLock(lock);
 	}
 }
-function taskEnvironment(config) {
+function taskEnvironment(config, input) {
 	const path = [
 		dirname(config.dshBinary),
 		dirname(process.execPath),
@@ -11899,6 +15172,8 @@ function taskEnvironment(config) {
 	].join(":");
 	const env = {
 		DSH_HOME: config.dshHome,
+		DSH_PERMISSION_MODE: input.permissionMode,
+		DSH_FLEET_TASK_CONTEXT: input.contextPath,
 		PATH: path,
 		GIT_TERMINAL_PROMPT: "0"
 	};
@@ -11914,21 +15189,54 @@ function taskEnvironment(config) {
 	]) if (process.env[key] !== void 0) env[key] = process.env[key];
 	return env;
 }
-async function runTaskProcess(config, request, cancelPath) {
-	const workspace = config.tasks.workspaces[request.workspaceId];
-	if (workspace === void 0 || !config.tasks.profiles.includes(request.profile)) throw new FleetA2ARuntimeError("task-policy-denied", "task no longer matches local policy");
-	const workspaceInfo = await lstat(workspace).catch(() => void 0);
-	if (workspaceInfo === void 0) throw new FleetA2ARuntimeError("task-policy-denied", "task workspace is unavailable");
-	if (workspaceInfo.isSymbolicLink() || !workspaceInfo.isDirectory()) throw new FleetA2ARuntimeError("task-policy-denied", "task workspace must be a real directory");
+async function runTaskProcess(config, record, request, cancelPath, workerBundlePath) {
+	const { workspacePath, policy } = await assertExecutableTaskBinding(config, record, request);
+	if (!isAbsolute(workerBundlePath) || normalize(workerBundlePath) !== workerBundlePath || /[\r\n\0]/.test(workerBundlePath)) throw new FleetA2ARuntimeError("worker-bundle-invalid", "task worker bundle path must be a normalized absolute path");
+	const workerInfo = await lstat(workerBundlePath).catch(() => void 0);
+	if (workerInfo === void 0 || workerInfo.isSymbolicLink() || !workerInfo.isFile() || typeof process.getuid === "function" && workerInfo.uid !== process.getuid()) throw new FleetA2ARuntimeError("worker-bundle-invalid", "task worker bundle must be a real file owned by the current user");
+	const directory = taskDirectory(config, record.taskId);
+	const contextPath = join(directory, "worker-context.json");
+	const approvalsDir = join(directory, "approvals");
+	await atomicJson(contextPath, {
+		schemaVersion: 2,
+		taskId: record.taskId,
+		taskBindingDigest: record.taskBindingDigest,
+		dshHome: config.dshHome,
+		profile: record.profile,
+		executionProfileHash: record.executionProfileHash,
+		workspacePath,
+		policy,
+		approvalsDir,
+		cancelPath,
+		deadline: record.deadlineAt
+	});
+	const patchPath = join(directory, "worker.patch.yml");
+	await atomicText(patchPath, [
+		"- update:",
+		"    id: approval",
+		"    config:",
+		"      policy: \"never\"",
+		"- insert:",
+		"    - id: fleet-task-policy",
+		`      name: ${JSON.stringify(workerBundlePath)}`,
+		""
+	].join("\n"));
+	const timeoutMs = Math.min(config.tasks.timeoutMs, Date.parse(record.deadlineAt) - Date.now());
+	if (timeoutMs <= 0) throw new FleetA2ARuntimeError("task-timeout", "task deadline has expired");
 	return new Promise((resolve, reject) => {
 		const grouped = process.platform !== "win32";
 		const child = spawn(config.dshBinary, [
 			"--profile",
 			request.profile,
+			"--patch",
+			patchPath,
 			request.prompt
 		], {
-			cwd: workspace,
-			env: taskEnvironment(config),
+			cwd: workspacePath,
+			env: taskEnvironment(config, {
+				permissionMode: policy.permissionMode,
+				contextPath
+			}),
 			stdio: [
 				"ignore",
 				"pipe",
@@ -11956,7 +15264,7 @@ async function runTaskProcess(config, request, cancelPath) {
 			forceTimer = setTimeout(() => kill("SIGKILL"), 2e3);
 			forceTimer.unref();
 		};
-		const timeout = setTimeout(() => stop("timeout"), config.tasks.timeoutMs);
+		const timeout = setTimeout(() => stop("timeout"), timeoutMs);
 		timeout.unref();
 		const cancel = setInterval(() => {
 			if (existsSync(cancelPath)) stop("cancelled");
@@ -12007,37 +15315,19 @@ async function processAlive(pid) {
 async function acquireTaskSlot(config, taskId) {
 	const directory = join(config.stateDir, "tasks", ".slots");
 	await ensureDirectory(directory);
-	const token = randomUUID();
 	for (;;) {
 		for (let index = 0; index < config.tasks.maxConcurrent; index += 1) {
 			const path = join(directory, String(index) + ".lock");
-			try {
-				const handle = await open(path, "wx", 384);
-				await handle.writeFile(JSON.stringify({
-					pid: process.pid,
-					taskId,
-					token
-				}) + "\n");
-				await handle.close();
-				return {
-					path,
-					token
-				};
-			} catch (error) {
-				if (error.code !== "EEXIST") throw error;
-				try {
-					if (await staleProcessLock(path)) await rm(path, { force: true });
-				} catch (readError) {
-					if (readError.code === "ENOENT") continue;
-					throw readError;
-				}
-			}
+			const created = await createProcessLock(path, { taskId });
+			if (created !== null) return created;
+			const observation = await observeProcessLock(path);
+			if (observation.state === "stale") await reclaimStaleProcessLock(path, observation);
 		}
 		if (existsSync(join(taskDirectory(config, taskId), "cancel"))) throw new FleetA2ARuntimeError("task-cancelled", "task was cancelled while queued");
 		await new Promise((resolve) => setTimeout(resolve, 500));
 	}
 }
-async function runTaskWorker(config, taskId) {
+async function runTaskWorker(config, taskId, workerBundlePath) {
 	assertA2AReadyConfig(config);
 	const directory = taskDirectory(config, taskId);
 	const workerLock = join(directory, "worker.lock");
@@ -12067,13 +15357,14 @@ async function runTaskWorker(config, taskId) {
 			"cancelled"
 		].includes(record.state)) return record;
 		const request = await readTaskRequest(config, taskId);
-		if (request === null || request.requestMessageId !== record.requestMessageId || request.senderDeviceId !== record.senderDeviceId || request.senderPrincipalId !== record.senderPrincipalId || request.workspaceId !== record.workspaceId || request.profile !== record.profile || request.promptDigest !== record.promptDigest) throw new FleetA2ARuntimeError("task-request-mismatch", "task request does not match its durable record");
+		if (request === null) throw new FleetA2ARuntimeError("task-request-mismatch", "task request is missing");
+		await assertExecutableTaskBinding(config, record, request);
 		const cancelPath = join(directory, "cancel");
 		if (existsSync(cancelPath)) return saveTaskRecord(config, record, "cancelled", { errorCode: "cancelled" });
 		slot = await acquireTaskSlot(config, taskId);
 		if (existsSync(cancelPath)) return saveTaskRecord(config, record, "cancelled", { errorCode: "cancelled" });
 		record = await saveTaskRecord(config, record, "running");
-		const result = await runTaskProcess(config, request, cancelPath);
+		const result = await runTaskProcess(config, record, request, cancelPath, workerBundlePath);
 		if (result.reason === "cancelled") return saveTaskRecord(config, record, "cancelled", { errorCode: "cancelled" });
 		if (result.reason !== void 0) return saveTaskRecord(config, record, "failed", { errorCode: result.reason });
 		if (result.code !== 0) return saveTaskRecord(config, record, "failed", { errorCode: "dsh-task-failed" });
@@ -12093,13 +15384,14 @@ async function runTaskWorker(config, taskId) {
 		return saveTaskRecord(config, record, code === "task-cancelled" ? "cancelled" : "failed", { errorCode: code });
 	} finally {
 		if (slot !== void 0) try {
-			if (JSON.parse(await readRegularFile(slot.path)).token === slot.token) await rm(slot.path, { force: true });
+			await releaseProcessLock(slot);
 		} catch {}
 		await releaseProcessLock(worker);
 	}
 }
 async function resumeAcceptedTasks(config, launch) {
 	assertA2AReadyConfig(config);
+	if (!config.tasks.enabled) return 0;
 	const root = join(config.stateDir, "tasks");
 	let entries;
 	try {
@@ -12119,9 +15411,19 @@ async function resumeAcceptedTasks(config, launch) {
 			"cancel-requested"
 		].includes(record.state)) continue;
 		if (await processLockActive(join(taskDirectory(config, taskId), "worker.lock"))) continue;
-		if (record.state === "accepted" && Date.now() <= Date.parse(record.deadlineAt) + 3e4) {
-			await launchTaskWorker(launch, taskId);
-			resumed += 1;
+		if (record.state === "accepted" && Date.now() < Date.parse(record.deadlineAt)) {
+			const request = await readTaskRequest(config, taskId);
+			if (request === null) {
+				await saveTaskRecord(config, record, "failed", { errorCode: "task-request-mismatch" });
+				continue;
+			}
+			try {
+				await assertExecutableTaskBinding(config, record, request);
+				await launchTaskWorker(launch, taskId);
+				resumed += 1;
+			} catch (error) {
+				await saveTaskRecord(config, record, "failed", { errorCode: typeof error.code === "string" ? error.code : "task-binding-invalid" });
+			}
 		} else await taskResult(config, taskId);
 	}
 	return resumed;
@@ -12144,7 +15446,11 @@ function safeA2ARuntimeError(error) {
 		"task-in-progress": "task creation is already in progress",
 		"invalid-task-state": "durable task state is invalid",
 		"message-in-progress": "A2A message is already being processed",
-		"unsafe-key-permissions": "A2A private key permissions are unsafe"
+		"message-id-conflict": "A2A message id is bound to another signed request",
+		"receipt-state-invalid": "A2A receipt state is invalid",
+		"unsafe-key-permissions": "A2A private key permissions are unsafe",
+		"unsafe-state-file": "durable task state contains an unsafe file",
+		"unsafe-state-permissions": "durable task state permissions are unsafe"
 	};
 	return {
 		code: Object.hasOwn(messages, code) ? code : "internal",
@@ -12196,10 +15502,22 @@ async function doctorAgent(config, now = /* @__PURE__ */ new Date(), signal) {
 		releaseId: inspection.assignedRelease.releaseId,
 		releaseVersion: inspection.assignedRelease.releaseVersion,
 		healthVerified: true,
+		observedRuntimeDigest: inspection.observedRuntimeDigest,
+		observedServiceDefinitionDigest: inspection.observedServiceDefinitionDigest,
+		teamId: config.a2a.teamId,
+		principalId: config.a2a.principalId,
 		identityKeyId: identityProbe.sender.keyId,
 		trustedPeerCount: trust.size,
+		trustedPeers: [...trust.values()].map((entry) => ({
+			keyId: entry.keyId,
+			principalId: entry.principalId,
+			deviceId: entry.deviceId,
+			allowedKinds: [...entry.allowedKinds]
+		})).sort((left, right) => left.deviceId.localeCompare(right.deviceId) || left.keyId.localeCompare(right.keyId)),
 		tasksEnabled: config.tasks.enabled,
 		workspaceIds: Object.keys(config.tasks.workspaces).sort(),
+		taskProfiles: [...config.tasks.profiles].sort(),
+		retention: inspection.retention,
 		executableChecks
 	};
 }
@@ -12257,11 +15575,23 @@ function parseArgs(argv) {
 		"release-plan",
 		"release-apply",
 		"release-status",
+		"release-rollback-plan",
+		"release-rollback-apply",
+		"release-rollback-status",
+		"release-retention-plan",
+		"release-retention-apply",
+		"release-retention-status",
 		"a2a-sign",
 		"a2a-verify",
 		"a2a-receive",
 		"task-worker",
+		"tasks-list",
+		"tasks-prune",
 		"tasks-resume",
+		"federation-list",
+		"federation-ack",
+		"federation-retention-plan",
+		"federation-prune",
 		"doctor"
 	].includes(command)) throw Object.assign(/* @__PURE__ */ new Error("unsupported command"), { code: "invalid-invocation" });
 	return {
@@ -12286,7 +15616,12 @@ async function dispatch() {
 		return doctorAgent(config, /* @__PURE__ */ new Date(), shutdown.signal);
 	}
 	if (command === "a2a-sign") {
-		const body = exactObject(payload, [
+		const body = isRecord(payload) && Object.hasOwn(payload, "recipientTeamId") ? exactObject(payload, [
+			"kind",
+			"payload",
+			"recipientDeviceId",
+			"recipientTeamId"
+		], "A2A sign payload") : exactObject(payload, [
 			"kind",
 			"payload",
 			"recipientDeviceId"
@@ -12294,14 +15629,93 @@ async function dispatch() {
 		const kind = stringField(body.kind, "kind");
 		if (!FLEET_A2A_KINDS.includes(kind)) throw Object.assign(/* @__PURE__ */ new Error("unsupported A2A kind"), { code: "invalid-payload" });
 		if (!isRecord(body.payload)) throw Object.assign(/* @__PURE__ */ new Error("A2A payload must be an object"), { code: "invalid-payload" });
-		return signA2AMessage(config, stringField(body.recipientDeviceId, "recipientDeviceId"), kind, body.payload, /* @__PURE__ */ new Date());
+		return signA2AMessage(config, stringField(body.recipientDeviceId, "recipientDeviceId"), kind, body.payload, /* @__PURE__ */ new Date(), body.recipientTeamId === void 0 ? void 0 : stringField(body.recipientTeamId, "recipientTeamId"));
 	}
 	if (command === "a2a-receive") return receiveA2AMessage(config, exactObject(payload, ["envelope"], "A2A receive payload").envelope, workerLaunch, /* @__PURE__ */ new Date());
 	if (command === "a2a-verify") return verifyA2AMessage(config, exactObject(payload, ["envelope"], "A2A verify payload").envelope, /* @__PURE__ */ new Date());
-	if (command === "task-worker") return runTaskWorker(config, stringField(exactObject(payload, ["taskId"], "task worker payload").taskId, "taskId"));
+	if (command === "task-worker") return runTaskWorker(config, stringField(exactObject(payload, ["taskId"], "task worker payload").taskId, "taskId"), join(dirname(agentPath), "worker.mjs"));
+	if (command === "tasks-list") {
+		const body = exactObject(payload, ["limit"], "tasks-list payload");
+		if (typeof body.limit !== "number" || !Number.isSafeInteger(body.limit) || body.limit < 1 || body.limit > 100) throw Object.assign(/* @__PURE__ */ new Error("tasks-list limit must be an integer from 1 to 100"), { code: "invalid-payload" });
+		return listFleetTasks(config, body.limit);
+	}
+	if (command === "tasks-prune") {
+		const body = exactObject(payload, ["olderThan", "states"], "tasks-prune payload");
+		if (!Array.isArray(body.states) || body.states.some((state) => typeof state !== "string")) throw Object.assign(/* @__PURE__ */ new Error("tasks-prune states must be strings"), { code: "invalid-payload" });
+		return pruneFleetTasks(config, {
+			olderThan: stringField(body.olderThan, "olderThan"),
+			states: body.states
+		});
+	}
 	if (command === "tasks-resume") {
 		if (payload !== null && (isRecord(payload) ? Object.keys(payload).length !== 0 : true)) throw Object.assign(/* @__PURE__ */ new Error("tasks-resume payload must be empty"), { code: "invalid-payload" });
 		return { resumed: await resumeAcceptedTasks(config, workerLaunch) };
+	}
+	if (command === "federation-list") {
+		const body = exactObject(payload, ["limit"], "federation-list payload");
+		if (typeof body.limit !== "number" || !Number.isSafeInteger(body.limit) || body.limit < 1 || body.limit > 100) throw Object.assign(/* @__PURE__ */ new Error("federation-list limit must be an integer from 1 to 100"), { code: "invalid-payload" });
+		return listFederationInbox(join(config.stateDir, "federation"), { limit: body.limit });
+	}
+	if (command === "federation-ack") {
+		const body = exactObject(payload, [
+			"disposition",
+			"messageId",
+			"payloadDigest"
+		], "federation-ack payload");
+		const disposition = stringField(body.disposition, "disposition");
+		if (disposition !== "acknowledged" && disposition !== "dismissed") throw Object.assign(/* @__PURE__ */ new Error("federation acknowledgement disposition is invalid"), { code: "invalid-payload" });
+		return acknowledgeFederationMessage({
+			rootDirectory: join(config.stateDir, "federation"),
+			messageId: stringField(body.messageId, "messageId"),
+			expectedPayloadDigest: stringField(body.payloadDigest, "payloadDigest"),
+			disposition,
+			acknowledgedAt: /* @__PURE__ */ new Date()
+		});
+	}
+	if (command === "federation-retention-plan") {
+		const body = exactObject(payload, [
+			"acknowledgedRetentionMs",
+			"expiredRetentionMs",
+			"maxEntries"
+		], "federation retention payload");
+		for (const field of [
+			"acknowledgedRetentionMs",
+			"expiredRetentionMs",
+			"maxEntries"
+		]) if (typeof body[field] !== "number" || !Number.isSafeInteger(body[field])) throw Object.assign(/* @__PURE__ */ new Error(field + " must be an integer"), { code: "invalid-payload" });
+		const items = await listFederationInbox(join(config.stateDir, "federation"), { limit: 500 });
+		return {
+			generatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+			candidates: planFederationInboxPrune(items, {
+				acknowledgedRetentionMs: body.acknowledgedRetentionMs,
+				expiredRetentionMs: body.expiredRetentionMs,
+				maxEntries: body.maxEntries
+			})
+		};
+	}
+	if (command === "federation-prune") {
+		const body = exactObject(payload, ["candidates", "policy"], "federation-prune payload");
+		const policy = exactObject(body.policy, [
+			"acknowledgedRetentionMs",
+			"expiredRetentionMs",
+			"maxEntries"
+		], "federation-prune policy");
+		for (const field of [
+			"acknowledgedRetentionMs",
+			"expiredRetentionMs",
+			"maxEntries"
+		]) if (typeof policy[field] !== "number" || !Number.isSafeInteger(policy[field])) throw Object.assign(/* @__PURE__ */ new Error(field + " must be an integer"), { code: "invalid-payload" });
+		if (!Array.isArray(body.candidates)) throw Object.assign(/* @__PURE__ */ new Error("federation-prune candidates must be an array"), { code: "invalid-payload" });
+		return applyFederationInboxPrune({
+			rootDirectory: join(config.stateDir, "federation"),
+			candidates: body.candidates,
+			policy: {
+				acknowledgedRetentionMs: policy.acknowledgedRetentionMs,
+				expiredRetentionMs: policy.expiredRetentionMs,
+				maxEntries: policy.maxEntries
+			},
+			now: /* @__PURE__ */ new Date()
+		});
 	}
 	if (command === "release-inspect" || command === "release-plan") {
 		if (payload !== null && (isRecord(payload) ? Object.keys(payload).length !== 0 : true)) throw Object.assign(/* @__PURE__ */ new Error(command + " payload must be empty"), { code: "invalid-payload" });
@@ -12313,6 +15727,23 @@ async function dispatch() {
 		return action;
 	}
 	if (command === "release-apply") return applyStoredReleasePlan(config, exactObject(payload, ["approval"], "release apply payload").approval, /* @__PURE__ */ new Date(), shutdown.signal);
+	if (command === "release-rollback-plan") return createStoredReleaseRollbackPlan(config, stringField(exactObject(payload, ["transitionPlanId"], "release rollback plan payload").transitionPlanId, "transitionPlanId"), /* @__PURE__ */ new Date(), shutdown.signal);
+	if (command === "release-rollback-status") {
+		const action = await readOrRecoverReleaseRollbackAction(config, stringField(exactObject(payload, ["planId"], "release rollback status payload").planId, "planId"));
+		if (action === null) throw Object.assign(/* @__PURE__ */ new Error("release rollback action not found"), { code: "action-not-found" });
+		return action;
+	}
+	if (command === "release-rollback-apply") return applyStoredReleaseRollbackPlan(config, exactObject(payload, ["approval"], "release rollback apply payload").approval, /* @__PURE__ */ new Date(), shutdown.signal);
+	if (command === "release-retention-plan") {
+		if (payload !== null && (isRecord(payload) ? Object.keys(payload).length !== 0 : true)) throw Object.assign(/* @__PURE__ */ new Error("release retention plan payload must be empty"), { code: "invalid-payload" });
+		return createStoredReleaseRetentionPlan(config, /* @__PURE__ */ new Date());
+	}
+	if (command === "release-retention-status") {
+		const action = await readReleaseRetentionActionStatus(config, stringField(exactObject(payload, ["planId"], "release retention status payload").planId, "planId"));
+		if (action === null) throw Object.assign(/* @__PURE__ */ new Error("release retention action not found"), { code: "action-not-found" });
+		return action;
+	}
+	if (command === "release-retention-apply") return applyStoredReleaseRetentionPlan(config, exactObject(payload, ["approval"], "release retention apply payload").approval, /* @__PURE__ */ new Date());
 	if (command === "inspect") {
 		if (payload !== null && (isRecord(payload) ? Object.keys(payload).length !== 0 : true)) throw Object.assign(/* @__PURE__ */ new Error("inspect payload must be empty"), { code: "invalid-payload" });
 		return inspectAgent(config, /* @__PURE__ */ new Date(), shutdown.signal);
@@ -12333,9 +15764,10 @@ try {
 	}) + "\n");
 } catch (error) {
 	const a2a = safeA2ARuntimeError(error);
+	const federation = safeFederationError(error);
 	process.stdout.write(JSON.stringify({
 		ok: false,
-		error: a2a.code === "internal" ? safeRuntimeError(error) : a2a
+		error: a2a.code !== "internal" ? a2a : federation.code !== "internal" ? federation : safeRuntimeError(error)
 	}) + "\n");
 } finally {
 	process.off("SIGINT", onSigint);

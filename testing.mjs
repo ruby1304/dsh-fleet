@@ -1,6 +1,6 @@
 import { parse, stringify } from "yaml";
 import { gt, satisfies, valid, validRange } from "semver";
-import { access, link, lstat, mkdir, open, readFile, readdir, realpath, rename, rm, stat } from "node:fs/promises";
+import { access, link, lstat, mkdir, open, readFile, readdir, realpath, rename, rm, stat, unlink } from "node:fs/promises";
 import { dirname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
 import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, randomUUID, sign, verify } from "node:crypto";
 import { spawn } from "node:child_process";
@@ -15,7 +15,7 @@ function normalizeDeviceId(value, field = "deviceId") {
 }
 //#endregion
 //#region src/host/core.ts
-function isRecord$7(value) {
+function isRecord$10(value) {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function strings$1(value, field) {
@@ -27,11 +27,11 @@ function nonEmpty$1(value, field) {
 	if (typeof value !== "string" || value.trim().length === 0) throw new TypeError(field + " must be a non-empty string");
 	return value.trim();
 }
-function exactKeys$4(value, allowed, field) {
+function exactKeys$5(value, allowed, field) {
 	const extras = Object.keys(value).filter((key) => !allowed.includes(key));
 	if (extras.length > 0) throw new TypeError(field + " contains unsupported fields: " + extras.sort().join(", "));
 }
-function safeIdentifier$1(value, field) {
+function safeIdentifier$2(value, field) {
 	const id = nonEmpty$1(value, field);
 	if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(id)) throw new TypeError(field + " must be 1 to 64 ASCII letters, digits, dots, underscores or hyphens");
 	return id;
@@ -52,7 +52,7 @@ function sha256Digest(value, field) {
 	return digest;
 }
 function parseDevice(value, field) {
-	if (!isRecord$7(value)) throw new TypeError(field + " must be an object");
+	if (!isRecord$10(value)) throw new TypeError(field + " must be an object");
 	const assignedTo = value.assignedTo === void 0 ? void 0 : nonEmpty$1(value.assignedTo, field + ".assignedTo");
 	const labels = strings$1(value.labels, field + ".labels");
 	return {
@@ -76,12 +76,12 @@ function dependencySpec(source, revision, field) {
 }
 function parsePlugin(value, index) {
 	const field = "plugins[" + index + "]";
-	if (!isRecord$7(value)) throw new TypeError(field + " must be an object");
+	if (!isRecord$10(value)) throw new TypeError(field + " must be an object");
 	const profiles = strings$1(value.profiles, field + ".profiles");
 	const runtimeModules = strings$1(value.runtimeModules, field + ".runtimeModules");
 	let target;
 	if (value.target !== void 0) {
-		if (!isRecord$7(value.target)) throw new TypeError(field + ".target must be an object");
+		if (!isRecord$10(value.target)) throw new TypeError(field + ".target must be an object");
 		const devices = strings$1(value.target.devices, field + ".target.devices")?.map((id, targetIndex) => normalizeDeviceId(id, `${field}.target.devices[${targetIndex}]`));
 		const classes = strings$1(value.target.classes, field + ".target.classes");
 		const channels = strings$1(value.target.channels, field + ".target.channels");
@@ -111,10 +111,10 @@ function parsePlugin(value, index) {
 	};
 }
 function parseReleaseSource(value, field, visibility) {
-	if (!isRecord$7(value)) throw new TypeError(field + " must be an object");
+	if (!isRecord$10(value)) throw new TypeError(field + " must be an object");
 	const kind = nonEmpty$1(value.kind, field + ".kind");
 	if (kind === "npm") {
-		exactKeys$4(value, [
+		exactKeys$5(value, [
 			"kind",
 			"version",
 			"integrity"
@@ -129,7 +129,7 @@ function parseReleaseSource(value, field, visibility) {
 		};
 	}
 	if (kind === "github") {
-		exactKeys$4(value, [
+		exactKeys$5(value, [
 			"kind",
 			"repository",
 			"revision"
@@ -146,7 +146,7 @@ function parseReleaseSource(value, field, visibility) {
 		};
 	}
 	if (kind === "artifact") {
-		exactKeys$4(value, [
+		exactKeys$5(value, [
 			"kind",
 			"digest",
 			"version"
@@ -161,8 +161,8 @@ function parseReleaseSource(value, field, visibility) {
 	throw new TypeError(field + ".kind must be npm, github or artifact");
 }
 function parseReleasePlugin(value, field) {
-	if (!isRecord$7(value)) throw new TypeError(field + " must be an object");
-	exactKeys$4(value, [
+	if (!isRecord$10(value)) throw new TypeError(field + " must be an object");
+	exactKeys$5(value, [
 		"id",
 		"visibility",
 		"source",
@@ -178,15 +178,15 @@ function parseReleasePlugin(value, field) {
 	};
 }
 function parseProfileRelease(id, value, field) {
-	if (!isRecord$7(value)) throw new TypeError(field + " must be an object");
-	exactKeys$4(value, [
+	if (!isRecord$10(value)) throw new TypeError(field + " must be an object");
+	exactKeys$5(value, [
 		"id",
 		"version",
 		"profile",
 		"dshRange",
 		"plugins"
 	], field);
-	if (value.id !== void 0 && safeIdentifier$1(value.id, field + ".id") !== id) throw new TypeError(field + ".id must match its profileReleases key");
+	if (value.id !== void 0 && safeIdentifier$2(value.id, field + ".id") !== id) throw new TypeError(field + ".id must match its profileReleases key");
 	const dshRange = nonEmpty$1(value.dshRange, field + ".dshRange");
 	if (validRange(dshRange) === null) throw new TypeError(field + ".dshRange must be a valid semantic-version range");
 	if (!Array.isArray(value.plugins) || value.plugins.length === 0) throw new TypeError(field + ".plugins must be a non-empty array");
@@ -199,7 +199,7 @@ function parseProfileRelease(id, value, field) {
 	return {
 		id,
 		version: exactSemver(value.version, field + ".version"),
-		profile: safeIdentifier$1(value.profile, field + ".profile"),
+		profile: safeIdentifier$2(value.profile, field + ".profile"),
 		dshRange,
 		plugins
 	};
@@ -226,31 +226,31 @@ function releasePluginSpec(plugin) {
 	};
 }
 function parseManifestV2(raw, team, devices) {
-	exactKeys$4(raw, [
+	exactKeys$5(raw, [
 		"schemaVersion",
 		"team",
 		"devices",
 		"profileReleases",
 		"assignments"
 	], "fleet manifest");
-	if (!isRecord$7(raw.profileReleases)) throw new TypeError("profileReleases must be an object");
+	if (!isRecord$10(raw.profileReleases)) throw new TypeError("profileReleases must be an object");
 	const profileReleases = {};
 	for (const [rawId, value] of Object.entries(raw.profileReleases)) {
-		const id = safeIdentifier$1(rawId, "profile release id");
+		const id = safeIdentifier$2(rawId, "profile release id");
 		profileReleases[id] = parseProfileRelease(id, value, "profileReleases." + id);
 	}
 	if (Object.keys(profileReleases).length === 0) throw new TypeError("profileReleases must not be empty");
-	if (!isRecord$7(raw.assignments)) throw new TypeError("assignments must be an object");
+	if (!isRecord$10(raw.assignments)) throw new TypeError("assignments must be an object");
 	const assignments = {};
 	const plugins = [];
 	for (const [rawDeviceId, value] of Object.entries(raw.assignments)) {
 		const deviceId = normalizeDeviceId(rawDeviceId, "assignment device id");
 		if (devices[deviceId] === void 0) throw new TypeError("assignments." + deviceId + " references an unknown device");
-		if (!isRecord$7(value) || Object.keys(value).length === 0) throw new TypeError("assignments." + deviceId + " must be a non-empty profile-to-release object");
+		if (!isRecord$10(value) || Object.keys(value).length === 0) throw new TypeError("assignments." + deviceId + " must be a non-empty profile-to-release object");
 		const deviceAssignments = {};
 		for (const [rawProfile, rawReleaseId] of Object.entries(value)) {
-			const profile = safeIdentifier$1(rawProfile, `assignments.${deviceId} profile`);
-			const releaseId = safeIdentifier$1(rawReleaseId, `assignments.${deviceId}.${profile}`);
+			const profile = safeIdentifier$2(rawProfile, `assignments.${deviceId} profile`);
+			const releaseId = safeIdentifier$2(rawReleaseId, `assignments.${deviceId}.${profile}`);
 			const release = profileReleases[releaseId];
 			if (release === void 0) throw new TypeError(`assignments.${deviceId}.${profile} references unknown release ${JSON.stringify(releaseId)}`);
 			if (release.profile !== profile) throw new TypeError(`assignments.${deviceId}.${profile} references release for profile ${JSON.stringify(release.profile)}`);
@@ -281,17 +281,17 @@ function parseManifestV2(raw, team, devices) {
 }
 function parseFleetManifest(source) {
 	const raw = parse(source);
-	if (!isRecord$7(raw)) throw new TypeError("fleet manifest must be an object");
+	if (!isRecord$10(raw)) throw new TypeError("fleet manifest must be an object");
 	if (raw.schemaVersion !== 1 && raw.schemaVersion !== 2) throw new TypeError("schemaVersion must equal 1 or 2");
-	if (!isRecord$7(raw.team)) throw new TypeError("team must be an object");
-	if (raw.schemaVersion === 2) exactKeys$4(raw.team, ["id", "name"], "team");
+	if (!isRecord$10(raw.team)) throw new TypeError("team must be an object");
+	if (raw.schemaVersion === 2) exactKeys$5(raw.team, ["id", "name"], "team");
 	const teamId = nonEmpty$1(raw.team.id, "team.id");
 	const teamName = raw.team.name === void 0 ? void 0 : nonEmpty$1(raw.team.name, "team.name");
-	if (!isRecord$7(raw.devices)) throw new TypeError("devices must be an object");
+	if (!isRecord$10(raw.devices)) throw new TypeError("devices must be an object");
 	const devices = {};
 	for (const [id, value] of Object.entries(raw.devices)) {
 		const deviceId = normalizeDeviceId(id, "device id");
-		if (raw.schemaVersion === 2 && isRecord$7(value)) exactKeys$4(value, [
+		if (raw.schemaVersion === 2 && isRecord$10(value)) exactKeys$5(value, [
 			"assignedTo",
 			"class",
 			"channel",
@@ -736,241 +736,6 @@ function createUpdateMonitor(config, dependencies = {}) {
 		}
 	} };
 }
-//#endregion
-//#region src/agent/config.ts
-function isRecord$6(value) {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-function nonEmpty(value, field) {
-	if (typeof value !== "string" || value.trim().length === 0) throw new TypeError(field + " must be a non-empty string");
-	return value.trim();
-}
-function absolutePath(value, field) {
-	const path = nonEmpty(value, field);
-	if (!isAbsolute(path) || normalize(path) !== path || path.includes("\0")) throw new TypeError(field + " must be a normalized absolute path");
-	return path;
-}
-function boundedInt(value, field, fallback, min, max) {
-	if (value === void 0) return fallback;
-	if (typeof value !== "number" || !Number.isSafeInteger(value) || value < min || value > max) throw new TypeError(`${field} must be an integer from ${min} to ${max}`);
-	return value;
-}
-function exactKeys$3(value, allowed, field) {
-	const extra = Object.keys(value).filter((key) => !allowed.includes(key));
-	if (extra.length > 0) throw new TypeError(field + " contains unsupported fields: " + extra.sort().join(", "));
-}
-function parseRestart(value) {
-	if (!isRecord$6(value)) throw new TypeError("restart must be an object");
-	const kind = nonEmpty(value.kind, "restart.kind");
-	if (kind === "none") {
-		exactKeys$3(value, ["kind"], "restart");
-		return { kind: "none" };
-	}
-	if (kind !== "screen" && kind !== "launchd") throw new TypeError("restart.kind must be none, screen or launchd");
-	exactKeys$3(value, kind === "screen" ? [
-		"kind",
-		"screenBinary",
-		"lsofBinary",
-		"psBinary",
-		"ownerMarkers",
-		"sessionName",
-		"host",
-		"port",
-		"managedPorts"
-	] : [
-		"kind",
-		"launchctlBinary",
-		"lsofBinary",
-		"psBinary",
-		"ownerMarkers",
-		"serviceTarget",
-		"host",
-		"port",
-		"managedPorts"
-	], "restart");
-	const host = nonEmpty(value.host, "restart.host");
-	if (host !== "127.0.0.1" && host !== "localhost" && host !== "::1") throw new TypeError("restart.host must be loopback");
-	if (!Array.isArray(value.ownerMarkers) || value.ownerMarkers.length === 0 || value.ownerMarkers.length > 8 || value.ownerMarkers.some((marker) => typeof marker !== "string" || marker.trim() !== marker || marker.length === 0 || marker.length > 240 || /[\r\n\0]/.test(marker))) throw new TypeError("restart.ownerMarkers must contain 1 to 8 fixed command fragments");
-	const port = boundedInt(value.port, "restart.port", 0, 1024, 65535);
-	const rawManagedPorts = value.managedPorts ?? [port];
-	if (!Array.isArray(rawManagedPorts) || rawManagedPorts.length === 0 || rawManagedPorts.length > 16 || rawManagedPorts.some((item) => typeof item !== "number" || !Number.isSafeInteger(item) || item < 1024 || item > 65535) || new Set(rawManagedPorts).size !== rawManagedPorts.length || !rawManagedPorts.includes(port)) throw new TypeError("restart.managedPorts must be 1 to 16 unique ports including restart.port");
-	const common = {
-		lsofBinary: absolutePath(value.lsofBinary, "restart.lsofBinary"),
-		psBinary: absolutePath(value.psBinary, "restart.psBinary"),
-		ownerMarkers: value.ownerMarkers,
-		host,
-		port,
-		managedPorts: rawManagedPorts
-	};
-	if (kind === "screen") {
-		const sessionName = nonEmpty(value.sessionName, "restart.sessionName");
-		if (!/^[A-Za-z0-9._-]+$/.test(sessionName)) throw new TypeError("restart.sessionName contains unsupported characters");
-		return {
-			kind: "screen",
-			screenBinary: absolutePath(value.screenBinary, "restart.screenBinary"),
-			sessionName,
-			...common
-		};
-	}
-	const serviceTarget = nonEmpty(value.serviceTarget, "restart.serviceTarget");
-	if (!/^(?:gui|user)\/[1-9][0-9]*\/[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(serviceTarget)) throw new TypeError("restart.serviceTarget must be a fixed gui/UID/label or user/UID/label target");
-	return {
-		kind: "launchd",
-		launchctlBinary: absolutePath(value.launchctlBinary, "restart.launchctlBinary"),
-		serviceTarget,
-		...common
-	};
-}
-function parseHealth(value) {
-	if (value === void 0) return {
-		timeoutMs: 45e3,
-		requireFleetRpc: false
-	};
-	if (!isRecord$6(value)) throw new TypeError("health must be an object");
-	exactKeys$3(value, [
-		"url",
-		"timeoutMs",
-		"requireFleetRpc"
-	], "health");
-	let url;
-	if (value.url !== void 0) {
-		url = nonEmpty(value.url, "health.url");
-		const parsed = new URL(url);
-		if (parsed.protocol !== "http:" || parsed.hostname !== "127.0.0.1" && parsed.hostname !== "localhost" && parsed.hostname !== "[::1]") throw new TypeError("health.url must be a loopback http URL");
-		if (parsed.username !== "" || parsed.password !== "") throw new TypeError("health.url must not contain credentials");
-	}
-	const requireFleetRpc = value.requireFleetRpc ?? false;
-	if (typeof requireFleetRpc !== "boolean") throw new TypeError("health.requireFleetRpc must be boolean");
-	if (requireFleetRpc && url === void 0) throw new TypeError("health.requireFleetRpc needs health.url");
-	return {
-		...url === void 0 ? {} : { url },
-		timeoutMs: boundedInt(value.timeoutMs, "health.timeoutMs", 45e3, 3e3, 12e4),
-		requireFleetRpc
-	};
-}
-function safeIdentifier(value, field) {
-	const id = nonEmpty(value, field);
-	if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(id)) throw new TypeError(field + " contains unsupported characters");
-	return id;
-}
-function parseA2A(value) {
-	if (value === void 0) return void 0;
-	if (!isRecord$6(value)) throw new TypeError("a2a must be an object");
-	exactKeys$3(value, [
-		"teamId",
-		"principalId",
-		"privateKeyPath",
-		"trustStorePath",
-		"maxMessageTtlMs"
-	], "a2a");
-	return {
-		teamId: safeIdentifier(value.teamId, "a2a.teamId"),
-		principalId: safeIdentifier(value.principalId, "a2a.principalId"),
-		privateKeyPath: absolutePath(value.privateKeyPath, "a2a.privateKeyPath"),
-		trustStorePath: absolutePath(value.trustStorePath, "a2a.trustStorePath"),
-		maxMessageTtlMs: boundedInt(value.maxMessageTtlMs, "a2a.maxMessageTtlMs", 9e5, 6e4, 864e5)
-	};
-}
-function parseTasks(value) {
-	if (value === void 0) return void 0;
-	if (!isRecord$6(value)) throw new TypeError("tasks must be an object");
-	exactKeys$3(value, [
-		"enabled",
-		"workspaces",
-		"profiles",
-		"timeoutMs",
-		"maxOutputBytes",
-		"maxConcurrent"
-	], "tasks");
-	if (typeof value.enabled !== "boolean") throw new TypeError("tasks.enabled must be boolean");
-	if (!isRecord$6(value.workspaces)) throw new TypeError("tasks.workspaces must be an object");
-	const workspaces = {};
-	for (const [rawId, path] of Object.entries(value.workspaces)) {
-		const id = safeIdentifier(rawId, "tasks workspace id");
-		workspaces[id] = absolutePath(path, "tasks.workspaces." + id);
-	}
-	if (value.enabled && Object.keys(workspaces).length === 0) throw new TypeError("enabled tasks require at least one workspace");
-	if (!Array.isArray(value.profiles) || value.profiles.length === 0 || value.profiles.length > 16 || value.profiles.some((profile) => typeof profile !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(profile)) || new Set(value.profiles).size !== value.profiles.length) throw new TypeError("tasks.profiles must contain 1 to 16 unique safe profile ids");
-	return {
-		enabled: value.enabled,
-		workspaces,
-		profiles: value.profiles,
-		timeoutMs: boundedInt(value.timeoutMs, "tasks.timeoutMs", 36e5, 6e4, 216e5),
-		maxOutputBytes: boundedInt(value.maxOutputBytes, "tasks.maxOutputBytes", 1048576, 4096, 1048576),
-		maxConcurrent: boundedInt(value.maxConcurrent, "tasks.maxConcurrent", 1, 1, 4)
-	};
-}
-function parseAgentConfig(value) {
-	if (!isRecord$6(value)) throw new TypeError("agent config must be an object");
-	exactKeys$3(value, [
-		"schemaVersion",
-		"deviceId",
-		"manifestPath",
-		"dshHome",
-		"dshBinary",
-		"pnpmBinary",
-		"profile",
-		"stateDir",
-		"planTtlMs",
-		"restart",
-		"health",
-		"artifactStore",
-		"tarBinary",
-		"a2a",
-		"tasks"
-	], "agent config");
-	if (value.schemaVersion !== 1 && value.schemaVersion !== 2) throw new TypeError("agent config schemaVersion must equal 1 or 2");
-	const profile = nonEmpty(value.profile, "profile");
-	if (!/^[A-Za-z0-9._-]+$/.test(profile)) throw new TypeError("profile contains unsupported characters");
-	const artifactStore = value.artifactStore === void 0 ? void 0 : absolutePath(value.artifactStore, "artifactStore");
-	const tarBinary = value.tarBinary === void 0 ? void 0 : absolutePath(value.tarBinary, "tarBinary");
-	if (value.schemaVersion === 2 && (artifactStore === void 0 || tarBinary === void 0)) throw new TypeError("schemaVersion 2 requires artifactStore and tarBinary");
-	const a2a = parseA2A(value.a2a);
-	const tasks = parseTasks(value.tasks);
-	if (tasks?.enabled === true && a2a === void 0) throw new TypeError("enabled tasks require a2a identity and trust configuration");
-	return {
-		schemaVersion: value.schemaVersion,
-		deviceId: normalizeDeviceId(value.deviceId),
-		manifestPath: absolutePath(value.manifestPath, "manifestPath"),
-		dshHome: absolutePath(value.dshHome, "dshHome"),
-		dshBinary: absolutePath(value.dshBinary, "dshBinary"),
-		pnpmBinary: absolutePath(value.pnpmBinary, "pnpmBinary"),
-		profile,
-		stateDir: absolutePath(value.stateDir, "stateDir"),
-		planTtlMs: boundedInt(value.planTtlMs, "planTtlMs", 6e5, 6e4, 36e5),
-		restart: parseRestart(value.restart),
-		health: parseHealth(value.health),
-		...artifactStore === void 0 ? {} : { artifactStore },
-		...tarBinary === void 0 ? {} : { tarBinary },
-		...a2a === void 0 ? {} : { a2a },
-		...tasks === void 0 ? {} : { tasks }
-	};
-}
-function assertReleaseReadyConfig(config) {
-	assertMutationReadyConfig(config);
-	if (config.schemaVersion !== 2 || config.artifactStore === void 0 || config.tarBinary === void 0) throw mutationConfigError("atomic profile releases require schemaVersion 2 with artifactStore and tarBinary");
-}
-function assertA2AReadyConfig(config) {
-	if (config.schemaVersion !== 2 || config.a2a === void 0 || config.tasks === void 0) throw mutationConfigError("A2A requires schemaVersion 2 with identity, trust and task policy");
-}
-function mutationConfigError(message) {
-	return Object.assign(new TypeError(message), { code: "unsafe-mutation-config" });
-}
-function assertMutationReadyConfig(config) {
-	if (config.restart.kind === "none") throw mutationConfigError("mutation requires a configured DSH restart");
-	if (config.health.url === void 0 || config.health.requireFleetRpc !== true) throw mutationConfigError("mutation requires a loopback health URL with Fleet RPC verification");
-	let health;
-	try {
-		health = new URL(config.health.url);
-	} catch {
-		throw mutationConfigError("mutation health URL is invalid");
-	}
-	if (health.protocol !== "http:" || health.hostname !== "127.0.0.1" && health.hostname !== "localhost" && health.hostname !== "[::1]" || health.username !== "" || health.password !== "") throw mutationConfigError("mutation health URL must be credential-free loopback HTTP");
-	if ((health.port === "" ? 80 : Number(health.port)) !== config.restart.port) throw mutationConfigError("mutation health URL must verify the configured restart port");
-}
-async function readAgentConfig(path) {
-	return parseAgentConfig(JSON.parse(await readFile(path, "utf8")));
-}
 var FleetProtocolError = class extends Error {
 	code;
 	constructor(code, message) {
@@ -995,7 +760,7 @@ const PLAN_BODY_KEYS$1 = [
 	"createdAt",
 	"expiresAt"
 ];
-const PLAN_KEYS$1 = [
+const PLAN_KEYS$2 = [
 	...PLAN_BODY_KEYS$1,
 	"planId",
 	"digest"
@@ -1011,11 +776,11 @@ const APPROVAL_KEYS$1 = [
 	"approvedAt",
 	"expiresAt"
 ];
-function isRecord$5(value) {
+function isRecord$9(value) {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function assertExactKeys$1(value, keys, label) {
-	if (!isRecord$5(value)) throw new FleetProtocolError("invalid-payload", label + " must be an object");
+	if (!isRecord$9(value)) throw new FleetProtocolError("invalid-payload", label + " must be an object");
 	const expected = new Set(keys);
 	for (const key of Object.keys(value)) if (!expected.has(key)) throw new FleetProtocolError("invalid-payload", label + " contains unsupported field " + JSON.stringify(key));
 	for (const key of keys) if (!Object.hasOwn(value, key)) throw new FleetProtocolError("invalid-payload", label + " is missing field " + JSON.stringify(key));
@@ -1087,7 +852,7 @@ function canonicalize(value, seen) {
 		seen.delete(value);
 		return encoded;
 	}
-	if (isRecord$5(value)) {
+	if (isRecord$9(value)) {
 		const prototype = Object.getPrototypeOf(value);
 		if (prototype !== Object.prototype && prototype !== null) throw new FleetProtocolError("invalid-payload", "canonical JSON accepts only plain objects");
 		if (seen.has(value)) throw new FleetProtocolError("invalid-payload", "canonical JSON rejects cycles");
@@ -1118,7 +883,7 @@ function createFleetPlan(body) {
 	});
 }
 function validateFleetPlan(value) {
-	assertExactKeys$1(value, PLAN_KEYS$1, "plan");
+	assertExactKeys$1(value, PLAN_KEYS$2, "plan");
 	const body = {
 		protocolVersion: value.protocolVersion,
 		deviceId: value.deviceId,
@@ -1170,6 +935,442 @@ function validateFleetPlanApproval(plan, approval, now) {
 	if (nowAt >= expiresAt) throw new FleetProtocolError("approval-expired", "approval has expired");
 	return Object.freeze({ idempotencyKey: "approval:" + sha256Canonical(approval) });
 }
+//#endregion
+//#region src/worker/context.ts
+const MAX_TASK_TOOL_ARGUMENT_BYTES = 16384;
+var WorkerPolicyError = class extends Error {
+	code;
+	constructor(code, message) {
+		super(message);
+		this.name = "WorkerPolicyError";
+		this.code = code;
+	}
+};
+function isRecord$8(value) {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function boundedText(value, field, maxLength = 128) {
+	if (typeof value !== "string" || value.length === 0 || value !== value.trim() || value.length > maxLength || /[\r\n\0]/.test(value)) throw new WorkerPolicyError("invalid-context", field + " must be a bounded trimmed string");
+	return value;
+}
+function safeIdentifier$1(value, field) {
+	const result = boundedText(value, field, 64);
+	if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(result)) throw new WorkerPolicyError("invalid-context", field + " is invalid");
+	return result;
+}
+function namespacedId(value, field, prefix) {
+	const result = boundedText(value, field, 64);
+	if (!new RegExp("^" + prefix + ":[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$").test(result)) throw new WorkerPolicyError("invalid-context", field + " must be a namespaced UUID");
+	return result;
+}
+function digest$5(value, field) {
+	if (typeof value !== "string" || !/^[0-9a-f]{64}$/.test(value)) throw new WorkerPolicyError("invalid-context", field + " must be a lowercase SHA-256 digest");
+	return value;
+}
+function canonicalTimestamp(value, field) {
+	if (typeof value !== "string") throw new WorkerPolicyError("invalid-context", field + " must be a canonical ISO timestamp");
+	const timestamp = Date.parse(value);
+	if (!Number.isFinite(timestamp) || new Date(timestamp).toISOString() !== value) throw new WorkerPolicyError("invalid-context", field + " must be a canonical ISO timestamp");
+	return value;
+}
+function absolutePath$1(value, field) {
+	const result = boundedText(value, field, 4096);
+	if (!isAbsolute(result) || normalize(result) !== result) throw new WorkerPolicyError("invalid-context", field + " must be a normalized absolute path");
+	return result;
+}
+function canonicalArguments(toolArguments, maxBytes) {
+	if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > 16384) throw new WorkerPolicyError("invalid-context", "maxBytes exceeds the Fleet tool-argument ceiling");
+	if (!isRecord$8(toolArguments)) throw new WorkerPolicyError("invalid-arguments", "tool arguments must be a JSON object");
+	let canonical;
+	try {
+		canonical = canonicalJson(toolArguments);
+	} catch (error) {
+		throw new WorkerPolicyError("invalid-arguments", error instanceof Error ? error.message : "tool arguments are not canonical JSON");
+	}
+	if (Buffer.byteLength(canonical, "utf8") > maxBytes) throw new WorkerPolicyError("arguments-too-large", `tool arguments exceed ${maxBytes} bytes`);
+	return canonical;
+}
+function digestToolArguments(toolArguments, maxBytes = MAX_TASK_TOOL_ARGUMENT_BYTES) {
+	const canonical = canonicalArguments(toolArguments, maxBytes);
+	return sha256Canonical(JSON.parse(canonical));
+}
+function createTaskBindingDigest(input) {
+	const senderKeyId = boundedText(input.sender.keyId, "sender.keyId", 80);
+	if (!/^ed25519:[0-9a-f]{64}$/.test(senderKeyId)) throw new WorkerPolicyError("invalid-context", "sender.keyId must be an Ed25519 key id");
+	return sha256Canonical({
+		schemaVersion: 2,
+		teamId: safeIdentifier$1(input.teamId, "teamId"),
+		submitMessageId: namespacedId(input.submitMessageId, "submitMessageId", "msg"),
+		submitPayloadDigest: digest$5(input.submitPayloadDigest, "submitPayloadDigest"),
+		sender: {
+			principalId: safeIdentifier$1(input.sender.principalId, "sender.principalId"),
+			deviceId: safeIdentifier$1(input.sender.deviceId, "sender.deviceId"),
+			keyId: senderKeyId
+		},
+		recipientDeviceId: safeIdentifier$1(input.recipientDeviceId, "recipientDeviceId"),
+		taskId: namespacedId(input.taskId, "taskId", "task"),
+		workspaceId: safeIdentifier$1(input.workspaceId, "workspaceId"),
+		workspacePath: absolutePath$1(input.workspacePath, "workspacePath"),
+		profile: safeIdentifier$1(input.profile, "profile"),
+		executionProfileHash: digest$5(input.executionProfileHash, "executionProfileHash"),
+		manifestDigest: digest$5(input.manifestDigest, "manifestDigest"),
+		releaseDigest: digest$5(input.releaseDigest, "releaseDigest"),
+		policyId: safeIdentifier$1(input.policyId, "policyId"),
+		policyDigest: digest$5(input.policyDigest, "policyDigest"),
+		deadline: canonicalTimestamp(input.deadline, "deadline")
+	});
+}
+function createAllowedOnceToken(input) {
+	return {
+		schemaVersion: 2,
+		approvalId: namespacedId(input.approvalId, "approvalId", "approval"),
+		approvalRequestMessageId: namespacedId(input.approvalRequestMessageId, "approvalRequestMessageId", "msg"),
+		approvalRequestPayloadDigest: digest$5(input.approvalRequestPayloadDigest, "approvalRequestPayloadDigest"),
+		decisionMessageId: namespacedId(input.decisionMessageId, "decisionMessageId", "msg"),
+		decisionPayloadDigest: digest$5(input.decisionPayloadDigest, "decisionPayloadDigest"),
+		taskBindingDigest: digest$5(input.taskBindingDigest, "taskBindingDigest"),
+		executionProfileHash: digest$5(input.executionProfileHash, "executionProfileHash"),
+		toolCallId: boundedText(input.toolCallId, "toolCallId"),
+		toolName: safeIdentifier$1(input.toolName, "toolName"),
+		argumentsDigest: digest$5(input.argumentsDigest, "argumentsDigest"),
+		expiresAt: canonicalTimestamp(input.expiresAt, "expiresAt"),
+		consumedAt: null
+	};
+}
+const TASK_POLICY_IDS = ["readonly-v1", "workspace-write-ask-v1"];
+const SAFE_READ_TOOLS = [
+	"glob",
+	"grep",
+	"read",
+	"read_image"
+];
+const APPROVAL_REQUIRED_TOOLS = [
+	"bash",
+	"edit",
+	"pwsh",
+	"web_fetch",
+	"web_search",
+	"write"
+];
+const HARD_DENIED_TOOLS = [
+	"cordis_define",
+	"cordis_inspect_list",
+	"cordis_inspect_query",
+	"cordis_inspect_self",
+	"cordis_run",
+	"cordis_stop",
+	"cordis_undefine",
+	"create_goal",
+	"followup_task",
+	"interrupt_agent",
+	"job_kill",
+	"job_list",
+	"job_output",
+	"list_agents",
+	"ralph",
+	"report",
+	"run_code",
+	"send_message",
+	"skill",
+	"spawn_agent",
+	"str_replace_editor",
+	"todo_write",
+	"update_goal",
+	"wait_agent",
+	"workflow"
+];
+function calculateTaskPolicyDigest(policy) {
+	return sha256Canonical(policy);
+}
+function defineTaskPolicy(input) {
+	const body = Object.freeze({
+		schemaVersion: 1,
+		policyId: input.policyId,
+		permissionMode: input.permissionMode,
+		workspaceScope: "configured-workspace",
+		defaultDecision: "deny",
+		safeTools: Object.freeze([...SAFE_READ_TOOLS]),
+		approvalRequiredTools: Object.freeze([...input.approvalRequiredTools]),
+		hardDeniedTools: Object.freeze([...HARD_DENIED_TOOLS]),
+		allowBackground: false,
+		maxArgumentsBytes: MAX_TASK_TOOL_ARGUMENT_BYTES
+	});
+	return Object.freeze({
+		...body,
+		policyDigest: calculateTaskPolicyDigest(body)
+	});
+}
+const LOCAL_TASK_POLICIES = Object.freeze({
+	"readonly-v1": defineTaskPolicy({
+		policyId: "readonly-v1",
+		permissionMode: "read-only",
+		approvalRequiredTools: []
+	}),
+	"workspace-write-ask-v1": defineTaskPolicy({
+		policyId: "workspace-write-ask-v1",
+		permissionMode: "workspace-write",
+		approvalRequiredTools: APPROVAL_REQUIRED_TOOLS
+	})
+});
+function isRecord$7(value) {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function nonEmpty(value, field) {
+	if (typeof value !== "string" || value.trim().length === 0) throw new TypeError(field + " must be a non-empty string");
+	return value.trim();
+}
+function absolutePath(value, field) {
+	const path = nonEmpty(value, field);
+	if (!isAbsolute(path) || normalize(path) !== path || path.includes("\0")) throw new TypeError(field + " must be a normalized absolute path");
+	return path;
+}
+function boundedInt(value, field, fallback, min, max) {
+	if (value === void 0) return fallback;
+	if (typeof value !== "number" || !Number.isSafeInteger(value) || value < min || value > max) throw new TypeError(`${field} must be an integer from ${min} to ${max}`);
+	return value;
+}
+function exactKeys$4(value, allowed, field) {
+	const extra = Object.keys(value).filter((key) => !allowed.includes(key));
+	if (extra.length > 0) throw new TypeError(field + " contains unsupported fields: " + extra.sort().join(", "));
+}
+function parseRestart(value) {
+	if (!isRecord$7(value)) throw new TypeError("restart must be an object");
+	const kind = nonEmpty(value.kind, "restart.kind");
+	if (kind === "none") {
+		exactKeys$4(value, ["kind"], "restart");
+		return { kind: "none" };
+	}
+	if (kind !== "screen" && kind !== "launchd") throw new TypeError("restart.kind must be none, screen or launchd");
+	exactKeys$4(value, kind === "screen" ? [
+		"kind",
+		"screenBinary",
+		"lsofBinary",
+		"psBinary",
+		"ownerMarkers",
+		"sessionName",
+		"host",
+		"port",
+		"managedPorts"
+	] : [
+		"kind",
+		"launchctlBinary",
+		"lsofBinary",
+		"psBinary",
+		"ownerMarkers",
+		"serviceTarget",
+		"host",
+		"port",
+		"managedPorts"
+	], "restart");
+	const host = nonEmpty(value.host, "restart.host");
+	if (host !== "127.0.0.1" && host !== "localhost" && host !== "::1") throw new TypeError("restart.host must be loopback");
+	if (!Array.isArray(value.ownerMarkers) || value.ownerMarkers.length === 0 || value.ownerMarkers.length > 8 || value.ownerMarkers.some((marker) => typeof marker !== "string" || marker.trim() !== marker || marker.length === 0 || marker.length > 240 || /[\r\n\0]/.test(marker))) throw new TypeError("restart.ownerMarkers must contain 1 to 8 fixed command fragments");
+	const port = boundedInt(value.port, "restart.port", 0, 1024, 65535);
+	const rawManagedPorts = value.managedPorts ?? [port];
+	if (!Array.isArray(rawManagedPorts) || rawManagedPorts.length === 0 || rawManagedPorts.length > 16 || rawManagedPorts.some((item) => typeof item !== "number" || !Number.isSafeInteger(item) || item < 1024 || item > 65535) || new Set(rawManagedPorts).size !== rawManagedPorts.length || !rawManagedPorts.includes(port)) throw new TypeError("restart.managedPorts must be 1 to 16 unique ports including restart.port");
+	const common = {
+		lsofBinary: absolutePath(value.lsofBinary, "restart.lsofBinary"),
+		psBinary: absolutePath(value.psBinary, "restart.psBinary"),
+		ownerMarkers: value.ownerMarkers,
+		host,
+		port,
+		managedPorts: rawManagedPorts
+	};
+	if (kind === "screen") {
+		const sessionName = nonEmpty(value.sessionName, "restart.sessionName");
+		if (!/^[A-Za-z0-9._-]+$/.test(sessionName)) throw new TypeError("restart.sessionName contains unsupported characters");
+		return {
+			kind: "screen",
+			screenBinary: absolutePath(value.screenBinary, "restart.screenBinary"),
+			sessionName,
+			...common
+		};
+	}
+	const serviceTarget = nonEmpty(value.serviceTarget, "restart.serviceTarget");
+	if (!/^(?:gui|user)\/[1-9][0-9]*\/[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(serviceTarget)) throw new TypeError("restart.serviceTarget must be a fixed gui/UID/label or user/UID/label target");
+	return {
+		kind: "launchd",
+		launchctlBinary: absolutePath(value.launchctlBinary, "restart.launchctlBinary"),
+		serviceTarget,
+		...common
+	};
+}
+function parseHealth(value) {
+	if (value === void 0) return {
+		timeoutMs: 45e3,
+		requireFleetRpc: false
+	};
+	if (!isRecord$7(value)) throw new TypeError("health must be an object");
+	exactKeys$4(value, [
+		"url",
+		"timeoutMs",
+		"requireFleetRpc"
+	], "health");
+	let url;
+	if (value.url !== void 0) {
+		url = nonEmpty(value.url, "health.url");
+		const parsed = new URL(url);
+		if (parsed.protocol !== "http:" || parsed.hostname !== "127.0.0.1" && parsed.hostname !== "localhost" && parsed.hostname !== "[::1]") throw new TypeError("health.url must be a loopback http URL");
+		if (parsed.username !== "" || parsed.password !== "") throw new TypeError("health.url must not contain credentials");
+	}
+	const requireFleetRpc = value.requireFleetRpc ?? false;
+	if (typeof requireFleetRpc !== "boolean") throw new TypeError("health.requireFleetRpc must be boolean");
+	if (requireFleetRpc && url === void 0) throw new TypeError("health.requireFleetRpc needs health.url");
+	return {
+		...url === void 0 ? {} : { url },
+		timeoutMs: boundedInt(value.timeoutMs, "health.timeoutMs", 45e3, 3e3, 12e4),
+		requireFleetRpc
+	};
+}
+function safeIdentifier(value, field) {
+	const id = nonEmpty(value, field);
+	if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(id)) throw new TypeError(field + " contains unsupported characters");
+	return id;
+}
+function parseA2A(value) {
+	if (value === void 0) return void 0;
+	if (!isRecord$7(value)) throw new TypeError("a2a must be an object");
+	exactKeys$4(value, [
+		"teamId",
+		"principalId",
+		"privateKeyPath",
+		"trustStorePath",
+		"maxMessageTtlMs"
+	], "a2a");
+	return {
+		teamId: safeIdentifier(value.teamId, "a2a.teamId"),
+		principalId: safeIdentifier(value.principalId, "a2a.principalId"),
+		privateKeyPath: absolutePath(value.privateKeyPath, "a2a.privateKeyPath"),
+		trustStorePath: absolutePath(value.trustStorePath, "a2a.trustStorePath"),
+		maxMessageTtlMs: boundedInt(value.maxMessageTtlMs, "a2a.maxMessageTtlMs", 9e5, 6e4, 864e5)
+	};
+}
+function parseTasks(value) {
+	if (value === void 0) return void 0;
+	if (!isRecord$7(value)) throw new TypeError("tasks must be an object");
+	exactKeys$4(value, [
+		"enabled",
+		"workspaces",
+		"profiles",
+		"timeoutMs",
+		"maxOutputBytes",
+		"maxConcurrent",
+		"policyIds"
+	], "tasks");
+	if (typeof value.enabled !== "boolean") throw new TypeError("tasks.enabled must be boolean");
+	if (!isRecord$7(value.workspaces)) throw new TypeError("tasks.workspaces must be an object");
+	const workspaces = {};
+	for (const [rawId, path] of Object.entries(value.workspaces)) {
+		const id = safeIdentifier(rawId, "tasks workspace id");
+		workspaces[id] = absolutePath(path, "tasks.workspaces." + id);
+	}
+	if (value.enabled && Object.keys(workspaces).length === 0) throw new TypeError("enabled tasks require at least one workspace");
+	if (!Array.isArray(value.profiles) || value.profiles.length === 0 || value.profiles.length > 16 || value.profiles.some((profile) => typeof profile !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(profile)) || new Set(value.profiles).size !== value.profiles.length) throw new TypeError("tasks.profiles must contain 1 to 16 unique safe profile ids");
+	const rawPolicyIds = value.policyIds ?? ["readonly-v1"];
+	if (!Array.isArray(rawPolicyIds) || rawPolicyIds.length === 0 || rawPolicyIds.length > TASK_POLICY_IDS.length || rawPolicyIds.some((policyId) => typeof policyId !== "string" || !TASK_POLICY_IDS.includes(policyId)) || new Set(rawPolicyIds).size !== rawPolicyIds.length) throw new TypeError("tasks.policyIds must contain unique installed task policy ids");
+	const policyIds = [...rawPolicyIds];
+	const policies = {};
+	for (const policyId of policyIds) policies[policyId] = LOCAL_TASK_POLICIES[policyId];
+	return {
+		enabled: value.enabled,
+		workspaces,
+		profiles: value.profiles,
+		timeoutMs: boundedInt(value.timeoutMs, "tasks.timeoutMs", 36e5, 6e4, 216e5),
+		maxOutputBytes: boundedInt(value.maxOutputBytes, "tasks.maxOutputBytes", 1048576, 4096, 1048576),
+		maxConcurrent: boundedInt(value.maxConcurrent, "tasks.maxConcurrent", 1, 1, 4),
+		policyIds,
+		policies: Object.freeze(policies)
+	};
+}
+function parseAgentConfig(value) {
+	if (!isRecord$7(value)) throw new TypeError("agent config must be an object");
+	exactKeys$4(value, [
+		"schemaVersion",
+		"deviceId",
+		"manifestPath",
+		"desiredManifestPath",
+		"dshHome",
+		"dshBinary",
+		"pnpmBinary",
+		"profile",
+		"stateDir",
+		"planTtlMs",
+		"restart",
+		"health",
+		"artifactStore",
+		"tarBinary",
+		"a2a",
+		"tasks"
+	], "agent config");
+	if (value.schemaVersion !== 1 && value.schemaVersion !== 2) throw new TypeError("agent config schemaVersion must equal 1 or 2");
+	const profile = nonEmpty(value.profile, "profile");
+	if (!/^[A-Za-z0-9._-]+$/.test(profile)) throw new TypeError("profile contains unsupported characters");
+	const dshHome = absolutePath(value.dshHome, "dshHome");
+	const configuredManifestPath = absolutePath(value.manifestPath, "manifestPath");
+	const profileManifestPath = join(dshHome, "profiles", profile, "fleet.lock.yaml");
+	let manifestPath = configuredManifestPath;
+	let desiredManifestPath;
+	if (value.schemaVersion === 2) {
+		if (value.desiredManifestPath === void 0) {
+			manifestPath = profileManifestPath;
+			desiredManifestPath = configuredManifestPath;
+		} else {
+			desiredManifestPath = absolutePath(value.desiredManifestPath, "desiredManifestPath");
+			if (configuredManifestPath !== profileManifestPath) throw new TypeError("schemaVersion 2 manifestPath must be the profile-local live Fleet manifest");
+		}
+	} else if (value.desiredManifestPath !== void 0) throw new TypeError("schemaVersion 1 must not define desiredManifestPath");
+	const artifactStore = value.artifactStore === void 0 ? void 0 : absolutePath(value.artifactStore, "artifactStore");
+	const tarBinary = value.tarBinary === void 0 ? void 0 : absolutePath(value.tarBinary, "tarBinary");
+	if (value.schemaVersion === 2 && (artifactStore === void 0 || tarBinary === void 0)) throw new TypeError("schemaVersion 2 requires artifactStore and tarBinary");
+	const a2a = parseA2A(value.a2a);
+	const tasks = parseTasks(value.tasks);
+	if (tasks?.enabled === true && a2a === void 0) throw new TypeError("enabled tasks require a2a identity and trust configuration");
+	return {
+		schemaVersion: value.schemaVersion,
+		deviceId: normalizeDeviceId(value.deviceId),
+		manifestPath,
+		...desiredManifestPath === void 0 ? {} : { desiredManifestPath },
+		dshHome,
+		dshBinary: absolutePath(value.dshBinary, "dshBinary"),
+		pnpmBinary: absolutePath(value.pnpmBinary, "pnpmBinary"),
+		profile,
+		stateDir: absolutePath(value.stateDir, "stateDir"),
+		planTtlMs: boundedInt(value.planTtlMs, "planTtlMs", 6e5, 6e4, 36e5),
+		restart: parseRestart(value.restart),
+		health: parseHealth(value.health),
+		...artifactStore === void 0 ? {} : { artifactStore },
+		...tarBinary === void 0 ? {} : { tarBinary },
+		...a2a === void 0 ? {} : { a2a },
+		...tasks === void 0 ? {} : { tasks }
+	};
+}
+function assertReleaseReadyConfig(config) {
+	assertMutationReadyConfig(config);
+	const expectedManifestPath = join(config.dshHome, "profiles", config.profile, "fleet.lock.yaml");
+	if (config.schemaVersion !== 2 || config.artifactStore === void 0 || config.tarBinary === void 0 || config.desiredManifestPath === void 0 || config.manifestPath !== expectedManifestPath) throw mutationConfigError("atomic profile releases require schemaVersion 2, a profile-local live manifest, a desired manifest, artifactStore and tarBinary");
+}
+function assertA2AReadyConfig(config) {
+	if (config.schemaVersion !== 2 || config.a2a === void 0 || config.tasks === void 0) throw mutationConfigError("A2A requires schemaVersion 2 with identity, trust and task policy");
+	if (config.tasks.policyIds === void 0 || config.tasks.policies === void 0) throw mutationConfigError("A2A task execution requires resolved local task policies");
+}
+function mutationConfigError(message) {
+	return Object.assign(new TypeError(message), { code: "unsafe-mutation-config" });
+}
+function assertMutationReadyConfig(config) {
+	if (config.restart.kind === "none") throw mutationConfigError("mutation requires a configured DSH restart");
+	if (config.health.url === void 0 || config.health.requireFleetRpc !== true) throw mutationConfigError("mutation requires a loopback health URL with Fleet RPC verification");
+	let health;
+	try {
+		health = new URL(config.health.url);
+	} catch {
+		throw mutationConfigError("mutation health URL is invalid");
+	}
+	if (health.protocol !== "http:" || health.hostname !== "127.0.0.1" && health.hostname !== "localhost" && health.hostname !== "[::1]" || health.username !== "" || health.password !== "") throw mutationConfigError("mutation health URL must be credential-free loopback HTTP");
+	if ((health.port === "" ? 80 : Number(health.port)) !== config.restart.port) throw mutationConfigError("mutation health URL must verify the configured restart port");
+}
+async function readAgentConfig(path) {
+	return parseAgentConfig(JSON.parse(await readFile(path, "utf8")));
+}
 var FleetPlannerError = class extends Error {
 	code;
 	constructor(code, message) {
@@ -1217,11 +1418,11 @@ const TARGET_KEYS = [
 	"classes",
 	"channels"
 ];
-function isRecord$4(value) {
+function isRecord$6(value) {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function rejectUnknownKeys(value, keys, label) {
-	if (!isRecord$4(value)) throw new FleetPlannerError("invalid-input", label + " must be an object");
+	if (!isRecord$6(value)) throw new FleetPlannerError("invalid-input", label + " must be an object");
 	const allowed = new Set(keys);
 	for (const key of Object.keys(value)) if (!allowed.has(key)) throw new FleetPlannerError("invalid-input", label + " contains unsupported field " + JSON.stringify(key));
 }
@@ -1285,8 +1486,8 @@ function createAgentPlan(input) {
 	rejectUnknownKeys(input, INPUT_KEYS, "planner input");
 	rejectUnknownKeys(input.manifest, MANIFEST_KEYS, "manifest");
 	rejectUnknownKeys(input.manifest.team, TEAM_KEYS, "manifest.team");
-	if (input.manifest.schemaVersion !== 1 || !Array.isArray(input.manifest.plugins) || !isRecord$4(input.manifest.devices)) throw new FleetPlannerError("invalid-input", "planner requires a parsed schemaVersion 1 manifest");
-	if (!isRecord$4(input.dependencies)) throw new FleetPlannerError("invalid-input", "dependencies must be an object");
+	if (input.manifest.schemaVersion !== 1 || !Array.isArray(input.manifest.plugins) || !isRecord$6(input.manifest.devices)) throw new FleetPlannerError("invalid-input", "planner requires a parsed schemaVersion 1 manifest");
+	if (!isRecord$6(input.dependencies)) throw new FleetPlannerError("invalid-input", "dependencies must be an object");
 	const deviceId = trimmed$1(input.deviceId, "deviceId");
 	const profile = trimmed$1(input.profile, "profile");
 	const pluginId = trimmed$1(input.pluginId, "pluginId");
@@ -1332,9 +1533,15 @@ const PLAN_BODY_KEYS = [
 	"kind",
 	"deviceId",
 	"profile",
+	"fromManifestDigest",
+	"toManifestDigest",
+	"fromReleaseDigest",
+	"toReleaseDigest",
 	"manifestDigest",
 	"profileHash",
 	"observedDshVersion",
+	"observedRuntimeDigest",
+	"observedServiceDefinitionDigest",
 	"releaseId",
 	"releaseVersion",
 	"releaseDigest",
@@ -1344,7 +1551,7 @@ const PLAN_BODY_KEYS = [
 	"createdAt",
 	"expiresAt"
 ];
-const PLAN_KEYS = [
+const PLAN_KEYS$1 = [
 	...PLAN_BODY_KEYS,
 	"planId",
 	"digest"
@@ -1377,10 +1584,38 @@ const APPROVAL_KEYS = [
 	"planDigest",
 	"deviceId",
 	"profile",
+	"fromManifestDigest",
+	"toManifestDigest",
+	"fromReleaseDigest",
+	"toReleaseDigest",
 	"approvedAt",
 	"expiresAt"
 ];
-const APPLIED_KEYS = [
+const ROLLBACK_PLAN_BODY_KEYS = [
+	"protocolVersion",
+	"kind",
+	"transitionPlanId",
+	"transitionPlanDigest",
+	"deviceId",
+	"profile",
+	"fromManifestDigest",
+	"toManifestDigest",
+	"fromReleaseDigest",
+	"toReleaseDigest",
+	"fromProfileHash",
+	"toProfileHash",
+	"observedDshVersion",
+	"observedRuntimeDigest",
+	"observedServiceDefinitionDigest",
+	"createdAt",
+	"expiresAt"
+];
+const ROLLBACK_PLAN_KEYS = [
+	...ROLLBACK_PLAN_BODY_KEYS,
+	"planId",
+	"digest"
+];
+const APPLIED_V1_KEYS = [
 	"schemaVersion",
 	"deviceId",
 	"profile",
@@ -1390,11 +1625,16 @@ const APPLIED_KEYS = [
 	"plugins",
 	"appliedAt"
 ];
-function isRecord$3(value) {
+const APPLIED_V2_KEYS = [
+	...APPLIED_V1_KEYS,
+	"transitionPlanId",
+	"transitionPlanDigest"
+];
+function isRecord$5(value) {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function assertExactKeys(value, keys, label) {
-	if (!isRecord$3(value)) throw new FleetProtocolError("invalid-payload", label + " must be an object");
+	if (!isRecord$5(value)) throw new FleetProtocolError("invalid-payload", label + " must be an object");
 	const expected = new Set(keys);
 	for (const key of Object.keys(value)) if (!expected.has(key)) throw new FleetProtocolError("invalid-payload", label + " contains unsupported field " + JSON.stringify(key));
 	for (const key of keys) if (!Object.hasOwn(value, key)) throw new FleetProtocolError("invalid-payload", label + " is missing field " + JSON.stringify(key));
@@ -1408,6 +1648,9 @@ function assertIdentifier(value, field) {
 }
 function assertDigest(value, field) {
 	if (typeof value !== "string" || !/^[0-9a-f]{64}$/.test(value)) throw new FleetProtocolError("invalid-digest", field + " must be a lowercase SHA-256 digest");
+}
+function assertNullableDigest(value, field) {
+	if (value !== null) assertDigest(value, field);
 }
 function parseTime(value, field) {
 	if (typeof value !== "string") throw new FleetProtocolError("invalid-time", field + " must be a canonical ISO timestamp");
@@ -1471,17 +1714,24 @@ function validateChange(value, index) {
 }
 function validatePlanBody(value) {
 	assertExactKeys(value, PLAN_BODY_KEYS, "release plan body");
-	if (value.protocolVersion !== 1 || value.kind !== "profile-release") throw new FleetProtocolError("invalid-protocol", "unsupported release protocol");
+	if (value.protocolVersion !== 2 || value.kind !== "profile-release") throw new FleetProtocolError("invalid-protocol", "unsupported release protocol");
 	assertIdentifier(value.deviceId, "deviceId");
 	assertIdentifier(value.profile, "profile");
+	assertDigest(value.fromManifestDigest, "fromManifestDigest");
+	assertDigest(value.toManifestDigest, "toManifestDigest");
+	assertNullableDigest(value.fromReleaseDigest, "fromReleaseDigest");
+	assertDigest(value.toReleaseDigest, "toReleaseDigest");
 	assertDigest(value.manifestDigest, "manifestDigest");
 	assertDigest(value.profileHash, "profileHash");
 	assertString(value.observedDshVersion, "observedDshVersion");
 	if (!isSupportedDshVersion(value.observedDshVersion)) throw new FleetProtocolError("unsupported-dsh-version", "DSH version is outside the supported Agent range");
+	assertDigest(value.observedRuntimeDigest, "observedRuntimeDigest");
+	assertNullableDigest(value.observedServiceDefinitionDigest, "observedServiceDefinitionDigest");
 	assertIdentifier(value.releaseId, "releaseId");
 	assertString(value.releaseVersion, "releaseVersion");
 	if (valid(value.releaseVersion) !== value.releaseVersion) throw new FleetProtocolError("invalid-payload", "releaseVersion must be an exact semantic version");
 	assertDigest(value.releaseDigest, "releaseDigest");
+	if (value.manifestDigest !== value.toManifestDigest || value.releaseDigest !== value.toReleaseDigest) throw new FleetProtocolError("plan-integrity-failed", "legacy release digest aliases must equal the transition target digests");
 	if (!Array.isArray(value.plugins) || value.plugins.length === 0) throw new FleetProtocolError("invalid-payload", "plugins must not be empty");
 	value.plugins.forEach(validatePlugin);
 	if (!Array.isArray(value.changes)) throw new FleetProtocolError("invalid-payload", "changes must be an array");
@@ -1513,7 +1763,7 @@ function createFleetReleasePlan(body) {
 	});
 }
 function validateFleetReleasePlan(value) {
-	assertExactKeys(value, PLAN_KEYS, "release plan");
+	assertExactKeys(value, PLAN_KEYS$1, "release plan");
 	const body = Object.fromEntries(PLAN_BODY_KEYS.map((key) => [key, value[key]]));
 	validatePlanBody(body);
 	assertDigest(value.digest, "digest");
@@ -1523,7 +1773,7 @@ function validateFleetReleasePlan(value) {
 function validateFleetReleaseApproval(plan, approval, now) {
 	validateFleetReleasePlan(plan);
 	assertExactKeys(approval, APPROVAL_KEYS, "release approval");
-	if (approval.protocolVersion !== 1 || approval.kind !== "profile-release") throw new FleetProtocolError("invalid-protocol", "unsupported release approval protocol");
+	if (approval.protocolVersion !== 2 || approval.kind !== "profile-release") throw new FleetProtocolError("invalid-protocol", "unsupported release approval protocol");
 	for (const [field, value] of Object.entries({
 		approvalId: approval.approvalId,
 		principalId: approval.principalId,
@@ -1532,6 +1782,11 @@ function validateFleetReleaseApproval(plan, approval, now) {
 		profile: approval.profile
 	})) assertString(value, field);
 	assertDigest(approval.planDigest, "planDigest");
+	assertDigest(approval.fromManifestDigest, "fromManifestDigest");
+	assertDigest(approval.toManifestDigest, "toManifestDigest");
+	assertNullableDigest(approval.fromReleaseDigest, "fromReleaseDigest");
+	assertDigest(approval.toReleaseDigest, "toReleaseDigest");
+	if (approval.fromManifestDigest !== plan.fromManifestDigest || approval.toManifestDigest !== plan.toManifestDigest || approval.fromReleaseDigest !== plan.fromReleaseDigest || approval.toReleaseDigest !== plan.toReleaseDigest) throw new FleetProtocolError("approval-mismatch", "release approval transition digests do not match its plan");
 	const approvedAt = parseTime(approval.approvedAt, "approvedAt");
 	const expiresAt = parseTime(approval.expiresAt, "approval.expiresAt");
 	const nowAt = now instanceof Date ? now.getTime() : parseTime(now, "now");
@@ -1545,9 +1800,44 @@ function validateFleetReleaseApproval(plan, approval, now) {
 		approval: JSON.parse(canonicalJson(approval))
 	}) };
 }
+function validateRollbackPlanBody(value) {
+	assertExactKeys(value, ROLLBACK_PLAN_BODY_KEYS, "release rollback plan body");
+	if (value.protocolVersion !== 2 || value.kind !== "profile-release-rollback") throw new FleetProtocolError("invalid-protocol", "unsupported release rollback protocol");
+	if (!/^release-plan:[0-9a-f]{64}$/.test(value.transitionPlanId)) throw new FleetProtocolError("invalid-payload", "transitionPlanId is invalid");
+	assertDigest(value.transitionPlanDigest, "transitionPlanDigest");
+	if (value.transitionPlanId !== "release-plan:" + value.transitionPlanDigest) throw new FleetProtocolError("plan-integrity-failed", "transition plan id does not match transitionPlanDigest");
+	assertIdentifier(value.deviceId, "deviceId");
+	assertIdentifier(value.profile, "profile");
+	assertDigest(value.fromManifestDigest, "fromManifestDigest");
+	assertDigest(value.toManifestDigest, "toManifestDigest");
+	assertDigest(value.fromReleaseDigest, "fromReleaseDigest");
+	assertNullableDigest(value.toReleaseDigest, "toReleaseDigest");
+	assertDigest(value.fromProfileHash, "fromProfileHash");
+	assertDigest(value.toProfileHash, "toProfileHash");
+	assertString(value.observedDshVersion, "observedDshVersion");
+	if (!isSupportedDshVersion(value.observedDshVersion)) throw new FleetProtocolError("unsupported-dsh-version", "DSH version is outside the supported Agent range");
+	assertDigest(value.observedRuntimeDigest, "observedRuntimeDigest");
+	assertNullableDigest(value.observedServiceDefinitionDigest, "observedServiceDefinitionDigest");
+	if (value.fromManifestDigest === value.toManifestDigest && value.fromReleaseDigest === value.toReleaseDigest) throw new FleetProtocolError("invalid-payload", "release rollback must change a manifest or applied release binding");
+	const createdAt = parseTime(value.createdAt, "createdAt");
+	if (parseTime(value.expiresAt, "expiresAt") <= createdAt) throw new FleetProtocolError("invalid-time", "expiresAt must be after createdAt");
+}
+function validateFleetReleaseRollbackPlan(value) {
+	assertExactKeys(value, ROLLBACK_PLAN_KEYS, "release rollback plan");
+	const body = Object.fromEntries(ROLLBACK_PLAN_BODY_KEYS.map((key) => [key, value[key]]));
+	validateRollbackPlanBody(body);
+	assertDigest(value.digest, "digest");
+	const digest = sha256Canonical(body);
+	if (value.digest !== digest || value.planId !== "release-rollback-plan:" + digest) throw new FleetProtocolError("plan-integrity-failed", "release rollback plan id or digest does not match its canonical body");
+}
 function validateFleetAppliedRelease(value) {
-	assertExactKeys(value, APPLIED_KEYS, "applied release");
-	if (value.schemaVersion !== 1) throw new FleetProtocolError("invalid-protocol", "unsupported applied release schema");
+	if (value.schemaVersion === 1) assertExactKeys(value, APPLIED_V1_KEYS, "applied release");
+	else if (value.schemaVersion === 2) {
+		assertExactKeys(value, APPLIED_V2_KEYS, "applied release");
+		if (typeof value.transitionPlanId !== "string" || !/^release-plan:[0-9a-f]{64}$/.test(value.transitionPlanId)) throw new FleetProtocolError("invalid-payload", "applied release transitionPlanId is invalid");
+		assertDigest(value.transitionPlanDigest, "transitionPlanDigest");
+		if (value.transitionPlanId !== "release-plan:" + value.transitionPlanDigest) throw new FleetProtocolError("plan-integrity-failed", "applied release transition binding is invalid");
+	} else throw new FleetProtocolError("invalid-protocol", "unsupported applied release schema");
 	assertIdentifier(value.deviceId, "deviceId");
 	assertIdentifier(value.profile, "profile");
 	assertIdentifier(value.releaseId, "releaseId");
@@ -1578,7 +1868,7 @@ function trimmed(value, field) {
 	if (typeof value !== "string" || value.length === 0 || value !== value.trim()) throw new FleetReleasePlannerError("invalid-input", field + " must be a trimmed non-empty string");
 	return value;
 }
-function digest$1(value) {
+function digest$4(value) {
 	return createHash("sha256").update(value, "utf8").digest("hex");
 }
 function binding(plugin) {
@@ -1643,7 +1933,7 @@ function buildChanges(plugins, dependencies, artifactDigests, previous) {
 			visibility: plugin.visibility,
 			sourceKind: plugin.sourceKind,
 			action: actualSpec === void 0 ? "install" : "update",
-			fromSpecDigest: actualSpec === void 0 ? null : digest$1(actualSpec),
+			fromSpecDigest: actualSpec === void 0 ? null : digest$4(actualSpec),
 			exactToSpec: plugin.exactSpec,
 			artifactDigest: plugin.artifactDigest
 		});
@@ -1652,12 +1942,13 @@ function buildChanges(plugins, dependencies, artifactDigests, previous) {
 		if (finalIds.has(plugin.pluginId)) continue;
 		const actualSpec = dependencies[plugin.pluginId];
 		if (actualSpec === void 0) continue;
+		if (!currentMatches(plugin, actualSpec, artifactDigests)) throw new FleetReleasePlannerError("release-ownership-conflict", "live binding for " + plugin.pluginId + " no longer matches the previously applied release marker");
 		changes.push({
 			pluginId: plugin.pluginId,
 			visibility: plugin.visibility,
 			sourceKind: plugin.sourceKind,
 			action: "remove",
-			fromSpecDigest: digest$1(actualSpec),
+			fromSpecDigest: digest$4(actualSpec),
 			exactToSpec: null,
 			artifactDigest: null
 		});
@@ -1688,21 +1979,29 @@ function createReleasePlan(input) {
 		profile,
 		plugins
 	});
+	const toManifestDigest = trimmed(input.manifestDigest, "manifestDigest").toLowerCase();
+	const fromManifestDigest = trimmed(input.liveManifestDigest ?? input.runtimeManifestDigest ?? input.manifestDigest, "liveManifestDigest").toLowerCase();
 	try {
 		return createFleetReleasePlan({
-			protocolVersion: 1,
+			protocolVersion: 2,
 			kind: "profile-release",
 			deviceId,
 			profile,
-			manifestDigest: trimmed(input.manifestDigest, "manifestDigest").toLowerCase(),
+			fromManifestDigest,
+			toManifestDigest,
+			fromReleaseDigest: input.appliedRelease?.releaseDigest ?? null,
+			toReleaseDigest: releaseDigest,
+			manifestDigest: toManifestDigest,
 			profileHash: trimmed(input.profileHash, "profileHash").toLowerCase(),
 			observedDshVersion,
+			observedRuntimeDigest: trimmed(input.observedRuntimeDigest, "observedRuntimeDigest").toLowerCase(),
+			observedServiceDefinitionDigest: input.observedServiceDefinitionDigest === null ? null : trimmed(input.observedServiceDefinitionDigest, "observedServiceDefinitionDigest").toLowerCase(),
 			releaseId: release.id,
 			releaseVersion: release.version,
 			releaseDigest,
 			plugins,
 			changes,
-			restartRequired: changes.length > 0 || input.runtimeManifestDigest !== input.manifestDigest,
+			restartRequired: changes.length > 0 || fromManifestDigest !== toManifestDigest,
 			createdAt,
 			expiresAt: new Date(Date.parse(createdAt) + planTtlMs).toISOString()
 		});
@@ -1713,7 +2012,7 @@ function createReleasePlan(input) {
 }
 //#endregion
 //#region src/host/artifacts.ts
-function contained(root, candidate) {
+function contained$1(root, candidate) {
 	const path = relative(root, candidate);
 	return path === "" || !path.startsWith(".." + sep) && path !== ".." && !isAbsolute(path);
 }
@@ -1740,7 +2039,7 @@ async function digestInstalledArtifact(profileDir, artifactStore, spec) {
 			realpath(candidate),
 			lstat(candidate)
 		]);
-		if (originalInfo.isSymbolicLink() || !originalInfo.isFile() || !contained(storePath, candidatePath)) return void 0;
+		if (originalInfo.isSymbolicLink() || !originalInfo.isFile() || !contained$1(storePath, candidatePath)) return void 0;
 		const handle = await open(candidatePath, constants.O_RDONLY | constants.O_NOFOLLOW);
 		try {
 			const openedInfo = await handle.stat();
@@ -1763,6 +2062,350 @@ async function digestInstalledArtifact(profileDir, artifactStore, spec) {
 	}
 }
 //#endregion
+//#region src/host/runtime-identity.ts
+const DSH_PACKAGE_NAME = "@deepseek-ai/dsh";
+const MAX_PACKAGE_SEARCH_DEPTH = 8;
+function sha256$2(value) {
+	return createHash("sha256").update(value).digest("hex");
+}
+async function readRegularFile$2(path) {
+	let handle;
+	try {
+		handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+		if (!(await handle.stat()).isFile()) throw new TypeError("runtime identity accepts regular files only");
+		return await handle.readFile();
+	} catch (error) {
+		if (error.code === "ELOOP") throw new TypeError("runtime identity accepts regular files only");
+		throw error;
+	} finally {
+		await handle?.close();
+	}
+}
+async function findDshPackage(entrypoint) {
+	let directory = dirname(entrypoint);
+	for (let depth = 0; depth < MAX_PACKAGE_SEARCH_DEPTH; depth += 1) {
+		const candidate = join(directory, "package.json");
+		try {
+			const packageJson = await readRegularFile$2(candidate);
+			const metadata = JSON.parse(packageJson.toString("utf8"));
+			if (metadata.name === DSH_PACKAGE_NAME) {
+				if (typeof metadata.version !== "string" || metadata.version.trim() !== metadata.version || metadata.version.length === 0) throw new TypeError("DSH runtime package version is invalid");
+				return {
+					packageRealpath: await realpath(directory),
+					packageJson,
+					version: metadata.version
+				};
+			}
+		} catch (error) {
+			if (error.code !== "ENOENT") throw error;
+		}
+		const parent = dirname(directory);
+		if (parent === directory) break;
+		directory = parent;
+	}
+	throw new TypeError("running DSH package metadata was not found");
+}
+async function inspectCurrentRuntimeIdentity(input = {}) {
+	const execPath = input.execPath ?? process.execPath;
+	const entrypointPath = input.entrypointPath ?? process.argv[1];
+	if (typeof entrypointPath !== "string" || !isAbsolute(execPath) || !isAbsolute(entrypointPath)) throw new TypeError("runtime identity needs absolute Node and DSH entrypoint paths");
+	const [nodeRealpath, dshEntrypointRealpath] = await Promise.all([realpath(execPath), realpath(entrypointPath)]);
+	const [entrypoint, packageMetadata] = await Promise.all([readRegularFile$2(dshEntrypointRealpath), findDshPackage(dshEntrypointRealpath)]);
+	const entrypointDigest = sha256$2(entrypoint);
+	const packageJsonDigest = sha256$2(packageMetadata.packageJson);
+	const identity = {
+		nodeRealpath,
+		dshEntrypointRealpath,
+		dshPackageRealpath: packageMetadata.packageRealpath,
+		dshVersion: packageMetadata.version,
+		entrypointDigest,
+		packageJsonDigest
+	};
+	return {
+		...identity,
+		runtimeDigest: sha256$2(JSON.stringify(identity))
+	};
+}
+function validateRuntimeIdentity(value) {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) throw new TypeError("runtime identity must be an object");
+	const body = value;
+	const expected = [
+		"nodeRealpath",
+		"dshEntrypointRealpath",
+		"dshPackageRealpath",
+		"dshVersion",
+		"entrypointDigest",
+		"packageJsonDigest",
+		"runtimeDigest"
+	].sort();
+	if (Object.keys(body).sort().join(",") !== expected.join(",")) throw new TypeError("runtime identity has unsupported or missing fields");
+	for (const field of [
+		"nodeRealpath",
+		"dshEntrypointRealpath",
+		"dshPackageRealpath"
+	]) if (typeof body[field] !== "string" || !isAbsolute(body[field]) || normalize(body[field]) !== body[field]) throw new TypeError("runtime identity path is invalid");
+	if (typeof body.dshVersion !== "string" || body.dshVersion.length === 0 || body.dshVersion !== body.dshVersion.trim()) throw new TypeError("runtime identity DSH version is invalid");
+	for (const field of [
+		"entrypointDigest",
+		"packageJsonDigest",
+		"runtimeDigest"
+	]) if (typeof body[field] !== "string" || !/^[0-9a-f]{64}$/.test(body[field])) throw new TypeError("runtime identity digest is invalid");
+	const identity = {
+		nodeRealpath: body.nodeRealpath,
+		dshEntrypointRealpath: body.dshEntrypointRealpath,
+		dshPackageRealpath: body.dshPackageRealpath,
+		dshVersion: body.dshVersion,
+		entrypointDigest: body.entrypointDigest,
+		packageJsonDigest: body.packageJsonDigest
+	};
+	if (sha256$2(JSON.stringify(identity)) !== body.runtimeDigest) throw new TypeError("runtime identity digest does not match its fields");
+}
+//#endregion
+//#region src/worker/profile.ts
+const EXECUTION_PROFILE_FILES = [
+	"package.json",
+	"pnpm-lock.yaml",
+	"pnpm-workspace.yaml",
+	"cordis.patch.yml",
+	"cordis.yml",
+	"fleet.lock.yaml"
+];
+const EXECUTION_PROFILE_FILE_NAMES = new Set(EXECUTION_PROFILE_FILES);
+var ExecutionProfileHashError = class extends Error {
+	code;
+	constructor(code, message) {
+		super(message);
+		this.name = "ExecutionProfileHashError";
+		this.code = code;
+	}
+};
+function profileDirectory(dshHome, profile) {
+	if (!isAbsolute(dshHome) || normalize(dshHome) !== dshHome || dshHome === "/" || dshHome.includes("\0")) throw new ExecutionProfileHashError("execution-profile-invalid", "DSH home must be a normalized absolute non-root path");
+	if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(profile)) throw new ExecutionProfileHashError("execution-profile-invalid", "execution profile id is invalid");
+	return join(dshHome, "profiles", profile);
+}
+async function readRegularOptional$1(path) {
+	let handle;
+	try {
+		handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+		if (!(await handle.stat()).isFile()) throw new ExecutionProfileHashError("execution-profile-invalid", "execution profile state accepts regular files only");
+		return await handle.readFile("utf8");
+	} catch (error) {
+		if (error.code === "ENOENT") return null;
+		if (error.code === "ELOOP") throw new ExecutionProfileHashError("execution-profile-invalid", "execution profile state must not contain symbolic links");
+		throw error;
+	} finally {
+		await handle?.close();
+	}
+}
+/**
+* Hashes the complete reproducible DSH profile snapshot. node_modules is
+* deliberately represented by package.json + pnpm-lock.yaml and is rebuilt
+* with scripts disabled; every other top-level entry is rejected.
+*/
+async function computeExecutionProfileHash(dshHome, profile) {
+	const directory = profileDirectory(dshHome, profile);
+	let directoryInfo;
+	try {
+		directoryInfo = await lstat(directory);
+	} catch (error) {
+		if (error.code !== "ENOENT") throw error;
+	}
+	if (directoryInfo === void 0 || directoryInfo.isSymbolicLink() || !directoryInfo.isDirectory()) throw new ExecutionProfileHashError("execution-profile-invalid", "execution profile must be an existing real directory");
+	for (const entry of await readdir(directory, { withFileTypes: true })) {
+		const path = join(directory, entry.name);
+		if (entry.name === "node_modules") {
+			const info = await lstat(path);
+			if (info.isSymbolicLink() || !info.isDirectory()) throw new ExecutionProfileHashError("execution-profile-invalid", "execution profile node_modules must be a real directory");
+			continue;
+		}
+		if (!EXECUTION_PROFILE_FILE_NAMES.has(entry.name)) throw new ExecutionProfileHashError("execution-profile-layout-unsupported", "execution profile contains unsupported top-level state");
+		const info = await lstat(path);
+		if (info.isSymbolicLink() || !info.isFile()) throw new ExecutionProfileHashError("execution-profile-invalid", "execution profile state accepts regular files only");
+	}
+	const files = Object.fromEntries(await Promise.all(EXECUTION_PROFILE_FILES.map(async (name) => [name, await readRegularOptional$1(join(directory, name))])));
+	return createHash("sha256").update(JSON.stringify(files), "utf8").digest("hex");
+}
+async function assertExecutionProfileHash(dshHome, profile, expectedHash) {
+	if (!/^[0-9a-f]{64}$/.test(expectedHash) || await computeExecutionProfileHash(dshHome, profile) !== expectedHash) throw new ExecutionProfileHashError("execution-profile-invalid", "execution profile no longer matches its signed task binding");
+}
+const BODY_KEYS$1 = [
+	"protocolVersion",
+	"kind",
+	"deviceId",
+	"profile",
+	"currentTransitionPlanId",
+	"retainedTransitionPlanIds",
+	"entries",
+	"orphanBackupProfiles",
+	"orphanStageProfiles",
+	"orphanFailedProfiles",
+	"createdAt",
+	"expiresAt"
+];
+const PLAN_KEYS = [
+	...BODY_KEYS$1,
+	"planId",
+	"digest"
+];
+const ENTRY_KEYS = [
+	"transitionPlanId",
+	"descriptorDigest",
+	"backupProfile",
+	"backupManifestDigest",
+	"backupProfileHash",
+	"reason"
+];
+function object(value, label) {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) throw new FleetProtocolError("invalid-payload", label + " must be an object");
+	return value;
+}
+function exact(value, keys, label) {
+	const body = object(value, label);
+	const actual = Object.keys(body).sort();
+	const expected = [...keys].sort();
+	if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) throw new FleetProtocolError("invalid-payload", label + " has unsupported or missing fields");
+	return body;
+}
+function identifier$4(value, label) {
+	if (typeof value !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(value)) throw new FleetProtocolError("invalid-payload", label + " is invalid");
+}
+function digest$3(value, label) {
+	if (typeof value !== "string" || !/^[0-9a-f]{64}$/.test(value)) throw new FleetProtocolError("invalid-digest", label + " must be a lowercase SHA-256 digest");
+}
+function transitionId(value, label) {
+	if (typeof value !== "string" || !/^release-plan:[0-9a-f]{64}$/.test(value)) throw new FleetProtocolError("invalid-payload", label + " is invalid");
+}
+function timestamp$1(value, label) {
+	if (typeof value !== "string") throw new FleetProtocolError("invalid-time", label + " must be a canonical timestamp");
+	const time = Date.parse(value);
+	if (!Number.isFinite(time) || new Date(time).toISOString() !== value) throw new FleetProtocolError("invalid-time", label + " must be a canonical timestamp");
+	return time;
+}
+function sortedUnique(values, label, validate) {
+	if (!Array.isArray(values)) throw new FleetProtocolError("invalid-payload", label + " must be an array");
+	values.forEach((value, index) => validate(value, `${label}[${index}]`));
+	if (new Set(values).size !== values.length || values.some((value, index) => index > 0 && value <= values[index - 1])) throw new FleetProtocolError("invalid-payload", label + " must be unique and sorted");
+	return values;
+}
+function validateEntry(value, index) {
+	const body = exact(value, ENTRY_KEYS, `entries[${index}]`);
+	transitionId(body.transitionPlanId, `entries[${index}].transitionPlanId`);
+	digest$3(body.descriptorDigest, `entries[${index}].descriptorDigest`);
+	if (body.backupProfile === null) {
+		if (body.backupManifestDigest !== null || body.backupProfileHash !== null) throw new FleetProtocolError("invalid-payload", "marker-only retention entries cannot bind a backup");
+	} else {
+		if (typeof body.backupProfile !== "string" || !/^fleet-backup-[0-9a-f]{24}$/.test(body.backupProfile)) throw new FleetProtocolError("invalid-payload", "retention backup profile is invalid");
+		digest$3(body.backupManifestDigest, `entries[${index}].backupManifestDigest`);
+		digest$3(body.backupProfileHash, `entries[${index}].backupProfileHash`);
+	}
+	if (body.reason !== "superseded") throw new FleetProtocolError("invalid-payload", "retention reason is invalid");
+}
+function validateBody(value) {
+	exact(value, BODY_KEYS$1, "release retention plan body");
+	if (value.protocolVersion !== 1 || value.kind !== "profile-release-retention") throw new FleetProtocolError("invalid-protocol", "unsupported release retention protocol");
+	identifier$4(value.deviceId, "deviceId");
+	identifier$4(value.profile, "profile");
+	if (value.currentTransitionPlanId !== null) transitionId(value.currentTransitionPlanId, "currentTransitionPlanId");
+	const retained = sortedUnique(value.retainedTransitionPlanIds, "retainedTransitionPlanIds", transitionId);
+	if (retained.length > 2) throw new FleetProtocolError("invalid-payload", "release retention keeps at most the current and previous transitions");
+	if (value.currentTransitionPlanId !== null && !retained.includes(value.currentTransitionPlanId)) throw new FleetProtocolError("invalid-payload", "retained transitions must include the current transition");
+	if (value.currentTransitionPlanId === null && retained.length !== 0) throw new FleetProtocolError("invalid-payload", "retained transitions require a current transition");
+	if (!Array.isArray(value.entries)) throw new FleetProtocolError("invalid-payload", "entries must be an array");
+	value.entries.forEach(validateEntry);
+	if (value.currentTransitionPlanId === null && value.entries.length !== 0) throw new FleetProtocolError("invalid-payload", "retention entries require a current transition");
+	const entryIds = value.entries.map((entry) => entry.transitionPlanId);
+	if (new Set(entryIds).size !== entryIds.length || entryIds.some((id, index) => index > 0 && id <= entryIds[index - 1])) throw new FleetProtocolError("invalid-payload", "retention entries must be unique and sorted");
+	if (entryIds.some((id) => retained.includes(id))) throw new FleetProtocolError("invalid-payload", "retained transitions cannot be pruned");
+	sortedUnique(value.orphanBackupProfiles, "orphanBackupProfiles", (item, label) => {
+		if (typeof item !== "string" || !/^fleet-backup-[0-9a-f]{24}$/.test(item)) throw new FleetProtocolError("invalid-payload", label + " is invalid");
+	});
+	sortedUnique(value.orphanStageProfiles, "orphanStageProfiles", (item, label) => {
+		if (typeof item !== "string" || !/^fleet-stage-[0-9a-f]{24}$/.test(item)) throw new FleetProtocolError("invalid-payload", label + " is invalid");
+	});
+	sortedUnique(value.orphanFailedProfiles, "orphanFailedProfiles", (item, label) => {
+		if (typeof item !== "string" || !/^fleet-failed-[0-9a-f]{24}$/.test(item)) throw new FleetProtocolError("invalid-payload", label + " is invalid");
+	});
+	const createdAt = timestamp$1(value.createdAt, "createdAt");
+	const expiresAt = timestamp$1(value.expiresAt, "expiresAt");
+	if (expiresAt <= createdAt || expiresAt - createdAt > 36e5) throw new FleetProtocolError("invalid-time", "release retention plan lifetime is invalid");
+}
+function validateFleetReleaseRetentionPlan(value) {
+	exact(value, PLAN_KEYS, "release retention plan");
+	const body = Object.fromEntries(BODY_KEYS$1.map((key) => [key, value[key]]));
+	validateBody(body);
+	digest$3(value.digest, "digest");
+	if (value.planId !== "release-retention-plan:" + value.digest || sha256Canonical(body) !== value.digest) throw new FleetProtocolError("plan-integrity-failed", "release retention plan identity is invalid");
+}
+//#endregion
+//#region src/agent/service-definition.ts
+function sha256$1(value) {
+	return createHash("sha256").update(value, "utf8").digest("hex");
+}
+function block(lines, name) {
+	const start = lines.findIndex((line) => line.trim() === name + " = {");
+	if (start < 0) throw new TypeError("launchd service is missing the " + name + " block");
+	const values = [];
+	for (let index = start + 1; index < lines.length; index += 1) {
+		const value = lines[index].trim();
+		if (value === "}") return values;
+		if (value.length > 0) values.push(value);
+	}
+	throw new TypeError("launchd service has an unterminated " + name + " block");
+}
+function singleValue(lines, name) {
+	const prefix = name + " = ";
+	const values = lines.map((line) => line.trim()).filter((line) => line.startsWith(prefix)).map((line) => line.slice(prefix.length));
+	if (values.length !== 1 || values[0].length === 0) throw new TypeError("launchd service has an invalid " + name);
+	return values[0];
+}
+function environmentValue(lines, name) {
+	const prefix = name + " => ";
+	const values = block(lines, "environment").filter((line) => line.startsWith(prefix)).map((line) => line.slice(prefix.length));
+	if (values.length !== 1 || values[0].length === 0) throw new TypeError("launchd service environment is missing " + name);
+	return values[0];
+}
+async function inspectLaunchdServiceDefinition(input) {
+	const lines = input.source.split(/\r?\n/);
+	if (lines[0]?.trim() !== input.serviceTarget + " = {") throw new TypeError("launchd service target does not match the configured target");
+	const programArguments = block(lines, "arguments");
+	if (programArguments.length !== 7 || programArguments.some((argument) => /[\r\n\0]/.test(argument))) throw new TypeError("launchd service must have one exact DSH web argument vector");
+	const expectedTail = [
+		"web",
+		"--host",
+		input.host,
+		"--port",
+		String(input.port)
+	];
+	if (programArguments.slice(2).some((argument, index) => argument !== expectedTail[index])) throw new TypeError("launchd service DSH web arguments do not match the Agent configuration");
+	if (singleValue(lines, "program") !== programArguments[0]) throw new TypeError("launchd service program does not match argv[0]");
+	const dshHome = environmentValue(lines, "DSH_HOME");
+	if (dshHome !== input.dshHome) throw new TypeError("launchd service DSH_HOME does not match the Agent configuration");
+	const nodePath = programArguments[0];
+	const entrypointPath = programArguments[1];
+	const runtimeIdentity = await inspectCurrentRuntimeIdentity({
+		execPath: nodePath,
+		entrypointPath
+	});
+	const definition = {
+		serviceTarget: input.serviceTarget,
+		programArguments,
+		dshHome,
+		runtimeDigest: runtimeIdentity.runtimeDigest
+	};
+	const rawPid = singleValue(lines, "pid");
+	const pid = Number(rawPid);
+	if (!Number.isSafeInteger(pid) || pid <= 0) throw new TypeError("launchd service pid is invalid");
+	return {
+		serviceTarget: input.serviceTarget,
+		programArguments,
+		dshHome,
+		runtimeIdentity,
+		serviceDefinitionDigest: sha256$1(JSON.stringify(definition)),
+		pid
+	};
+}
+//#endregion
 //#region src/agent/runtime.ts
 const RUNTIME_MANIFEST_FILENAME = "fleet.lock.yaml";
 const SNAPSHOT_FILES = [
@@ -1770,8 +2413,11 @@ const SNAPSHOT_FILES = [
 	"pnpm-lock.yaml",
 	"pnpm-workspace.yaml",
 	"cordis.patch.yml",
+	"cordis.yml",
 	RUNTIME_MANIFEST_FILENAME
 ];
+const REBUILT_PROFILE_DIRECTORY = "node_modules";
+const PROFILE_FILE_NAMES = new Set(SNAPSHOT_FILES);
 const MAX_OUTPUT_BYTES$1 = 1048576;
 const TERMINATION_GRACE_MS = 2e3;
 const TERMINATION_CONFIRM_MS = 5e3;
@@ -1979,6 +2625,20 @@ async function readRegularFileSnapshot(path) {
 async function readRegularOptional(path) {
 	return (await readRegularFileSnapshot(path))?.source ?? null;
 }
+async function validateProfileLayout(dir) {
+	const entries = await readdir(dir, { withFileTypes: true });
+	for (const entry of entries) {
+		const path = join(dir, entry.name);
+		if (entry.name === REBUILT_PROFILE_DIRECTORY) {
+			const info = await lstat(path);
+			if (info.isSymbolicLink() || !info.isDirectory()) throw new AgentRuntimeError("unsafe-profile-directory", "profile node_modules must be a regular directory");
+			continue;
+		}
+		if (!PROFILE_FILE_NAMES.has(entry.name)) throw new AgentRuntimeError("profile-layout-unsupported", "profile contains unsupported top-level state");
+		const info = await lstat(path);
+		if (info.isSymbolicLink() || !info.isFile()) throw new AgentRuntimeError("unsafe-profile-file", "profile state accepts regular files only");
+	}
+}
 async function readProfileSnapshot(config) {
 	const dir = profileDir(config);
 	let directoryPresent = true;
@@ -1989,6 +2649,7 @@ async function readProfileSnapshot(config) {
 		if (error.code !== "ENOENT") throw error;
 		directoryPresent = false;
 	}
+	if (directoryPresent) await validateProfileLayout(dir);
 	const files = {};
 	for (const name of SNAPSHOT_FILES) files[name] = await readRegularOptional(join(dir, name));
 	return {
@@ -2023,6 +2684,14 @@ async function loadState(config, signal) {
 		profileHash: profile.hash,
 		profileSnapshot: profile,
 		dshVersion: await readDshVersion(config, signal)
+	};
+}
+async function loadDesiredManifest(config) {
+	const source = await readFile(config.desiredManifestPath, "utf8");
+	return {
+		manifest: parseFleetManifest(source),
+		manifestDigest: sha256(source),
+		source
 	};
 }
 function planPath(config, planId) {
@@ -2384,10 +3053,12 @@ async function stopDsh(config, signal) {
 		allowFailure: owners.size === 0,
 		signal
 	});
-	const deadline = Date.now() + 5e3;
+	const deadline = Date.now() + 1e4;
 	while (Date.now() < deadline) {
 		throwIfAborted(signal);
-		if ((await Promise.all(ports.map((port) => listenerPids(config, port, signal)))).flat().length === 0) return;
+		const active = (await Promise.all(ports.map((port) => listenerPids(config, port, signal)))).flat();
+		const launchdPid = config.restart.kind === "launchd" ? await currentLaunchdPid(config, signal) : null;
+		if (active.length === 0 && (config.restart.kind === "screen" || launchdPid === null)) return;
 		await new Promise((resolve) => setTimeout(resolve, 100));
 	}
 	if (config.restart.kind === "screen") {
@@ -2405,6 +3076,22 @@ async function stopDsh(config, signal) {
 		if ((await Promise.all(ports.map((port) => listenerPids(config, port, signal)))).flat().length === 0) return;
 	}
 	throw new AgentRuntimeError("restart-cleanup-failed", "managed DSH listeners did not exit cleanly");
+}
+async function currentLaunchdPid(config, signal) {
+	if (config.restart.kind !== "launchd") return null;
+	const result = await runFile(config.restart.launchctlBinary, ["print", config.restart.serviceTarget], {
+		env: controlledEnv(config),
+		timeoutMs: 1e4,
+		allowFailure: true,
+		signal
+	});
+	if (result.code !== 0) return null;
+	const matches = [...result.stdout.matchAll(/^\s*pid = ([0-9]+)\s*$/gm)];
+	if (matches.length === 0) return null;
+	if (matches.length !== 1) throw new AgentRuntimeError("restart-cleanup-failed", "launchd reported an ambiguous DSH process owner");
+	const pid = Number(matches[0][1]);
+	if (!Number.isSafeInteger(pid) || pid <= 0) throw new AgentRuntimeError("restart-cleanup-failed", "launchd reported an invalid DSH process owner");
+	return pid;
 }
 async function startDsh(config, signal) {
 	assertMutationReadyConfig(config);
@@ -2483,6 +3170,7 @@ async function verifyHealth(config, plan, signal, expectedPluginIds = [], expect
 	let targetPending = targetIds.length > 0;
 	let runtimeFailed = false;
 	let manifestPathMismatch = false;
+	let runtimeIdentityInvalid = false;
 	while (Date.now() < deadline) {
 		throwIfAborted(signal);
 		const rpcId = "fleet-agent-health-" + randomUUID();
@@ -2509,7 +3197,14 @@ async function verifyHealth(config, plan, signal, expectedPluginIds = [], expect
 				const fleetHealthy = body.rpcId === rpcId && body.result?.ok === true && body.result.value?.summary?.failed === 0 && runtimeHealthy && !manifestPathMismatch;
 				const plugins = body.result?.value?.plugins ?? [];
 				targetPending = targetIds.some((id) => plugins.find((item) => item.id === id)?.state !== "aligned");
-				if (fleetHealthy && !targetPending) return;
+				let runtimeIdentity = null;
+				if (body.result?.value?.runtimeIdentity !== void 0) try {
+					validateRuntimeIdentity(body.result.value.runtimeIdentity);
+					runtimeIdentity = body.result.value.runtimeIdentity;
+				} catch {
+					runtimeIdentityInvalid = true;
+				}
+				if (fleetHealthy && !targetPending && !runtimeIdentityInvalid) return runtimeIdentity;
 			}
 		} catch {
 			throwIfAborted(signal);
@@ -2518,8 +3213,53 @@ async function verifyHealth(config, plan, signal, expectedPluginIds = [], expect
 	}
 	if (runtimeFailed) throw new AgentRuntimeError("runtime-modules-failed", "DSH Loader reports failed runtime modules");
 	if (manifestPathMismatch) throw new AgentRuntimeError("fleet-runtime-manifest-path-mismatch", "Fleet runtime is not bound to the profile-local manifest");
+	if (runtimeIdentityInvalid) throw new AgentRuntimeError("runtime-identity-invalid", "Fleet RPC returned an invalid runtime identity");
 	if (targetPending) throw new AgentRuntimeError("plugin-not-active", "approved plugin did not become active");
 	throw new AgentRuntimeError("fleet-rpc-unhealthy", "Fleet RPC reported an unhealthy runtime");
+}
+async function inspectManagedReleaseRuntime(config, signal, options = {}) {
+	const [rpcRuntimeIdentity, configuredDshVersion] = await Promise.all([verifyHealth(config, void 0, signal, options.expectedPluginIds ?? [], runtimeManifestPath(config)), readDshVersion(config, signal)]);
+	if (config.restart.kind === "screen") {
+		if (rpcRuntimeIdentity === null) throw new AgentRuntimeError("runtime-identity-unavailable", "screen-managed releases require Fleet RPC runtime identity");
+		if (rpcRuntimeIdentity.dshVersion !== configuredDshVersion) throw new AgentRuntimeError("runtime-identity-mismatch", "configured DSH and running DSH versions do not match");
+		return {
+			runtimeIdentity: rpcRuntimeIdentity,
+			observedRuntimeDigest: rpcRuntimeIdentity.runtimeDigest,
+			observedServiceDefinitionDigest: null
+		};
+	}
+	const printed = await runFile(config.restart.launchctlBinary, ["print", config.restart.serviceTarget], {
+		env: controlledEnv(config),
+		timeoutMs: 1e4,
+		signal
+	});
+	let service;
+	try {
+		service = await inspectLaunchdServiceDefinition({
+			source: printed.stdout,
+			serviceTarget: config.restart.serviceTarget,
+			dshHome: config.dshHome,
+			host: config.restart.host,
+			port: config.restart.port
+		});
+	} catch (error) {
+		throw new AgentRuntimeError("service-definition-invalid", error instanceof Error ? error.message : "launchd service definition is invalid");
+	}
+	const listenerPid = (await listenerPids(config, config.restart.port, signal))[0];
+	if (listenerPid === void 0 || service.pid !== listenerPid) throw new AgentRuntimeError("restart-owner-mismatch", "launchd service PID does not own the configured DSH port");
+	await verifyListenerOwner(config, listenerPid, config.restart.port, signal);
+	if (service.runtimeIdentity.dshVersion !== configuredDshVersion) throw new AgentRuntimeError("runtime-identity-mismatch", "configured DSH and launchd DSH versions do not match");
+	if (rpcRuntimeIdentity === null) {
+		if (options.allowLegacyLaunchdIdentity !== true) throw new AgentRuntimeError("runtime-identity-unavailable", "Fleet RPC did not report the running DSH identity");
+	} else if (rpcRuntimeIdentity.runtimeDigest !== service.runtimeIdentity.runtimeDigest) throw new AgentRuntimeError("runtime-identity-mismatch", "Fleet RPC and launchd report different DSH runtimes");
+	return {
+		runtimeIdentity: service.runtimeIdentity,
+		observedRuntimeDigest: service.runtimeIdentity.runtimeDigest,
+		observedServiceDefinitionDigest: service.serviceDefinitionDigest
+	};
+}
+function assertObservedReleaseRuntime(observation, expected) {
+	if (observation.runtimeIdentity.dshVersion !== expected.observedDshVersion || observation.observedRuntimeDigest !== expected.observedRuntimeDigest || observation.observedServiceDefinitionDigest !== expected.observedServiceDefinitionDigest) throw new FleetProtocolError("approval-mismatch", "running DSH or its service definition changed after the plan was created");
 }
 function installArgument(plan) {
 	return plan.pluginId + "@" + plan.exactToSpec;
@@ -2782,6 +3522,26 @@ function releaseActionPath(config, planId) {
 	if (!/^release-plan:[0-9a-f]{64}$/.test(planId)) throw new AgentRuntimeError("invalid-plan-id", "release plan id is invalid");
 	return join(config.stateDir, "release-actions", planId.slice(13) + ".json");
 }
+function releaseRollbackDescriptorPath(config, transitionPlanId) {
+	if (!/^release-plan:[0-9a-f]{64}$/.test(transitionPlanId)) throw new AgentRuntimeError("invalid-plan-id", "release transition plan id is invalid");
+	return join(config.stateDir, "release-rollbacks", transitionPlanId.slice(13) + ".json");
+}
+function releaseRollbackPlanPath(config, planId) {
+	if (!/^release-rollback-plan:[0-9a-f]{64}$/.test(planId)) throw new AgentRuntimeError("invalid-plan-id", "release rollback plan id is invalid");
+	return join(config.stateDir, "release-rollback-plans", planId.slice(22) + ".json");
+}
+function releaseRollbackActionPath(config, planId) {
+	if (!/^release-rollback-plan:[0-9a-f]{64}$/.test(planId)) throw new AgentRuntimeError("invalid-plan-id", "release rollback plan id is invalid");
+	return join(config.stateDir, "release-rollback-actions", planId.slice(22) + ".json");
+}
+function releaseRetentionPlanPath(config, planId) {
+	if (!/^release-retention-plan:[0-9a-f]{64}$/.test(planId)) throw new AgentRuntimeError("invalid-plan-id", "release retention plan id is invalid");
+	return join(config.stateDir, "release-retention-plans", planId.slice(23) + ".json");
+}
+function releaseRetentionActionPath(config, planId) {
+	if (!/^release-retention-plan:[0-9a-f]{64}$/.test(planId)) throw new AgentRuntimeError("invalid-plan-id", "release retention plan id is invalid");
+	return join(config.stateDir, "release-retention-actions", planId.slice(23) + ".json");
+}
 function appliedReleasePath(config) {
 	return join(config.stateDir, "releases", config.profile + ".json");
 }
@@ -2810,31 +3570,114 @@ async function readAppliedRelease(config) {
 	if (value.deviceId !== config.deviceId || value.profile !== config.profile) throw new AgentRuntimeError("applied-release-mismatch", "applied release identity does not match this Agent");
 	return value;
 }
+const RELEASE_ROLLBACK_DESCRIPTOR_KEYS = [
+	"schemaVersion",
+	"transitionPlanId",
+	"transitionPlanDigest",
+	"deviceId",
+	"profile",
+	"fromManifestDigest",
+	"toManifestDigest",
+	"fromReleaseDigest",
+	"toReleaseDigest",
+	"fromProfileHash",
+	"backupProfile",
+	"previousAppliedRelease",
+	"createdAt"
+];
+function validateReleaseRollbackDescriptor(value) {
+	const body = objectValue(value);
+	if (body === null || Object.keys(body).sort().join(",") !== [...RELEASE_ROLLBACK_DESCRIPTOR_KEYS].sort().join(",")) throw new AgentRuntimeError("rollback-descriptor-invalid", "release rollback descriptor has unsupported or missing fields");
+	const createdAt = typeof body.createdAt === "string" ? Date.parse(body.createdAt) : NaN;
+	if (body.schemaVersion !== 1 || typeof body.transitionPlanId !== "string" || !/^release-plan:[0-9a-f]{64}$/.test(body.transitionPlanId) || typeof body.transitionPlanDigest !== "string" || !/^[0-9a-f]{64}$/.test(body.transitionPlanDigest) || typeof body.deviceId !== "string" || typeof body.profile !== "string" || typeof body.fromManifestDigest !== "string" || !/^[0-9a-f]{64}$/.test(body.fromManifestDigest) || typeof body.toManifestDigest !== "string" || !/^[0-9a-f]{64}$/.test(body.toManifestDigest) || body.fromReleaseDigest !== null && (typeof body.fromReleaseDigest !== "string" || !/^[0-9a-f]{64}$/.test(body.fromReleaseDigest)) || typeof body.toReleaseDigest !== "string" || !/^[0-9a-f]{64}$/.test(body.toReleaseDigest) || typeof body.fromProfileHash !== "string" || !/^[0-9a-f]{64}$/.test(body.fromProfileHash) || body.backupProfile !== null && (typeof body.backupProfile !== "string" || !/^fleet-backup-[0-9a-f]{24}$/.test(body.backupProfile)) || !Number.isFinite(createdAt) || new Date(createdAt).toISOString() !== body.createdAt || body.previousAppliedRelease !== null && typeof body.previousAppliedRelease !== "object") throw new AgentRuntimeError("rollback-descriptor-invalid", "release rollback descriptor is invalid");
+	if (body.transitionPlanId !== "release-plan:" + body.transitionPlanDigest) throw new AgentRuntimeError("rollback-descriptor-invalid", "release rollback descriptor transition digest is invalid");
+	if (body.previousAppliedRelease !== null) validateFleetAppliedRelease(body.previousAppliedRelease);
+}
+async function readReleaseRollbackDescriptor(config, transitionPlanId) {
+	const value = await readJson(releaseRollbackDescriptorPath(config, transitionPlanId));
+	if (value === null) return null;
+	validateReleaseRollbackDescriptor(value);
+	if (value.deviceId !== config.deviceId || value.profile !== config.profile || value.transitionPlanId !== transitionPlanId) throw new AgentRuntimeError("rollback-descriptor-invalid", "release rollback descriptor identity does not match this Agent");
+	return value;
+}
+async function persistReleaseRollbackDescriptor(config, plan, previousAppliedRelease) {
+	const descriptor = {
+		schemaVersion: 1,
+		transitionPlanId: plan.planId,
+		transitionPlanDigest: plan.digest,
+		deviceId: plan.deviceId,
+		profile: plan.profile,
+		fromManifestDigest: plan.fromManifestDigest,
+		toManifestDigest: plan.toManifestDigest,
+		fromReleaseDigest: plan.fromReleaseDigest,
+		toReleaseDigest: plan.toReleaseDigest,
+		fromProfileHash: plan.profileHash,
+		backupProfile: plan.restartRequired ? releaseProfileNames(plan).backupProfile : null,
+		previousAppliedRelease,
+		createdAt: (/* @__PURE__ */ new Date()).toISOString()
+	};
+	validateReleaseRollbackDescriptor(descriptor);
+	const existing = await readReleaseRollbackDescriptor(config, plan.planId);
+	if (existing !== null) {
+		const comparable = {
+			...descriptor,
+			createdAt: existing.createdAt
+		};
+		if (sha256Canonical(existing) !== sha256Canonical(comparable)) throw new AgentRuntimeError("rollback-descriptor-conflict", "release rollback descriptor does not match the approved transition");
+		return {
+			descriptor: existing,
+			digest: sha256Canonical(existing)
+		};
+	}
+	await atomicJson$1(releaseRollbackDescriptorPath(config, plan.planId), descriptor);
+	return {
+		descriptor,
+		digest: sha256Canonical(descriptor)
+	};
+}
+async function restoreAppliedReleaseMarker(config, previous) {
+	if (previous === null) {
+		await ensureDurableDirectory(dirname(appliedReleasePath(config)));
+		await rm(appliedReleasePath(config), { force: true });
+		await syncDirectory(dirname(appliedReleasePath(config)));
+		return;
+	}
+	validateFleetAppliedRelease(previous);
+	await atomicJson$1(appliedReleasePath(config), previous);
+}
 async function currentArtifactDigests(config, state) {
-	const releaseId = state.manifest.v2?.assignments[config.deviceId]?.[config.profile];
-	const release = releaseId === void 0 ? void 0 : state.manifest.v2?.profileReleases[releaseId];
-	const entries = await Promise.all((release?.plugins ?? []).filter((plugin) => plugin.source.kind === "artifact").map(async (plugin) => {
-		const actualSpec = state.dependencies[plugin.id];
-		if (actualSpec === void 0) return null;
+	const entries = await Promise.all(Object.entries(state.dependencies).map(async ([pluginId, actualSpec]) => {
 		const digest = await digestInstalledArtifact(profileDir(config), config.artifactStore, actualSpec);
-		return digest === void 0 ? null : [plugin.id, digest];
+		return digest === void 0 ? null : [pluginId, digest];
 	}));
 	return Object.fromEntries(entries.filter((entry) => entry !== null));
 }
+async function assertReleaseRemovalOwnership(config, state, plan, appliedRelease) {
+	for (const change of plan.changes.filter((candidate) => candidate.action === "remove")) {
+		const previous = appliedRelease?.plugins.find((plugin) => plugin.pluginId === change.pluginId);
+		const liveSpec = state.dependencies[change.pluginId];
+		if (previous === void 0 || liveSpec === void 0) throw new AgentRuntimeError("release-ownership-conflict", "retired plugin is no longer owned by the applied release marker");
+		if (!(previous.sourceKind === "artifact" ? await digestInstalledArtifact(profileDir(config), config.artifactStore, liveSpec) === previous.artifactDigest : liveSpec === previous.exactSpec)) throw new AgentRuntimeError("release-ownership-conflict", "retired plugin binding no longer matches the applied release marker");
+	}
+}
 async function buildReleasePlan(config, now, signal) {
 	const state = await loadState(config, signal);
+	const desired = await loadDesiredManifest(config);
 	const appliedRelease = await readAppliedRelease(config);
-	const runtimeManifestSource = state.profileSnapshot.files[RUNTIME_MANIFEST_FILENAME];
+	const runtime = await inspectManagedReleaseRuntime(config, signal, { allowLegacyLaunchdIdentity: true });
 	return {
 		plan: createReleasePlan({
-			manifest: state.manifest,
-			manifestDigest: state.manifestDigest,
-			runtimeManifestDigest: runtimeManifestSource === null ? null : sha256(runtimeManifestSource),
+			manifest: desired.manifest,
+			manifestDigest: desired.manifestDigest,
+			liveManifestDigest: state.manifestDigest,
+			runtimeManifestDigest: state.manifestDigest,
 			dependencies: state.dependencies,
 			artifactDigests: await currentArtifactDigests(config, state),
 			appliedRelease,
 			profileHash: state.profileHash,
-			observedDshVersion: state.dshVersion,
+			observedDshVersion: runtime.runtimeIdentity.dshVersion,
+			observedRuntimeDigest: runtime.observedRuntimeDigest,
+			observedServiceDefinitionDigest: runtime.observedServiceDefinitionDigest,
 			now,
 			deviceId: config.deviceId,
 			profile: config.profile,
@@ -2847,6 +3690,11 @@ async function buildReleasePlan(config, now, signal) {
 async function inspectReleaseAgent(config, now = /* @__PURE__ */ new Date(), signal) {
 	assertReleaseReadyConfig(config);
 	const { plan, appliedRelease } = await buildReleasePlan(config, now, signal);
+	const executionProfiles = await Promise.all([...config.tasks?.profiles ?? []].sort().map(async (profile) => ({
+		profile,
+		profileHash: await computeExecutionProfileHash(config.dshHome, profile)
+	})));
+	const retention = await releaseRetentionInspection(config);
 	return {
 		protocolVersion: 1,
 		kind: "profile-release",
@@ -2854,6 +3702,10 @@ async function inspectReleaseAgent(config, now = /* @__PURE__ */ new Date(), sig
 		profile: plan.profile,
 		dshVersion: plan.observedDshVersion,
 		manifestDigest: plan.manifestDigest,
+		liveManifestDigest: plan.fromManifestDigest,
+		desiredManifestDigest: plan.toManifestDigest,
+		observedRuntimeDigest: plan.observedRuntimeDigest,
+		observedServiceDefinitionDigest: plan.observedServiceDefinitionDigest,
 		profileHash: plan.profileHash,
 		currentRelease: appliedRelease === null ? null : {
 			releaseId: appliedRelease.releaseId,
@@ -2868,14 +3720,25 @@ async function inspectReleaseAgent(config, now = /* @__PURE__ */ new Date(), sig
 		changes: plan.changes,
 		tasks: {
 			enabled: config.tasks?.enabled === true && config.a2a !== void 0,
+			timeoutMs: config.tasks?.timeoutMs ?? null,
 			workspaceIds: Object.keys(config.tasks?.workspaces ?? {}).sort(),
-			profiles: [...config.tasks?.profiles ?? []].sort()
-		}
+			profiles: [...config.tasks?.profiles ?? []].sort(),
+			executionProfiles,
+			policies: (config.tasks?.policyIds ?? []).flatMap((policyId) => {
+				const policy = config.tasks?.policies?.[policyId];
+				return policy === void 0 ? [] : [{
+					policyId: policy.policyId,
+					policyDigest: policy.policyDigest,
+					permissionMode: policy.permissionMode
+				}];
+			}).sort((left, right) => left.policyId.localeCompare(right.policyId))
+		},
+		retention
 	};
 }
 async function verifyReleaseAgentHealth(config, signal) {
 	assertReleaseReadyConfig(config);
-	await verifyHealth(config, void 0, signal, [], runtimeManifestPath(config));
+	await inspectManagedReleaseRuntime(config, signal, { allowLegacyLaunchdIdentity: true });
 }
 async function createStoredReleasePlan(config, now = /* @__PURE__ */ new Date(), signal) {
 	assertReleaseReadyConfig(config);
@@ -2895,6 +3758,10 @@ async function createStoredReleasePlan(config, now = /* @__PURE__ */ new Date(),
 }
 async function readReleaseAction(config, planId) {
 	return readJson(releaseActionPath(config, planId));
+}
+function assertReleaseActionPlan(record, plan) {
+	const names = releaseProfileNames(plan);
+	if (record.planId !== plan.planId || record.planDigest !== plan.digest || record.deviceId !== plan.deviceId || record.profile !== plan.profile || record.releaseId !== plan.releaseId || record.releaseVersion !== plan.releaseVersion || record.releaseDigest !== plan.toReleaseDigest || record.fromManifestDigest !== plan.fromManifestDigest || record.toManifestDigest !== plan.toManifestDigest || record.fromReleaseDigest !== plan.fromReleaseDigest || record.toReleaseDigest !== plan.toReleaseDigest || record.stageProfile !== names.stageProfile || record.backupProfile !== names.backupProfile || !/^[0-9a-f]{64}$/.test(record.rollbackDescriptorDigest)) throw new AgentRuntimeError("action-state-invalid", "release action record does not match its transition plan");
 }
 async function saveReleaseAction(config, record, state, fields = {}) {
 	const next = {
@@ -3046,7 +3913,12 @@ async function removeChangedReleaseBindings(config, plan) {
 	if (source === null) throw new AgentRuntimeError("profile-missing", "staged release profile is missing");
 	const parsed = JSON.parse(source);
 	const dependencies = parsed.dependencies ?? {};
-	for (const id of removedIds) delete dependencies[id];
+	for (const id of removedIds) {
+		const change = plan.changes.find((candidate) => candidate.pluginId === id);
+		const liveBinding = dependencies[id];
+		if (change === void 0 || change.fromSpecDigest === null || liveBinding === void 0 || sha256(liveBinding) !== change.fromSpecDigest) throw new AgentRuntimeError("release-ownership-conflict", "live release binding no longer matches the approved previous binding");
+		delete dependencies[id];
+	}
 	parsed.dependencies = dependencies;
 	const profile = parsed.dsh?.profile;
 	if (profile !== void 0) profile.bundles = (profile.bundles ?? []).filter((id) => !removedIds.has(id));
@@ -3068,8 +3940,8 @@ async function stageRelease(config, plan, snapshot, signal) {
 		if (source !== null) await durableWriteFile(join(stageDir, name), source);
 	}
 	if (await computeProfileHash(stageConfig) !== plan.profileHash) throw new AgentRuntimeError("profile-stage-mismatch", "staged profile does not match the approved source profile");
-	const runtimeManifestSource = await readRegularOptional(config.manifestPath);
-	if (runtimeManifestSource === null || sha256(runtimeManifestSource) !== plan.manifestDigest) throw new AgentRuntimeError("release-runtime-manifest-mismatch", "approved Fleet runtime manifest is missing or changed");
+	const runtimeManifestSource = await readRegularOptional(config.desiredManifestPath);
+	if (runtimeManifestSource === null || sha256(runtimeManifestSource) !== plan.toManifestDigest) throw new AgentRuntimeError("release-runtime-manifest-mismatch", "approved Fleet runtime manifest is missing or changed");
 	await rm(runtimeManifestPath(stageConfig), { force: true });
 	await durableWriteFile(runtimeManifestPath(stageConfig), runtimeManifestSource);
 	await runFile(config.pnpmBinary, ["--version"], {
@@ -3151,14 +4023,16 @@ async function swapStagedRelease(config, plan, signal) {
 }
 async function persistAppliedRelease(config, plan) {
 	const applied = {
-		schemaVersion: 1,
+		schemaVersion: 2,
 		deviceId: plan.deviceId,
 		profile: plan.profile,
 		releaseId: plan.releaseId,
 		releaseVersion: plan.releaseVersion,
 		releaseDigest: plan.releaseDigest,
 		plugins: plan.plugins,
-		appliedAt: (/* @__PURE__ */ new Date()).toISOString()
+		appliedAt: (/* @__PURE__ */ new Date()).toISOString(),
+		transitionPlanId: plan.planId,
+		transitionPlanDigest: plan.digest
 	};
 	validateFleetAppliedRelease(applied);
 	await atomicJson$1(appliedReleasePath(config), applied);
@@ -3173,7 +4047,14 @@ async function rollbackRelease(config, plan, record, errorCode) {
 	const failedDir = join(profilesRoot, names.failedProfile);
 	let current = (await saveReleaseActionBestEffort(config, record, "rollback", { errorCode })).record;
 	try {
-		if (await regularDirectoryExists(backupDir)) {
+		const descriptor = await readReleaseRollbackDescriptor(config, plan.planId);
+		if (descriptor === null || descriptor.transitionPlanDigest !== plan.digest || sha256Canonical(descriptor) !== record.rollbackDescriptorDigest) throw new AgentRuntimeError("rollback-descriptor-invalid", "release rollback descriptor is missing or does not match the transition");
+		const backupExists = await regularDirectoryExists(backupDir);
+		if (!backupExists && plan.restartRequired) {
+			const liveManifest = await readRegularOptional(runtimeManifestPath(config));
+			if (liveManifest === null || sha256(liveManifest) !== plan.fromManifestDigest || await computeProfileHash(config) !== plan.profileHash) throw new AgentRuntimeError("rollback-backup-missing", "release backup is missing after the live profile changed");
+		}
+		if (backupExists) {
 			try {
 				await stopDsh(config);
 			} catch {
@@ -3191,10 +4072,14 @@ async function rollbackRelease(config, plan, record, errorCode) {
 			recursive: true,
 			force: true
 		});
+		await restoreAppliedReleaseMarker(config, descriptor.previousAppliedRelease);
 		current = await saveReleaseAction(config, current, "rollback-restarting");
 		await ensureServiceStarted(config);
 		current = await saveReleaseAction(config, current, "rollback-verifying");
-		await verifyHealth(config, void 0, void 0, [], runtimeManifestPath(config));
+		assertObservedReleaseRuntime(await inspectManagedReleaseRuntime(config, void 0, {
+			allowLegacyLaunchdIdentity: true,
+			expectedPluginIds: descriptor.previousAppliedRelease?.plugins.map((plugin) => plugin.pluginId) ?? []
+		}), plan);
 		await rm(failedDir, {
 			recursive: true,
 			force: true
@@ -3209,7 +4094,8 @@ async function rollbackRelease(config, plan, record, errorCode) {
 			result: "rolled-back",
 			errorCode
 		});
-	} catch {
+	} catch (rollbackError) {
+		const rollbackErrorCode = typeof rollbackError.code === "string" ? rollbackError.code : "rollback-failed";
 		await auditBestEffort(config, {
 			type: "profile-release/manual-intervention",
 			planId: plan.planId,
@@ -3218,33 +4104,37 @@ async function rollbackRelease(config, plan, record, errorCode) {
 		});
 		return (await saveReleaseActionBestEffort(config, current, "manual-intervention", {
 			result: "manual-intervention",
-			errorCode: "rollback-failed"
+			errorCode: rollbackErrorCode
 		})).record;
 	}
 }
 async function recoverReleaseInterrupted(config, plan, record) {
-	if ((await readAppliedRelease(config))?.releaseDigest === plan.releaseDigest) try {
-		await verifyReleaseProfileFiles(config, plan, config.profile);
-		await ensureServiceStarted(config);
-		await verifyHealth(config, void 0, void 0, plan.plugins.map((plugin) => plugin.pluginId), runtimeManifestPath(config));
-		const names = releaseProfileNames(plan);
-		const profilesRoot = dirname(profileDir(config));
-		await Promise.all([
-			rm(join(profilesRoot, names.stageProfile), {
+	const descriptor = await readReleaseRollbackDescriptor(config, plan.planId);
+	if (descriptor === null || descriptor.transitionPlanDigest !== plan.digest || sha256Canonical(descriptor) !== record.rollbackDescriptorDigest) return (await saveReleaseActionBestEffort(config, record, "manual-intervention", {
+		result: "manual-intervention",
+		errorCode: "rollback-descriptor-invalid"
+	})).record;
+	if ((await readAppliedRelease(config))?.releaseDigest === plan.releaseDigest) {
+		if (descriptor.backupProfile !== null && !await regularDirectoryExists(join(dirname(profileDir(config)), descriptor.backupProfile))) return (await saveReleaseActionBestEffort(config, record, "manual-intervention", {
+			result: "manual-intervention",
+			errorCode: "rollback-backup-missing"
+		})).record;
+		try {
+			await verifyReleaseProfileFiles(config, plan, config.profile);
+			await ensureServiceStarted(config);
+			assertObservedReleaseRuntime(await inspectManagedReleaseRuntime(config, void 0, { expectedPluginIds: plan.plugins.map((plugin) => plugin.pluginId) }), plan);
+			const names = releaseProfileNames(plan);
+			const profilesRoot = dirname(profileDir(config));
+			await Promise.all([rm(join(profilesRoot, names.stageProfile), {
 				recursive: true,
 				force: true
-			}),
-			rm(join(profilesRoot, names.backupProfile), {
+			}), rm(join(profilesRoot, names.failedProfile), {
 				recursive: true,
 				force: true
-			}),
-			rm(join(profilesRoot, names.failedProfile), {
-				recursive: true,
-				force: true
-			})
-		]);
-		return saveReleaseAction(config, record, "succeeded", { result: "success" });
-	} catch {}
+			})]);
+			return saveReleaseAction(config, record, "succeeded", { result: "success" });
+		} catch {}
+	}
 	return rollbackRelease(config, plan, record, "interrupted-action");
 }
 async function applyStoredReleasePlanLocked(config, approval, now, signal) {
@@ -3252,6 +4142,7 @@ async function applyStoredReleasePlanLocked(config, approval, now, signal) {
 	if (plan === null) throw new AgentRuntimeError("plan-not-found", "approved release plan was not found");
 	validateFleetReleasePlan(plan);
 	const existing = await readReleaseAction(config, plan.planId);
+	if (existing !== null) assertReleaseActionPlan(existing, plan);
 	let validation;
 	try {
 		validation = validateFleetReleaseApproval(plan, approval, now);
@@ -3280,8 +4171,13 @@ async function applyStoredReleasePlanLocked(config, approval, now, signal) {
 		return recoverReleaseInterrupted(config, plan, existing);
 	}
 	const current = await loadState(config, signal);
-	if (current.manifestDigest !== plan.manifestDigest || current.profileHash !== plan.profileHash || current.dshVersion !== plan.observedDshVersion) throw new FleetProtocolError("approval-mismatch", "manifest, profile or DSH version changed after the release plan was created");
-	await verifyHealth(config, void 0, signal, [], runtimeManifestPath(config));
+	const desired = await loadDesiredManifest(config);
+	const currentApplied = await readAppliedRelease(config);
+	const currentRuntime = await inspectManagedReleaseRuntime(config, signal, { allowLegacyLaunchdIdentity: true });
+	if (current.manifestDigest !== plan.fromManifestDigest || desired.manifestDigest !== plan.toManifestDigest || current.profileHash !== plan.profileHash || current.dshVersion !== plan.observedDshVersion || (currentApplied?.releaseDigest ?? null) !== plan.fromReleaseDigest) throw new FleetProtocolError("approval-mismatch", "live/desired manifest, applied release, profile or DSH version changed after the release plan was created");
+	assertObservedReleaseRuntime(currentRuntime, plan);
+	await assertReleaseRemovalOwnership(config, current, plan, currentApplied);
+	const rollback = await persistReleaseRollbackDescriptor(config, plan, currentApplied);
 	const names = releaseProfileNames(plan);
 	let record = {
 		planId: plan.planId,
@@ -3294,6 +4190,11 @@ async function applyStoredReleasePlanLocked(config, approval, now, signal) {
 		releaseId: plan.releaseId,
 		releaseVersion: plan.releaseVersion,
 		releaseDigest: plan.releaseDigest,
+		fromManifestDigest: plan.fromManifestDigest,
+		toManifestDigest: plan.toManifestDigest,
+		fromReleaseDigest: plan.fromReleaseDigest,
+		toReleaseDigest: plan.toReleaseDigest,
+		rollbackDescriptorDigest: rollback.digest,
 		stageProfile: names.stageProfile,
 		backupProfile: names.backupProfile,
 		state: "approved",
@@ -3311,7 +4212,7 @@ async function applyStoredReleasePlanLocked(config, approval, now, signal) {
 	try {
 		if (!plan.restartRequired) {
 			await verifyReleaseProfileFiles(config, plan, config.profile);
-			await verifyHealth(config, void 0, signal, plan.plugins.map((plugin) => plugin.pluginId), runtimeManifestPath(config));
+			assertObservedReleaseRuntime(await inspectManagedReleaseRuntime(config, signal, { expectedPluginIds: plan.plugins.map((plugin) => plugin.pluginId) }), plan);
 			await persistAppliedRelease(config, plan);
 			releaseCommitted = true;
 			record = await saveReleaseAction(config, record, "succeeded", { result: "success" });
@@ -3326,7 +4227,15 @@ async function applyStoredReleasePlanLocked(config, approval, now, signal) {
 		record = await saveReleaseAction(config, record, "staging");
 		await stageRelease(config, plan, current.profileSnapshot, signal);
 		throwIfAborted(signal);
-		if (await computeProfileHash(config) !== plan.profileHash) throw new FleetProtocolError("approval-mismatch", "live profile changed while the release was staged");
+		const [preSwapProfileHash, preSwapDshVersion, preSwapDesired, preSwapApplied] = await Promise.all([
+			computeProfileHash(config),
+			readDshVersion(config, signal),
+			loadDesiredManifest(config),
+			readAppliedRelease(config)
+		]);
+		if (preSwapProfileHash !== plan.profileHash || preSwapDshVersion !== plan.observedDshVersion || preSwapDesired.manifestDigest !== plan.toManifestDigest || (preSwapApplied?.releaseDigest ?? null) !== plan.fromReleaseDigest) throw new FleetProtocolError("approval-mismatch", "live profile, DSH, desired manifest, or applied release changed while the release was staged");
+		assertObservedReleaseRuntime(await inspectManagedReleaseRuntime(config, signal, { allowLegacyLaunchdIdentity: true }), plan);
+		await assertReleaseRemovalOwnership(config, current, plan, preSwapApplied);
 		record = await saveReleaseAction(config, record, "staged");
 		record = await saveReleaseAction(config, record, "applying");
 		await swapStagedRelease(config, plan, signal);
@@ -3336,7 +4245,7 @@ async function applyStoredReleasePlanLocked(config, approval, now, signal) {
 		throwIfAborted(signal);
 		record = await saveReleaseAction(config, record, "verifying");
 		await verifyReleaseProfileFiles(config, plan, config.profile);
-		await verifyHealth(config, void 0, signal, plan.plugins.map((plugin) => plugin.pluginId), runtimeManifestPath(config));
+		assertObservedReleaseRuntime(await inspectManagedReleaseRuntime(config, signal, { expectedPluginIds: plan.plugins.map((plugin) => plugin.pluginId) }), plan);
 		throwIfAborted(signal);
 		await persistAppliedRelease(config, plan);
 		releaseCommitted = true;
@@ -3347,11 +4256,6 @@ async function applyStoredReleasePlanLocked(config, approval, now, signal) {
 			releaseId: plan.releaseId,
 			result: "success"
 		});
-		const profilesRoot = dirname(profileDir(config));
-		await rm(join(profilesRoot, names.backupProfile), {
-			recursive: true,
-			force: true
-		}).catch(() => void 0);
 		return record;
 	} catch (error) {
 		if (releaseCommitted) return recoverReleaseInterrupted(config, plan, record);
@@ -3373,16 +4277,507 @@ async function readOrRecoverReleaseAction(config, planId) {
 	assertReleaseReadyConfig(config);
 	return withProfileLock(config, async () => {
 		const record = await readReleaseAction(config, planId);
-		if (record === null || [
+		if (record === null) return null;
+		const plan = await readJson(releasePlanPath(config, planId));
+		if (plan === null) throw new AgentRuntimeError("plan-not-found", "approved release plan was not found");
+		validateFleetReleasePlan(plan);
+		assertReleaseActionPlan(record, plan);
+		if ([
 			"succeeded",
 			"rolled-back",
 			"manual-intervention"
 		].includes(record.state)) return record;
-		const plan = await readJson(releasePlanPath(config, planId));
-		if (plan === null) throw new AgentRuntimeError("plan-not-found", "approved release plan was not found");
-		validateFleetReleasePlan(plan);
 		return recoverReleaseInterrupted(config, plan, record);
 	});
+}
+async function readReleaseRollbackAction(config, planId) {
+	return readJson(releaseRollbackActionPath(config, planId));
+}
+function assertReleaseRollbackActionPlan(record, plan) {
+	if (record.planId !== plan.planId || record.planDigest !== plan.digest || record.transitionPlanId !== plan.transitionPlanId || record.deviceId !== plan.deviceId || record.profile !== plan.profile || record.fromManifestDigest !== plan.fromManifestDigest || record.toManifestDigest !== plan.toManifestDigest || record.fromReleaseDigest !== plan.fromReleaseDigest || record.toReleaseDigest !== plan.toReleaseDigest) throw new AgentRuntimeError("action-state-invalid", "release rollback action record does not match its plan");
+}
+function assertRollbackDescriptorTransition(descriptor, transition) {
+	if (descriptor.transitionPlanId !== transition.planId || descriptor.transitionPlanDigest !== transition.digest || descriptor.fromManifestDigest !== transition.fromManifestDigest || descriptor.toManifestDigest !== transition.toManifestDigest || descriptor.fromReleaseDigest !== transition.fromReleaseDigest || descriptor.toReleaseDigest !== transition.toReleaseDigest || descriptor.fromProfileHash !== transition.profileHash || descriptor.backupProfile !== (transition.restartRequired ? releaseProfileNames(transition).backupProfile : null) || (descriptor.previousAppliedRelease?.releaseDigest ?? null) !== transition.fromReleaseDigest) throw new AgentRuntimeError("rollback-descriptor-invalid", "release rollback descriptor does not match its transition plan");
+}
+function releaseRetentionQuarantineProfile(plan, transitionPlanId) {
+	return "fleet-failed-" + sha256Canonical({
+		kind: "release-retention-quarantine",
+		planId: plan.planId,
+		transitionPlanId
+	}).slice(0, 24);
+}
+async function readRealDirectoryEntries(path) {
+	try {
+		const info = await lstat(path);
+		if (info.isSymbolicLink() || !info.isDirectory()) throw new AgentRuntimeError("unsafe-state-directory", "release retention state accepts real directories only");
+		return readdir(path, { withFileTypes: true });
+	} catch (error) {
+		if (error.code === "ENOENT") return [];
+		throw error;
+	}
+}
+async function readRetentionTransitionMaterial(config, transitionPlanId) {
+	const transition = await readJson(releasePlanPath(config, transitionPlanId));
+	const descriptor = await readReleaseRollbackDescriptor(config, transitionPlanId);
+	const action = await readReleaseAction(config, transitionPlanId);
+	if (transition === null || descriptor === null || action === null) return null;
+	validateFleetReleasePlan(transition);
+	if (transition.deviceId !== config.deviceId || transition.profile !== config.profile) throw new AgentRuntimeError("retention-transition-invalid", "release retention transition belongs to another Agent");
+	assertRollbackDescriptorTransition(descriptor, transition);
+	assertReleaseActionPlan(action, transition);
+	const descriptorDigest = sha256Canonical(descriptor);
+	if (action.state !== "succeeded" || action.result !== "success" || action.rollbackDescriptorDigest !== descriptorDigest) throw new AgentRuntimeError("retention-transition-invalid", "release retention requires a successful transition with its exact descriptor");
+	if (descriptor.backupProfile !== null) {
+		const backup = await profileManifestAndHash(config, descriptor.backupProfile);
+		if (backup.manifestDigest !== descriptor.fromManifestDigest || backup.profileHash !== descriptor.fromProfileHash) throw new AgentRuntimeError("retention-backup-mismatch", "release backup no longer matches its transition descriptor");
+	}
+	return {
+		transition,
+		descriptor,
+		descriptorDigest
+	};
+}
+async function successfullyRolledBackTransitionIds(config) {
+	const result = /* @__PURE__ */ new Set();
+	const entries = (await readRealDirectoryEntries(join(config.stateDir, "release-rollback-actions"))).filter((entry) => /^[0-9a-f]{64}\.json$/.test(entry.name)).sort((left, right) => left.name.localeCompare(right.name));
+	if (entries.length > 4096) throw new AgentRuntimeError("retention-inventory-limit", "release rollback action inventory is too large");
+	for (const entry of entries) {
+		if (entry.isSymbolicLink() || !entry.isFile()) continue;
+		const planId = "release-rollback-plan:" + entry.name.slice(0, 64);
+		try {
+			const plan = await readJson(releaseRollbackPlanPath(config, planId));
+			const action = await readReleaseRollbackAction(config, planId);
+			if (plan === null || action === null) continue;
+			validateFleetReleaseRollbackPlan(plan);
+			assertReleaseRollbackActionPlan(action, plan);
+			if (plan.deviceId === config.deviceId && plan.profile === config.profile && action.state === "succeeded" && action.result === "success") result.add(plan.transitionPlanId);
+		} catch {}
+	}
+	const releaseActionEntries = (await readRealDirectoryEntries(join(config.stateDir, "release-actions"))).filter((entry) => /^[0-9a-f]{64}\.json$/.test(entry.name)).sort((left, right) => left.name.localeCompare(right.name));
+	if (releaseActionEntries.length > 4096) throw new AgentRuntimeError("retention-inventory-limit", "release action inventory is too large");
+	for (const entry of releaseActionEntries) {
+		if (entry.isSymbolicLink() || !entry.isFile()) continue;
+		const transitionPlanId = "release-plan:" + entry.name.slice(0, 64);
+		try {
+			const plan = await readJson(releasePlanPath(config, transitionPlanId));
+			const action = await readReleaseAction(config, transitionPlanId);
+			const descriptor = await readReleaseRollbackDescriptor(config, transitionPlanId);
+			if (plan === null || action === null || descriptor === null) continue;
+			validateFleetReleasePlan(plan);
+			assertReleaseActionPlan(action, plan);
+			assertRollbackDescriptorTransition(descriptor, plan);
+			if (plan.deviceId === config.deviceId && plan.profile === config.profile && action.state === "rolled-back" && action.result === "rolled-back" && action.rollbackDescriptorDigest === sha256Canonical(descriptor)) result.add(transitionPlanId);
+		} catch {}
+	}
+	return result;
+}
+async function discoverReleaseRetention(config, strictChain) {
+	const materials = /* @__PURE__ */ new Map();
+	const legalBackupProfiles = /* @__PURE__ */ new Set();
+	const rolledBackTransitionPlanIds = await successfullyRolledBackTransitionIds(config);
+	let invalidTransitionCount = 0;
+	const descriptorEntries = (await readRealDirectoryEntries(join(config.stateDir, "release-rollbacks"))).filter((entry) => /^[0-9a-f]{64}\.json$/.test(entry.name)).sort((left, right) => left.name.localeCompare(right.name));
+	if (descriptorEntries.length > 4096) throw new AgentRuntimeError("retention-inventory-limit", "release retention descriptor inventory is too large");
+	for (const entry of descriptorEntries) {
+		const transitionPlanId = "release-plan:" + entry.name.slice(0, 64);
+		try {
+			if (entry.isSymbolicLink() || !entry.isFile()) throw new AgentRuntimeError("unsafe-state-file", "release descriptor must be a regular file");
+			if (rolledBackTransitionPlanIds.has(transitionPlanId)) continue;
+			const material = await readRetentionTransitionMaterial(config, transitionPlanId);
+			if (material === null) {
+				invalidTransitionCount += 1;
+				continue;
+			}
+			materials.set(transitionPlanId, material);
+			if (material.descriptor.backupProfile !== null) legalBackupProfiles.add(material.descriptor.backupProfile);
+		} catch {
+			invalidTransitionCount += 1;
+		}
+	}
+	const activeStageProfiles = /* @__PURE__ */ new Set();
+	const activeFailedProfiles = /* @__PURE__ */ new Set();
+	const activeBackupProfiles = /* @__PURE__ */ new Set();
+	const actionEntries = (await readRealDirectoryEntries(join(config.stateDir, "release-actions"))).filter((entry) => /^[0-9a-f]{64}\.json$/.test(entry.name)).sort((left, right) => left.name.localeCompare(right.name));
+	if (actionEntries.length > 4096) throw new AgentRuntimeError("retention-inventory-limit", "release retention action inventory is too large");
+	for (const entry of actionEntries) {
+		if (entry.isSymbolicLink() || !entry.isFile()) continue;
+		const transitionPlanId = "release-plan:" + entry.name.slice(0, 64);
+		try {
+			const transition = await readJson(releasePlanPath(config, transitionPlanId));
+			const action = await readReleaseAction(config, transitionPlanId);
+			if (transition === null || action === null) continue;
+			validateFleetReleasePlan(transition);
+			assertReleaseActionPlan(action, transition);
+			if (![
+				"succeeded",
+				"rolled-back",
+				"manual-intervention"
+			].includes(action.state)) {
+				activeStageProfiles.add(action.stageProfile);
+				activeBackupProfiles.add(action.backupProfile);
+				activeFailedProfiles.add(releaseProfileNames(transition).failedProfile);
+			}
+		} catch {}
+	}
+	const retiredTransitionPlanIds = new Set(rolledBackTransitionPlanIds);
+	const retentionActionEntries = (await readRealDirectoryEntries(join(config.stateDir, "release-retention-actions"))).filter((entry) => /^[0-9a-f]{64}\.json$/.test(entry.name)).sort((left, right) => left.name.localeCompare(right.name));
+	if (retentionActionEntries.length > 4096) throw new AgentRuntimeError("retention-inventory-limit", "release retention cleanup inventory is too large");
+	for (const entry of retentionActionEntries) {
+		if (entry.isSymbolicLink() || !entry.isFile()) continue;
+		const planId = "release-retention-plan:" + entry.name.slice(0, 64);
+		try {
+			const plan = await readJson(releaseRetentionPlanPath(config, planId));
+			if (plan === null) continue;
+			validateFleetReleaseRetentionPlan(plan);
+			const action = await readReleaseRetentionAction(config, plan);
+			if (action === null) continue;
+			if (action.state === "succeeded") for (const transitionPlanId of action.removedTransitionPlanIds) retiredTransitionPlanIds.add(transitionPlanId);
+			else if (action.activeTransitionPlanId !== null) activeFailedProfiles.add(releaseRetentionQuarantineProfile(plan, action.activeTransitionPlanId));
+		} catch {}
+	}
+	const applied = await readAppliedRelease(config);
+	const currentTransitionPlanId = applied?.schemaVersion === 2 ? applied.transitionPlanId : null;
+	const retainedTransitionPlanIds = [];
+	const entries = [];
+	const seen = /* @__PURE__ */ new Set();
+	let marker = applied;
+	let depth = 0;
+	while (marker?.schemaVersion === 2) {
+		const transitionPlanId = marker.transitionPlanId;
+		if (seen.has(transitionPlanId) || seen.size >= 4096) {
+			if (strictChain) throw new AgentRuntimeError("retention-chain-invalid", "release retention transition chain is cyclic or too deep");
+			invalidTransitionCount += 1;
+			break;
+		}
+		seen.add(transitionPlanId);
+		const material = materials.get(transitionPlanId);
+		if (material === void 0) {
+			if (depth > 0 && retiredTransitionPlanIds.has(transitionPlanId)) break;
+			if (strictChain && depth < 2) throw new AgentRuntimeError("retention-chain-invalid", "current or previous release transition has no valid rollback descriptor");
+			break;
+		}
+		if (marker.deviceId !== config.deviceId || marker.profile !== config.profile || marker.transitionPlanDigest !== material.transition.digest || marker.releaseDigest !== material.transition.toReleaseDigest || marker.releaseId !== material.transition.releaseId || marker.releaseVersion !== material.transition.releaseVersion) {
+			if (strictChain) throw new AgentRuntimeError("retention-chain-invalid", "applied release marker does not match its transition chain");
+			invalidTransitionCount += 1;
+			break;
+		}
+		if (depth < 2) retainedTransitionPlanIds.push(transitionPlanId);
+		else entries.push({
+			transitionPlanId,
+			descriptorDigest: material.descriptorDigest,
+			backupProfile: material.descriptor.backupProfile,
+			backupManifestDigest: material.descriptor.backupProfile === null ? null : material.descriptor.fromManifestDigest,
+			backupProfileHash: material.descriptor.backupProfile === null ? null : material.descriptor.fromProfileHash,
+			reason: "superseded"
+		});
+		marker = material.descriptor.previousAppliedRelease;
+		depth += 1;
+	}
+	const orphanBackupProfiles = [];
+	const orphanStageProfiles = [];
+	const orphanFailedProfiles = [];
+	const profilesRoot = dirname(profileDir(config));
+	for (const entry of (await readRealDirectoryEntries(profilesRoot)).sort((left, right) => left.name.localeCompare(right.name))) if (/^fleet-backup-[0-9a-f]{24}$/.test(entry.name) && !legalBackupProfiles.has(entry.name) && !activeBackupProfiles.has(entry.name)) orphanBackupProfiles.push(entry.name);
+	else if (/^fleet-stage-[0-9a-f]{24}$/.test(entry.name) && !activeStageProfiles.has(entry.name)) orphanStageProfiles.push(entry.name);
+	else if (/^fleet-failed-[0-9a-f]{24}$/.test(entry.name) && !activeFailedProfiles.has(entry.name)) orphanFailedProfiles.push(entry.name);
+	return {
+		currentTransitionPlanId,
+		retainedTransitionPlanIds: retainedTransitionPlanIds.sort(),
+		entries: entries.sort((left, right) => left.transitionPlanId.localeCompare(right.transitionPlanId)),
+		orphanBackupProfiles,
+		orphanStageProfiles,
+		orphanFailedProfiles,
+		invalidTransitionCount
+	};
+}
+async function releaseRetentionInspection(config) {
+	const discovery = await discoverReleaseRetention(config, false);
+	const orphanCount = discovery.orphanBackupProfiles.length + discovery.orphanStageProfiles.length + discovery.orphanFailedProfiles.length;
+	return {
+		retainedCount: discovery.retainedTransitionPlanIds.length,
+		eligibleCount: discovery.entries.length,
+		orphanBackupCount: discovery.orphanBackupProfiles.length,
+		orphanStageCount: discovery.orphanStageProfiles.length,
+		orphanFailedCount: discovery.orphanFailedProfiles.length,
+		orphanCount,
+		invalidTransitionCount: discovery.invalidTransitionCount
+	};
+}
+const RELEASE_RETENTION_ACTION_KEYS = [
+	"planId",
+	"planDigest",
+	"approvalId",
+	"principalId",
+	"idempotencyKey",
+	"deviceId",
+	"profile",
+	"currentTransitionPlanId",
+	"state",
+	"removedTransitionPlanIds",
+	"activeTransitionPlanId",
+	"activeBackupQuarantinePrepared",
+	"activeBackupRemoved",
+	"updatedAt",
+	"result"
+];
+function validateReleaseRetentionAction(value, plan) {
+	const body = objectValue(value);
+	if (body === null || Object.keys(body).sort().join(",") !== [...RELEASE_RETENTION_ACTION_KEYS].sort().join(",")) throw new AgentRuntimeError("action-state-invalid", "release retention action has unsupported or missing fields");
+	const updatedAt = typeof body.updatedAt === "string" ? Date.parse(body.updatedAt) : NaN;
+	if (body.planId !== plan.planId || body.planDigest !== plan.digest || body.deviceId !== plan.deviceId || body.profile !== plan.profile || body.currentTransitionPlanId !== plan.currentTransitionPlanId || typeof body.approvalId !== "string" || typeof body.principalId !== "string" || typeof body.idempotencyKey !== "string" || !/^[0-9a-f]{64}$/.test(body.idempotencyKey) || ![
+		"approved",
+		"applying",
+		"succeeded"
+	].includes(body.state) || !Array.isArray(body.removedTransitionPlanIds) || body.removedTransitionPlanIds.some((id) => typeof id !== "string") || body.activeTransitionPlanId !== null && typeof body.activeTransitionPlanId !== "string" || typeof body.activeBackupQuarantinePrepared !== "boolean" || typeof body.activeBackupRemoved !== "boolean" || !Number.isFinite(updatedAt) || new Date(updatedAt).toISOString() !== body.updatedAt || body.result !== null && body.result !== "success") throw new AgentRuntimeError("action-state-invalid", "release retention action is invalid");
+	const entryIds = plan.entries.map((entry) => entry.transitionPlanId);
+	const removed = body.removedTransitionPlanIds;
+	if (new Set(removed).size !== removed.length || removed.some((id, index) => !entryIds.includes(id) || index > 0 && id <= removed[index - 1]) || body.activeTransitionPlanId !== null && (!entryIds.includes(body.activeTransitionPlanId) || removed.includes(body.activeTransitionPlanId)) || body.activeTransitionPlanId === null && (body.activeBackupQuarantinePrepared === true || body.activeBackupRemoved === true) || body.activeBackupQuarantinePrepared === true && body.activeBackupRemoved === true || body.state === "succeeded" && (body.result !== "success" || removed.length !== entryIds.length || body.activeTransitionPlanId !== null) || body.state !== "succeeded" && body.result !== null) throw new AgentRuntimeError("action-state-invalid", "release retention action progress is invalid");
+}
+async function readReleaseRetentionAction(config, plan) {
+	const value = await readJson(releaseRetentionActionPath(config, plan.planId));
+	if (value === null) return null;
+	validateReleaseRetentionAction(value, plan);
+	return value;
+}
+async function profileManifestAndHash(config, profile) {
+	const targetConfig = configForProfile(config, profile);
+	if (!await regularDirectoryExists(profileDir(targetConfig))) throw new AgentRuntimeError("rollback-target-mismatch", "rollback profile directory is missing");
+	const source = await readRegularOptional(runtimeManifestPath(targetConfig));
+	if (source === null) throw new AgentRuntimeError("release-runtime-manifest-mismatch", "rollback profile has no Fleet runtime manifest");
+	parseFleetManifest(source);
+	return {
+		manifestDigest: sha256(source),
+		profileHash: await computeProfileHash(targetConfig)
+	};
+}
+//#endregion
+//#region src/worker/policy.ts
+var TaskPolicyResolutionError = class extends Error {
+	code;
+	constructor(code, message) {
+		super(message);
+		this.name = "TaskPolicyResolutionError";
+		this.code = code;
+	}
+};
+function isTaskPolicyId(value) {
+	return TASK_POLICY_IDS.includes(value);
+}
+function policyBody(policy) {
+	const { policyDigest: _policyDigest, ...body } = policy;
+	return body;
+}
+function hasValidLocalDigest(policy) {
+	if (!isTaskPolicyId(policy.policyId)) return false;
+	const installed = LOCAL_TASK_POLICIES[policy.policyId];
+	return policy.policyDigest === installed.policyDigest && calculateTaskPolicyDigest(policyBody(policy)) === installed.policyDigest;
+}
+function resolveTaskPolicy(tasks, policyId, policyDigest) {
+	if (!isTaskPolicyId(policyId)) throw new TaskPolicyResolutionError("unknown-policy", "requested task policy is not installed");
+	if (!/^[0-9a-f]{64}$/.test(policyDigest)) throw new TaskPolicyResolutionError("policy-digest-mismatch", "requested task policy digest is invalid");
+	if (tasks.policyIds?.includes(policyId) !== true) throw new TaskPolicyResolutionError("policy-not-enabled", "requested task policy is not enabled locally");
+	const policy = tasks.policies?.[policyId];
+	if (policy === void 0 || !hasValidLocalDigest(policy)) throw new TaskPolicyResolutionError("invalid-local-policy", "local task policy is missing or has lost integrity");
+	if (policy.policyDigest !== policyDigest) throw new TaskPolicyResolutionError("policy-digest-mismatch", "requested task policy digest does not match the local policy");
+	return policy;
+}
+function isRecord$4(value) {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function isWorkspacePath(workspacePath, value, optional) {
+	if (value === void 0) return optional;
+	if (typeof value !== "string" || value.trim().length === 0 || value.includes("\0")) return false;
+	const root = resolve(workspacePath);
+	const target = resolve(root, value);
+	const fromRoot = relative(root, target);
+	return fromRoot === "" || !fromRoot.startsWith(".." + sep) && fromRoot !== ".." && !isAbsolute(fromRoot);
+}
+function globPatternStaysWithinWorkspace(value) {
+	if (typeof value !== "string" || value.length === 0 || value.includes("\0") || isAbsolute(value) || /^[A-Za-z]:[\\/]/.test(value)) return false;
+	return !value.split(/[\\/]+/).includes("..");
+}
+function workspaceScopedToolArguments(toolName, toolArguments, workspacePath) {
+	if (toolName === "read" || toolName === "read_image" || toolName === "write" || toolName === "edit") return isWorkspacePath(workspacePath, toolArguments.file_path, false);
+	if (toolName === "glob") return isWorkspacePath(workspacePath, toolArguments.path, true) && globPatternStaysWithinWorkspace(toolArguments.pattern);
+	if (toolName === "grep") return isWorkspacePath(workspacePath, toolArguments.path, true);
+	if (toolName === "bash" || toolName === "pwsh") return isWorkspacePath(workspacePath, toolArguments.workdir, true);
+	return true;
+}
+function contained(root, target) {
+	const fromRoot = relative(root, target);
+	return fromRoot === "" || !fromRoot.startsWith(".." + sep) && fromRoot !== ".." && !isAbsolute(fromRoot);
+}
+function filesystemTarget(toolName, toolArguments) {
+	if (toolName === "read" || toolName === "read_image") return typeof toolArguments.file_path === "string" ? {
+		path: toolArguments.file_path,
+		mutable: false
+	} : null;
+	if (toolName === "write" || toolName === "edit") return typeof toolArguments.file_path === "string" ? {
+		path: toolArguments.file_path,
+		mutable: true
+	} : null;
+	if (toolName === "glob" || toolName === "grep" || toolName === "bash" || toolName === "pwsh") {
+		const value = toolArguments.path ?? toolArguments.workdir ?? ".";
+		return typeof value === "string" ? {
+			path: value,
+			mutable: false
+		} : null;
+	}
+	return null;
+}
+/**
+* Re-resolves filesystem targets immediately before execution. Lexical scope
+* checks alone are insufficient because a path inside the workspace may be a
+* symlink to data outside it. Mutable targets also reject every symlink path
+* component and existing hard-linked files.
+*/
+async function validateTaskToolFilesystemScope(input) {
+	if (!isAbsolute(input.workspacePath) || resolve(input.workspacePath) !== input.workspacePath || !isRecord$4(input.arguments)) return false;
+	const targetInput = filesystemTarget(input.toolName, input.arguments);
+	if (targetInput === null) return true;
+	let root;
+	try {
+		root = await realpath(input.workspacePath);
+	} catch {
+		return false;
+	}
+	if (root !== input.workspacePath) return false;
+	const target = resolve(root, targetInput.path);
+	if (!contained(root, target)) return false;
+	if (!targetInput.mutable) try {
+		return contained(root, await realpath(target));
+	} catch {
+		return false;
+	}
+	const pathFromRoot = relative(root, target);
+	if (pathFromRoot === "") return false;
+	let current = root;
+	const segments = pathFromRoot.split(sep);
+	for (let index = 0; index < segments.length; index += 1) {
+		current = join(current, segments[index]);
+		let info;
+		try {
+			info = await lstat(current);
+		} catch (error) {
+			if (error.code === "ENOENT") return true;
+			return false;
+		}
+		if (info.isSymbolicLink()) return false;
+		let resolved;
+		try {
+			resolved = await realpath(current);
+		} catch {
+			return false;
+		}
+		if (!contained(root, resolved)) return false;
+		if (index === segments.length - 1 && info.isFile() && info.nlink > 1) return false;
+	}
+	return true;
+}
+function capabilityFor(toolName) {
+	if (toolName === "write" || toolName === "edit") return "workspace-mutation";
+	if (toolName === "bash" || toolName === "pwsh") return "command-execution";
+	if (toolName === "web_search" || toolName === "web_fetch") return "network-access";
+	return null;
+}
+function denied(reason, argumentsDigest) {
+	return {
+		decision: "deny",
+		capability: null,
+		argumentsDigest,
+		reason
+	};
+}
+function classifyTaskToolCall(input) {
+	if (!hasValidLocalDigest(input.policy)) return denied("invalid-policy", null);
+	if (!isAbsolute(input.workspacePath) || resolve(input.workspacePath) !== input.workspacePath || !isRecord$4(input.arguments)) return denied("invalid-arguments", null);
+	let argumentsDigest;
+	try {
+		argumentsDigest = digestToolArguments(input.arguments, input.policy.maxArgumentsBytes);
+	} catch (error) {
+		return denied(error instanceof WorkerPolicyError && error.code === "arguments-too-large" ? "arguments-too-large" : "invalid-arguments", null);
+	}
+	if (input.policy.hardDeniedTools.includes(input.toolName)) return denied("hard-denied-tool", argumentsDigest);
+	const isSafe = input.policy.safeTools.includes(input.toolName);
+	const needsApproval = input.policy.approvalRequiredTools.includes(input.toolName);
+	if (!isSafe && !needsApproval) return denied(Object.values(LOCAL_TASK_POLICIES).some((policy) => policy.safeTools.includes(input.toolName) || policy.approvalRequiredTools.includes(input.toolName) || policy.hardDeniedTools.includes(input.toolName)) ? "not-permitted-by-policy" : "unknown-tool", argumentsDigest);
+	if (!workspaceScopedToolArguments(input.toolName, input.arguments, input.workspacePath)) return denied("workspace-scope-denied", argumentsDigest);
+	if ((input.toolName === "bash" || input.toolName === "pwsh") && input.arguments.run_in_background === true) return denied("background-execution-denied", argumentsDigest);
+	if (Object.hasOwn(input.arguments, "sandbox_permissions") || Object.hasOwn(input.arguments, "justification")) return denied("permission-escalation-denied", argumentsDigest);
+	if (isSafe) return {
+		decision: "safe",
+		capability: null,
+		argumentsDigest,
+		reason: "safe-read"
+	};
+	const capability = capabilityFor(input.toolName);
+	if (capability === null) return denied("invalid-policy", argumentsDigest);
+	return {
+		decision: "ask",
+		capability,
+		argumentsDigest,
+		reason: "signed-approval-required"
+	};
+}
+function record(value, keys, field) {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) throw new TypeError(field + " must be an object");
+	const raw = value;
+	const actual = Object.keys(raw).sort();
+	const expected = [...keys].sort();
+	if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) throw new TypeError(field + " has unsupported or missing fields");
+	return raw;
+}
+function text$2(value, field, max = 128) {
+	if (typeof value !== "string" || value.length === 0 || value !== value.trim() || value.length > max || /[\r\n\0]/.test(value)) throw new TypeError(field + " must be bounded text");
+	return value;
+}
+function id(value, field, prefix) {
+	const result = text$2(value, field, 64);
+	if (!new RegExp("^" + prefix + ":[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$").test(result)) throw new TypeError(field + " must be a namespaced UUID");
+	return result;
+}
+function digest$2(value, field) {
+	if (typeof value !== "string" || !/^[0-9a-f]{64}$/.test(value)) throw new TypeError(field + " must be a SHA-256 digest");
+	return value;
+}
+function timestamp(value, field) {
+	if (typeof value !== "string" || !Number.isFinite(Date.parse(value)) || new Date(Date.parse(value)).toISOString() !== value) throw new TypeError(field + " must be a canonical timestamp");
+	return value;
+}
+function parseTaskApprovalIntent(value) {
+	const raw = record(value, [
+		"schemaVersion",
+		"approvalId",
+		"taskId",
+		"taskBindingDigest",
+		"executionProfileHash",
+		"toolCallId",
+		"toolName",
+		"arguments",
+		"argumentsDigest",
+		"capability",
+		"expiresAt"
+	], "task approval intent");
+	if (raw.schemaVersion !== 2 || raw.capability !== "workspace-mutation" && raw.capability !== "command-execution" && raw.capability !== "network-access") throw new TypeError("task approval intent schema or capability is invalid");
+	if (typeof raw.arguments !== "object" || raw.arguments === null || Array.isArray(raw.arguments)) throw new TypeError("task approval intent arguments must be an object");
+	const argumentsDigest = digest$2(raw.argumentsDigest, "argumentsDigest");
+	if (digestToolArguments(raw.arguments) !== argumentsDigest) throw new TypeError("task approval intent arguments digest does not match");
+	return {
+		schemaVersion: 2,
+		approvalId: id(raw.approvalId, "approvalId", "approval"),
+		taskId: id(raw.taskId, "taskId", "task"),
+		taskBindingDigest: digest$2(raw.taskBindingDigest, "taskBindingDigest"),
+		executionProfileHash: digest$2(raw.executionProfileHash, "executionProfileHash"),
+		toolCallId: text$2(raw.toolCallId, "toolCallId"),
+		toolName: text$2(raw.toolName, "toolName", 64),
+		arguments: raw.arguments,
+		argumentsDigest,
+		capability: raw.capability,
+		expiresAt: timestamp(raw.expiresAt, "expiresAt")
+	};
+}
+function approvalSegment(approvalId) {
+	return id(approvalId, "approvalId", "approval").slice(9);
 }
 const FLEET_A2A_KINDS = [
 	"task.submit",
@@ -3390,11 +4785,22 @@ const FLEET_A2A_KINDS = [
 	"task.cancel",
 	"task.progress",
 	"task.result",
+	"task.approval.request",
+	"task.approval.decision",
 	"approval.request",
 	"approval.decision",
 	"handoff",
 	"receipt"
 ];
+const FEDERATION_ADVISORY_KINDS = /* @__PURE__ */ new Set([
+	"approval.request",
+	"approval.decision",
+	"handoff",
+	"receipt"
+]);
+function isFleetFederationAdvisoryKind(kind) {
+	return FEDERATION_ADVISORY_KINDS.has(kind);
+}
 var FleetA2AError = class extends Error {
 	code;
 	constructor(code, message) {
@@ -3421,15 +4827,16 @@ const SENDER_KEYS = [
 	"deviceId",
 	"keyId"
 ];
-const RECIPIENT_KEYS = ["deviceId"];
+const RECIPIENT_KEYS = ["teamId", "deviceId"];
 const MAX_PAYLOAD_BYTES = 49152;
 const DEFAULT_TTL_MS = 3e5;
 const DEFAULT_MAX_TTL_MS = 9e5;
-function isRecord$2(value) {
+const ABSOLUTE_MAX_TTL_MS = 864e5;
+function isRecord$3(value) {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-function exactKeys$2(value, keys, field) {
-	if (!isRecord$2(value)) throw new FleetA2AError("invalid-envelope", field + " must be an object");
+function exactKeys$3(value, keys, field) {
+	if (!isRecord$3(value)) throw new FleetA2AError("invalid-envelope", field + " must be an object");
 	const actual = Object.keys(value).sort();
 	const expected = [...keys].sort();
 	if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) throw new FleetA2AError("invalid-envelope", field + " has unsupported or missing fields");
@@ -3442,21 +4849,21 @@ function longText(value, field, maxLength) {
 	if (typeof value !== "string" || value.trim().length === 0 || value.length > maxLength || value.includes("\0")) throw new FleetA2AError("invalid-payload", field + " must be bounded non-empty text");
 	return value;
 }
-function identifier$2(value, field) {
+function identifier$3(value, field) {
 	const result = text$1(value, field, 64);
 	if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(result)) throw new FleetA2AError("invalid-payload", field + " is invalid");
 	return result;
 }
-function messageId(value, field, prefix) {
+function messageId$1(value, field, prefix) {
 	const result = text$1(value, field, 64);
 	if (!new RegExp("^" + prefix + ":[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$").test(result)) throw new FleetA2AError("invalid-payload", field + " must be a namespaced UUID");
 	return result;
 }
-function digest(value, field) {
+function digest$1(value, field) {
 	if (typeof value !== "string" || !/^[0-9a-f]{64}$/.test(value)) throw new FleetA2AError("invalid-envelope", field + " must be a lowercase SHA-256 digest");
 	return value;
 }
-function canonicalTime(value, field) {
+function canonicalTime$1(value, field) {
 	if (typeof value !== "string") throw new FleetA2AError("invalid-time", field + " must be a canonical ISO timestamp");
 	const timestamp = Date.parse(value);
 	if (!Number.isFinite(timestamp) || new Date(timestamp).toISOString() !== value) throw new FleetA2AError("invalid-time", field + " must be a canonical ISO timestamp");
@@ -3472,21 +4879,33 @@ function exactPayload(payload, keys, kind) {
 	if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) throw new FleetA2AError("invalid-payload", kind + " payload has unsupported or missing fields");
 }
 function taskId(value) {
-	return messageId(value, "payload.taskId", "task");
+	return messageId$1(value, "payload.taskId", "task");
 }
 function validateA2APayload(kind, payload) {
-	if (!isRecord$2(payload)) throw new FleetA2AError("invalid-payload", kind + " payload must be an object");
+	if (!isRecord$3(payload)) throw new FleetA2AError("invalid-payload", kind + " payload must be an object");
 	if (Buffer.byteLength(canonicalJson(payload), "utf8") > MAX_PAYLOAD_BYTES) throw new FleetA2AError("invalid-payload", "A2A payload exceeds the size limit");
 	if (kind === "task.submit") {
 		exactPayload(payload, [
 			"taskId",
 			"workspaceId",
 			"profile",
+			"executionProfileHash",
+			"manifestDigest",
+			"releaseDigest",
+			"policyId",
+			"policyDigest",
+			"deadline",
 			"prompt"
 		], kind);
 		taskId(payload.taskId);
-		identifier$2(payload.workspaceId, "payload.workspaceId");
-		identifier$2(payload.profile, "payload.profile");
+		identifier$3(payload.workspaceId, "payload.workspaceId");
+		identifier$3(payload.profile, "payload.profile");
+		digest$1(payload.executionProfileHash, "payload.executionProfileHash");
+		digest$1(payload.manifestDigest, "payload.manifestDigest");
+		digest$1(payload.releaseDigest, "payload.releaseDigest");
+		identifier$3(payload.policyId, "payload.policyId");
+		digest$1(payload.policyDigest, "payload.policyDigest");
+		canonicalTime$1(payload.deadline, "payload.deadline");
 		longText(payload.prompt, "payload.prompt", 32768);
 		return;
 	}
@@ -3507,7 +4926,7 @@ function validateA2APayload(kind, payload) {
 			"running",
 			"cancel-requested"
 		].includes(text$1(payload.state, "payload.state", 24))) throw new FleetA2AError("invalid-payload", "task progress state is invalid");
-		canonicalTime(payload.updatedAt, "payload.updatedAt");
+		canonicalTime$1(payload.updatedAt, "payload.updatedAt");
 		return;
 	}
 	if (kind === "task.result") {
@@ -3526,11 +4945,69 @@ function validateA2APayload(kind, payload) {
 			"failed",
 			"cancelled"
 		].includes(text$1(payload.state, "payload.state", 16))) throw new FleetA2AError("invalid-payload", "task result state is invalid");
-		canonicalTime(payload.updatedAt, "payload.updatedAt");
-		if (payload.resultDigest !== null) digest(payload.resultDigest, "payload.resultDigest");
+		canonicalTime$1(payload.updatedAt, "payload.updatedAt");
+		if (payload.resultDigest !== null) digest$1(payload.resultDigest, "payload.resultDigest");
 		if (payload.result !== null) longText(payload.result, "payload.result", 32768);
 		if (typeof payload.truncated !== "boolean") throw new FleetA2AError("invalid-payload", "payload.truncated must be boolean");
-		if (payload.errorCode !== null) identifier$2(payload.errorCode, "payload.errorCode");
+		if (payload.errorCode !== null) identifier$3(payload.errorCode, "payload.errorCode");
+		return;
+	}
+	if (kind === "task.approval.request") {
+		exactPayload(payload, [
+			"approvalId",
+			"taskId",
+			"taskBindingDigest",
+			"toolCallId",
+			"toolName",
+			"arguments",
+			"argumentsDigest",
+			"capability",
+			"summary",
+			"expiresAt"
+		], kind);
+		messageId$1(payload.approvalId, "payload.approvalId", "approval");
+		taskId(payload.taskId);
+		digest$1(payload.taskBindingDigest, "payload.taskBindingDigest");
+		text$1(payload.toolCallId, "payload.toolCallId");
+		identifier$3(payload.toolName, "payload.toolName");
+		let argumentsDigest;
+		try {
+			argumentsDigest = digestToolArguments(payload.arguments, MAX_TASK_TOOL_ARGUMENT_BYTES);
+		} catch {
+			throw new FleetA2AError("invalid-payload", "task approval arguments must be a bounded canonical JSON object");
+		}
+		digest$1(payload.argumentsDigest, "payload.argumentsDigest");
+		if (payload.argumentsDigest !== argumentsDigest) throw new FleetA2AError("invalid-payload", "task approval argumentsDigest does not match arguments");
+		if (![
+			"workspace-mutation",
+			"command-execution",
+			"network-access"
+		].includes(text$1(payload.capability, "payload.capability", 32))) throw new FleetA2AError("invalid-payload", "task approval capability is invalid");
+		longText(payload.summary, "payload.summary", 2048);
+		canonicalTime$1(payload.expiresAt, "payload.expiresAt");
+		return;
+	}
+	if (kind === "task.approval.decision") {
+		exactPayload(payload, [
+			"approvalId",
+			"taskId",
+			"approvalRequestMessageId",
+			"approvalRequestPayloadDigest",
+			"taskBindingDigest",
+			"toolCallId",
+			"argumentsDigest",
+			"decision",
+			"decidedAt"
+		], kind);
+		messageId$1(payload.approvalId, "payload.approvalId", "approval");
+		taskId(payload.taskId);
+		messageId$1(payload.approvalRequestMessageId, "payload.approvalRequestMessageId", "msg");
+		digest$1(payload.approvalRequestPayloadDigest, "payload.approvalRequestPayloadDigest");
+		digest$1(payload.taskBindingDigest, "payload.taskBindingDigest");
+		text$1(payload.toolCallId, "payload.toolCallId");
+		digest$1(payload.argumentsDigest, "payload.argumentsDigest");
+		if (!["allowed-once", "rejected"].includes(text$1(payload.decision, "payload.decision", 16))) throw new FleetA2AError("invalid-payload", "task approval decision is invalid");
+		canonicalTime$1(payload.decidedAt, "payload.decidedAt");
 		return;
 	}
 	if (kind === "approval.request") {
@@ -3540,26 +5017,32 @@ function validateA2APayload(kind, payload) {
 			"summary",
 			"expiresAt"
 		], kind);
-		messageId(payload.approvalId, "payload.approvalId", "approval");
+		messageId$1(payload.approvalId, "payload.approvalId", "approval");
 		taskId(payload.taskId);
 		longText(payload.summary, "payload.summary", 2048);
-		canonicalTime(payload.expiresAt, "payload.expiresAt");
+		canonicalTime$1(payload.expiresAt, "payload.expiresAt");
 		return;
 	}
 	if (kind === "approval.decision") {
 		exactPayload(payload, [
 			"approvalId",
 			"taskId",
-			"decision"
+			"approvalRequestMessageId",
+			"approvalRequestPayloadDigest",
+			"decision",
+			"decidedAt"
 		], kind);
-		messageId(payload.approvalId, "payload.approvalId", "approval");
+		messageId$1(payload.approvalId, "payload.approvalId", "approval");
 		taskId(payload.taskId);
-		if (!["approved", "denied"].includes(text$1(payload.decision, "payload.decision", 16))) throw new FleetA2AError("invalid-payload", "approval decision is invalid");
+		messageId$1(payload.approvalRequestMessageId, "payload.approvalRequestMessageId", "msg");
+		digest$1(payload.approvalRequestPayloadDigest, "payload.approvalRequestPayloadDigest");
+		if (!["endorsed", "declined"].includes(text$1(payload.decision, "payload.decision", 16))) throw new FleetA2AError("invalid-payload", "federation approval decision is invalid");
+		canonicalTime$1(payload.decidedAt, "payload.decidedAt");
 		return;
 	}
 	if (kind === "receipt") {
 		exactPayload(payload, ["requestMessageId", "status"], kind);
-		messageId(payload.requestMessageId, "payload.requestMessageId", "msg");
+		messageId$1(payload.requestMessageId, "payload.requestMessageId", "msg");
 		if (!["accepted", "stored"].includes(text$1(payload.status, "payload.status", 16))) throw new FleetA2AError("invalid-payload", "receipt status is invalid");
 		return;
 	}
@@ -3569,7 +5052,7 @@ function validateA2APayload(kind, payload) {
 		"summary",
 		"artifactRefs"
 	], kind);
-	messageId(payload.handoffId, "payload.handoffId", "handoff");
+	messageId$1(payload.handoffId, "payload.handoffId", "handoff");
 	if (payload.taskId !== null) taskId(payload.taskId);
 	longText(payload.summary, "payload.summary", 8192);
 	if (!Array.isArray(payload.artifactRefs) || payload.artifactRefs.length > 32 || payload.artifactRefs.some((ref) => {
@@ -3600,7 +5083,7 @@ function a2aKeyId(key) {
 	});
 	return "ed25519:" + sha256Canonical({ der: Buffer.from(der).toString("base64") });
 }
-function nowIso(value) {
+function nowIso$1(value) {
 	const date = value === void 0 ? /* @__PURE__ */ new Date() : value instanceof Date ? new Date(value.getTime()) : new Date(value);
 	if (!Number.isFinite(date.getTime())) throw new FleetA2AError("invalid-time", "now must be a valid timestamp");
 	return date.toISOString();
@@ -3609,19 +5092,22 @@ function createA2AEnvelope(input) {
 	if (!FLEET_A2A_KINDS.includes(input.kind)) throw new FleetA2AError("invalid-payload", "unsupported A2A kind");
 	validateA2APayload(input.kind, input.payload);
 	const key = privateKey(input.privateKey);
-	const issuedAt = nowIso(input.now);
+	const issuedAt = nowIso$1(input.now);
 	const ttlMs = input.ttlMs ?? DEFAULT_TTL_MS;
-	boundedInteger(ttlMs, "ttlMs", 1e3, DEFAULT_MAX_TTL_MS);
+	boundedInteger(ttlMs, "ttlMs", 1e3, ABSOLUTE_MAX_TTL_MS);
 	const body = {
-		schemaVersion: 1,
-		teamId: identifier$2(input.teamId, "teamId"),
-		messageId: input.messageId === void 0 ? "msg:" + randomUUID() : messageId(input.messageId, "messageId", "msg"),
+		schemaVersion: 2,
+		teamId: identifier$3(input.teamId, "teamId"),
+		messageId: input.messageId === void 0 ? "msg:" + randomUUID() : messageId$1(input.messageId, "messageId", "msg"),
 		sender: {
-			principalId: identifier$2(input.sender.principalId, "sender.principalId"),
+			principalId: identifier$3(input.sender.principalId, "sender.principalId"),
 			deviceId: normalizeDeviceId(input.sender.deviceId, "sender.deviceId"),
 			keyId: a2aKeyId(key)
 		},
-		recipient: { deviceId: normalizeDeviceId(input.recipient.deviceId, "recipient.deviceId") },
+		recipient: {
+			teamId: identifier$3(input.recipient.teamId ?? input.teamId, "recipient.teamId"),
+			deviceId: normalizeDeviceId(input.recipient.deviceId, "recipient.deviceId")
+		},
 		kind: input.kind,
 		issuedAt,
 		expiresAt: new Date(Date.parse(issuedAt) + ttlMs).toISOString(),
@@ -3639,36 +5125,274 @@ function trustEntry$1(trust, keyId) {
 	return trust[keyId];
 }
 function verifyA2AEnvelope(value, input) {
-	exactKeys$2(value, ENVELOPE_KEYS, "A2A envelope");
+	exactKeys$3(value, ENVELOPE_KEYS, "A2A envelope");
 	const envelope = value;
-	if (envelope.schemaVersion !== 1 || !FLEET_A2A_KINDS.includes(envelope.kind)) throw new FleetA2AError("invalid-envelope", "unsupported A2A envelope version or kind");
-	exactKeys$2(envelope.sender, SENDER_KEYS, "sender");
-	exactKeys$2(envelope.recipient, RECIPIENT_KEYS, "recipient");
-	identifier$2(envelope.teamId, "teamId");
-	messageId(envelope.messageId, "messageId", "msg");
-	identifier$2(envelope.sender.principalId, "sender.principalId");
+	if (envelope.schemaVersion !== 2 || !FLEET_A2A_KINDS.includes(envelope.kind)) throw new FleetA2AError("invalid-envelope", "unsupported A2A envelope version or kind");
+	exactKeys$3(envelope.sender, SENDER_KEYS, "sender");
+	exactKeys$3(envelope.recipient, RECIPIENT_KEYS, "recipient");
+	identifier$3(envelope.teamId, "teamId");
+	messageId$1(envelope.messageId, "messageId", "msg");
+	identifier$3(envelope.sender.principalId, "sender.principalId");
 	normalizeDeviceId(envelope.sender.deviceId, "sender.deviceId");
+	identifier$3(envelope.recipient.teamId, "recipient.teamId");
 	normalizeDeviceId(envelope.recipient.deviceId, "recipient.deviceId");
 	if (!/^ed25519:[0-9a-f]{64}$/.test(envelope.sender.keyId)) throw new FleetA2AError("invalid-envelope", "sender.keyId is invalid");
-	digest(envelope.payloadDigest, "payloadDigest");
+	digest$1(envelope.payloadDigest, "payloadDigest");
 	validateA2APayload(envelope.kind, envelope.payload);
 	if (sha256Canonical(envelope.payload) !== envelope.payloadDigest) throw new FleetA2AError("signature-invalid", "A2A payload digest does not match");
-	const issuedAt = canonicalTime(envelope.issuedAt, "issuedAt");
-	const expiresAt = canonicalTime(envelope.expiresAt, "expiresAt");
-	const now = Date.parse(nowIso(input.now));
+	const issuedAt = canonicalTime$1(envelope.issuedAt, "issuedAt");
+	const expiresAt = canonicalTime$1(envelope.expiresAt, "expiresAt");
+	const now = Date.parse(nowIso$1(input.now));
 	const maxTtlMs = input.maxTtlMs ?? DEFAULT_MAX_TTL_MS;
-	boundedInteger(maxTtlMs, "maxTtlMs", 1e3, 864e5);
+	boundedInteger(maxTtlMs, "maxTtlMs", 1e3, ABSOLUTE_MAX_TTL_MS);
 	if (expiresAt <= issuedAt || expiresAt - issuedAt > maxTtlMs || issuedAt > now + 3e4) throw new FleetA2AError("invalid-time", "A2A envelope validity window is invalid");
 	if (now >= expiresAt) throw new FleetA2AError("message-expired", "A2A envelope has expired");
-	if (envelope.teamId !== input.expectedTeamId || envelope.recipient.deviceId !== input.expectedDeviceId) throw new FleetA2AError("recipient-mismatch", "A2A envelope targets a different team or device");
+	if (envelope.recipient.teamId !== input.expectedTeamId || envelope.recipient.deviceId !== input.expectedDeviceId) throw new FleetA2AError("recipient-mismatch", "A2A envelope targets a different team or device");
+	if (envelope.teamId !== input.expectedTeamId && !isFleetFederationAdvisoryKind(envelope.kind)) throw new FleetA2AError("trust-denied", "foreign teams may send advisory federation messages only");
 	const trusted = trustEntry$1(input.trust, envelope.sender.keyId);
-	if (trusted === void 0 || trusted.principalId !== envelope.sender.principalId || trusted.deviceId !== envelope.sender.deviceId || !trusted.allowedKinds.includes(envelope.kind)) throw new FleetA2AError("trust-denied", "A2A sender is not trusted for this message kind");
+	if (trusted === void 0 || trusted.teamId !== envelope.teamId || trusted.principalId !== envelope.sender.principalId || trusted.deviceId !== envelope.sender.deviceId || !trusted.allowedKinds.includes(envelope.kind)) throw new FleetA2AError("trust-denied", "A2A sender is not trusted for this message kind");
 	if (a2aKeyId(trusted.publicKeyPem) !== trusted.keyId || trusted.keyId !== envelope.sender.keyId) throw new FleetA2AError("trust-denied", "A2A trust entry key identity is invalid");
 	if (typeof envelope.signature !== "string" || !/^[A-Za-z0-9_-]{86}$/.test(envelope.signature)) throw new FleetA2AError("signature-invalid", "A2A signature encoding is invalid");
 	const signature = Buffer.from(envelope.signature, "base64url");
 	const body = Object.fromEntries(BODY_KEYS.map((key) => [key, envelope[key]]));
 	if (!verify(null, Buffer.from(canonicalJson(body), "utf8"), publicKey(trusted.publicKeyPem), signature)) throw new FleetA2AError("signature-invalid", "A2A signature is invalid");
 	return envelope;
+}
+//#endregion
+//#region src/federation/inbox.ts
+const INBOX_SCHEMA_VERSION = 1;
+const MAX_STATE_FILE_BYTES = 65536;
+const MESSAGE_ID_PATTERN = /^msg:([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/;
+const KEY_ID_PATTERN = /^ed25519:[0-9a-f]{64}$/;
+const DIGEST_PATTERN = /^[0-9a-f]{64}$/;
+const SIGNATURE_PATTERN = /^[A-Za-z0-9_-]{86}$/;
+const IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+var FleetFederationError = class extends Error {
+	code;
+	constructor(code, message) {
+		super(message);
+		this.name = "FleetFederationError";
+		this.code = code;
+	}
+};
+function isRecord$2(value) {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function exactKeys$2(value, keys, field) {
+	if (!isRecord$2(value)) throw new FleetFederationError("invalid-state", field + " must be an object");
+	const actual = Object.keys(value).sort();
+	const expected = [...keys].sort();
+	if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) throw new FleetFederationError("invalid-state", field + " has unsupported or missing fields");
+}
+function identifier$2(value, field) {
+	if (typeof value !== "string" || !IDENTIFIER_PATTERN.test(value)) throw new FleetFederationError("invalid-state", field + " is invalid");
+	return value;
+}
+function messageId(value, field = "messageId") {
+	if (typeof value !== "string" || !MESSAGE_ID_PATTERN.test(value)) throw new FleetFederationError("invalid-state", field + " is invalid");
+	return value;
+}
+function digest(value, field) {
+	if (typeof value !== "string" || !DIGEST_PATTERN.test(value)) throw new FleetFederationError("invalid-state", field + " is invalid");
+	return value;
+}
+function canonicalTime(value, field) {
+	if (typeof value !== "string") throw new FleetFederationError("invalid-state", field + " is invalid");
+	const timestamp = Date.parse(value);
+	if (!Number.isFinite(timestamp) || new Date(timestamp).toISOString() !== value) throw new FleetFederationError("invalid-state", field + " is invalid");
+	return value;
+}
+function nowIso(value) {
+	const date = value === void 0 ? /* @__PURE__ */ new Date() : value instanceof Date ? new Date(value.getTime()) : new Date(value);
+	if (!Number.isFinite(date.getTime())) throw new FleetFederationError("invalid-state", "time must be valid");
+	return date.toISOString();
+}
+function stateRoot(value) {
+	if (typeof value !== "string" || value.length === 0 || value.length > 1024 || value.includes("\0") || !isAbsolute(value) || normalize(value) !== value || value === "/") throw new FleetFederationError("unsafe-state-path", "federation inbox root must be a normalized absolute non-root path");
+	return value;
+}
+function messageSegment(value) {
+	const match = MESSAGE_ID_PATTERN.exec(value);
+	if (match?.[1] === void 0) throw new FleetFederationError("invalid-state", "messageId is invalid");
+	return match[1];
+}
+function inboxDirectory(rootDirectory) {
+	return join(rootDirectory, "inbox");
+}
+function acknowledgementsDirectory(rootDirectory) {
+	return join(rootDirectory, "acknowledgements");
+}
+function locksDirectory(rootDirectory) {
+	return join(rootDirectory, "locks");
+}
+function inboxPath(rootDirectory, id) {
+	return join(inboxDirectory(rootDirectory), messageSegment(id) + ".json");
+}
+function assertOwned(info, field) {
+	if (typeof process.getuid === "function" && info.uid !== process.getuid()) throw new FleetFederationError("unsafe-state-permissions", field + " must be owned by the current user");
+}
+async function assertPrivateDirectory$1(path, field) {
+	const info = await lstat(path);
+	if (info.isSymbolicLink() || !info.isDirectory()) throw new FleetFederationError("unsafe-state-path", field + " must be a real directory, not a symlink");
+	assertOwned(info, field);
+	if ((info.mode & 63) !== 0) throw new FleetFederationError("unsafe-state-permissions", field + " must be owner-only (0700)");
+}
+async function ensureLayout(rootValue) {
+	const rootDirectory = stateRoot(rootValue);
+	await mkdir(rootDirectory, {
+		recursive: true,
+		mode: 448
+	});
+	await assertPrivateDirectory$1(rootDirectory, "federation inbox root");
+	for (const directory of [
+		inboxDirectory(rootDirectory),
+		acknowledgementsDirectory(rootDirectory),
+		locksDirectory(rootDirectory)
+	]) {
+		await mkdir(directory, {
+			recursive: true,
+			mode: 448
+		});
+		await assertPrivateDirectory$1(directory, "federation inbox directory");
+	}
+	return rootDirectory;
+}
+async function readPrivateJson(path) {
+	let handle;
+	try {
+		handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+		const info = await handle.stat();
+		if (!info.isFile() || info.size > MAX_STATE_FILE_BYTES) throw new FleetFederationError("invalid-state", "federation state must be a bounded regular file");
+		assertOwned(info, "federation state file");
+		if ((info.mode & 63) !== 0) throw new FleetFederationError("unsafe-state-permissions", "federation state files must be owner-only (0600)");
+		const source = await handle.readFile("utf8");
+		try {
+			return JSON.parse(source);
+		} catch {
+			throw new FleetFederationError("invalid-state", "federation state file must contain JSON");
+		}
+	} catch (error) {
+		if (error.code === "ELOOP") throw new FleetFederationError("unsafe-state-path", "federation state files cannot be symlinks");
+		throw error;
+	} finally {
+		await handle?.close();
+	}
+}
+async function createExclusivePrivateJson(path, value) {
+	const directory = path.slice(0, path.lastIndexOf("/"));
+	const temporaryPath = join(directory, ".tmp-" + randomUUID());
+	let handle;
+	try {
+		handle = await open(temporaryPath, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), 384);
+		await handle.writeFile(JSON.stringify(value, null, 2) + "\n", "utf8");
+		await handle.sync();
+		await handle.close();
+		handle = void 0;
+		try {
+			await link(temporaryPath, path);
+			return "created";
+		} catch (error) {
+			if (error.code === "EEXIST") return "exists";
+			throw error;
+		}
+	} finally {
+		await handle?.close();
+		try {
+			await unlink(temporaryPath);
+		} catch (error) {
+			if (error.code !== "ENOENT") throw error;
+		}
+	}
+}
+function parseStoredEnvelope(value) {
+	exactKeys$2(value, [
+		"schemaVersion",
+		"teamId",
+		"messageId",
+		"sender",
+		"recipient",
+		"kind",
+		"issuedAt",
+		"expiresAt",
+		"payloadDigest",
+		"payload",
+		"signature"
+	], "stored federation envelope");
+	if (value.schemaVersion !== 2 || typeof value.kind !== "string" || !FLEET_A2A_KINDS.includes(value.kind) || !isFleetFederationAdvisoryKind(value.kind)) throw new FleetFederationError("invalid-state", "stored federation envelope schema or kind is invalid");
+	exactKeys$2(value.sender, [
+		"principalId",
+		"deviceId",
+		"keyId"
+	], "stored federation sender");
+	exactKeys$2(value.recipient, ["teamId", "deviceId"], "stored federation recipient");
+	const teamId = identifier$2(value.teamId, "stored federation sender teamId");
+	identifier$2(value.sender.principalId, "stored federation sender principalId");
+	identifier$2(value.sender.deviceId, "stored federation sender deviceId");
+	if (typeof value.sender.keyId !== "string" || !KEY_ID_PATTERN.test(value.sender.keyId)) throw new FleetFederationError("invalid-state", "stored federation sender keyId is invalid");
+	const recipientTeamId = identifier$2(value.recipient.teamId, "stored federation recipient teamId");
+	identifier$2(value.recipient.deviceId, "stored federation recipient deviceId");
+	if (teamId === recipientTeamId) throw new FleetFederationError("invalid-state", "federation inbox accepts foreign-team messages only");
+	messageId(value.messageId);
+	const issuedAt = canonicalTime(value.issuedAt, "stored federation issuedAt");
+	const expiresAt = canonicalTime(value.expiresAt, "stored federation expiresAt");
+	if (Date.parse(expiresAt) <= Date.parse(issuedAt)) throw new FleetFederationError("invalid-state", "stored federation validity window is invalid");
+	const payloadDigest = digest(value.payloadDigest, "stored federation payloadDigest");
+	try {
+		validateA2APayload(value.kind, value.payload);
+	} catch {
+		throw new FleetFederationError("invalid-state", "stored federation payload is invalid");
+	}
+	if (sha256Canonical(value.payload) !== payloadDigest) throw new FleetFederationError("invalid-state", "stored federation payload digest does not match");
+	if (typeof value.signature !== "string" || !SIGNATURE_PATTERN.test(value.signature)) throw new FleetFederationError("invalid-state", "stored federation signature is invalid");
+	return value;
+}
+function parseFederationInboxRecord(value) {
+	exactKeys$2(value, [
+		"schemaVersion",
+		"receivedAt",
+		"envelope"
+	], "federation inbox record");
+	if (value.schemaVersion !== INBOX_SCHEMA_VERSION) throw new FleetFederationError("invalid-state", "federation inbox record schema is invalid");
+	return {
+		schemaVersion: INBOX_SCHEMA_VERSION,
+		receivedAt: canonicalTime(value.receivedAt, "federation receivedAt"),
+		envelope: parseStoredEnvelope(value.envelope)
+	};
+}
+function verifyForeignFederationEnvelope(value, input) {
+	const envelope = verifyA2AEnvelope(value, input);
+	if (envelope.teamId === input.expectedTeamId || !isFleetFederationAdvisoryKind(envelope.kind)) throw new FleetFederationError("not-foreign-advisory", "federation inbox accepts verified foreign advisory messages only");
+	return envelope;
+}
+async function receiveFederationEnvelope(input) {
+	const receivedAt = nowIso(input.receivedAt ?? input.verification.now);
+	const envelope = verifyForeignFederationEnvelope(input.value, {
+		...input.verification,
+		now: receivedAt
+	});
+	const path = inboxPath(await ensureLayout(input.rootDirectory), envelope.messageId);
+	const record = {
+		schemaVersion: INBOX_SCHEMA_VERSION,
+		receivedAt,
+		envelope
+	};
+	if (await createExclusivePrivateJson(path, record) === "created") return {
+		status: "stored",
+		record
+	};
+	const existing = parseFederationInboxRecord(await readPrivateJson(path));
+	if (canonicalJson(existing.envelope) !== canonicalJson(envelope)) throw new FleetFederationError("message-conflict", "messageId is already bound to a different signed envelope");
+	return {
+		status: "duplicate",
+		record: existing
+	};
+}
+/** All federation messages are merely stored; a receipt never means task or tool authorization. */
+function federationReceiptPayload(record) {
+	return {
+		requestMessageId: record.envelope.messageId,
+		status: "stored"
+	};
 }
 //#endregion
 //#region src/a2a/runtime.ts
@@ -3682,6 +5406,34 @@ var FleetA2ARuntimeError = class extends Error {
 };
 function hash(value) {
 	return createHash("sha256").update(value, "utf8").digest("hex");
+}
+function readStoredReceipt(value, envelope) {
+	const raw = stateRecord(value, [
+		"schemaVersion",
+		"requestEnvelopeDigest",
+		"receiptDigest",
+		"receipt"
+	], "A2A receipt state");
+	if (raw.schemaVersion !== 1 || typeof raw.requestEnvelopeDigest !== "string" || !/^[0-9a-f]{64}$/.test(raw.requestEnvelopeDigest) || typeof raw.receiptDigest !== "string" || !/^[0-9a-f]{64}$/.test(raw.receiptDigest)) throw new FleetA2ARuntimeError("receipt-state-invalid", "A2A receipt state is invalid or legacy-unbound");
+	if (raw.requestEnvelopeDigest !== sha256Canonical(envelope)) throw new FleetA2ARuntimeError("message-id-conflict", "A2A message id is already bound to a different signed envelope");
+	const receiptRaw = stateRecord(raw.receipt, ["requestMessageId", "response"], "A2A receipt");
+	if (receiptRaw.requestMessageId !== envelope.messageId || sha256Canonical(raw.receipt) !== raw.receiptDigest || typeof receiptRaw.response !== "object" || receiptRaw.response === null || Array.isArray(receiptRaw.response)) throw new FleetA2ARuntimeError("receipt-state-invalid", "A2A receipt state does not match its request");
+	const response = receiptRaw.response;
+	try {
+		validateA2APayload(response.kind, response.payload);
+	} catch {
+		throw new FleetA2ARuntimeError("receipt-state-invalid", "A2A receipt response payload is invalid");
+	}
+	if (response.recipient?.teamId !== envelope.teamId || response.recipient.deviceId !== envelope.sender.deviceId) throw new FleetA2ARuntimeError("receipt-state-invalid", "A2A receipt response targets another sender");
+	return raw.receipt;
+}
+function storedReceipt(envelope, receipt) {
+	return {
+		schemaVersion: 1,
+		requestEnvelopeDigest: sha256Canonical(envelope),
+		receiptDigest: sha256Canonical(receipt),
+		receipt
+	};
 }
 async function ensureDirectory(path) {
 	await mkdir(path, {
@@ -3723,13 +5475,27 @@ async function atomicText(path, value) {
 		throw error;
 	}
 }
+async function exclusiveJson(path, value) {
+	await ensureDirectory(dirname(path));
+	let handle;
+	try {
+		handle = await open(path, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW, 384);
+		await handle.writeFile(JSON.stringify(value, null, 2) + "\n");
+		await handle.sync();
+	} catch (error) {
+		if (error.code === "ELOOP") throw new FleetA2ARuntimeError("unsafe-state-file", "A2A state accepts regular files only");
+		throw error;
+	} finally {
+		await handle?.close();
+	}
+}
 async function readRegularFile$1(path, privateFile = false) {
 	let handle;
 	try {
 		handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
 		const info = await handle.stat();
 		if (!info.isFile()) throw new FleetA2ARuntimeError("unsafe-state-file", "A2A state accepts regular files only");
-		if (privateFile && (info.mode & 63) !== 0) throw new FleetA2ARuntimeError("unsafe-key-permissions", "A2A private key must not be accessible by group or others");
+		if (privateFile && ((info.mode & 63) !== 0 || typeof process.getuid === "function" && info.uid !== process.getuid())) throw new FleetA2ARuntimeError("unsafe-state-permissions", "private A2A state must be owner-only and owned by the current user");
 		return await handle.readFile("utf8");
 	} catch (error) {
 		if (error.code === "ELOOP") throw new FleetA2ARuntimeError("unsafe-state-file", "A2A state accepts regular files only");
@@ -3751,11 +5517,18 @@ async function readA2ATrustStore(config) {
 		"teamId",
 		"entries"
 	], "trust store");
-	if (raw.schemaVersion !== 1 || raw.teamId !== config.a2a.teamId || !Array.isArray(raw.entries)) throw new FleetA2ARuntimeError("invalid-config", "trust store schema or team identity is invalid");
+	if (raw.schemaVersion !== 1 && raw.schemaVersion !== 2 || raw.teamId !== config.a2a.teamId || !Array.isArray(raw.entries)) throw new FleetA2ARuntimeError("invalid-config", "trust store schema or team identity is invalid");
 	const trust = /* @__PURE__ */ new Map();
 	for (let index = 0; index < raw.entries.length; index += 1) {
 		const entry = raw.entries[index];
-		exactKeys$1(entry, [
+		exactKeys$1(entry, raw.schemaVersion === 1 ? [
+			"keyId",
+			"principalId",
+			"deviceId",
+			"publicKeyPem",
+			"allowedKinds"
+		] : [
+			"teamId",
 			"keyId",
 			"principalId",
 			"deviceId",
@@ -3763,35 +5536,51 @@ async function readA2ATrustStore(config) {
 			"allowedKinds"
 		], `trust store entries[${index}]`);
 		if (typeof entry.keyId !== "string" || typeof entry.principalId !== "string" || typeof entry.deviceId !== "string" || typeof entry.publicKeyPem !== "string" || !Array.isArray(entry.allowedKinds) || entry.allowedKinds.some((kind) => typeof kind !== "string" || !FLEET_A2A_KINDS.includes(kind))) throw new FleetA2ARuntimeError("invalid-config", "trust store entry is invalid");
-		if (!/^ed25519:[0-9a-f]{64}$/.test(entry.keyId) || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(entry.principalId) || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(entry.deviceId) || new Set(entry.allowedKinds).size !== entry.allowedKinds.length) throw new FleetA2ARuntimeError("invalid-config", "trust store entry identity or capabilities are invalid");
+		const senderTeamId = raw.schemaVersion === 1 ? config.a2a.teamId : entry.teamId;
+		if (typeof senderTeamId !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(senderTeamId) || !/^ed25519:[0-9a-f]{64}$/.test(entry.keyId) || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(entry.principalId) || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(entry.deviceId) || new Set(entry.allowedKinds).size !== entry.allowedKinds.length) throw new FleetA2ARuntimeError("invalid-config", "trust store entry identity or capabilities are invalid");
 		try {
 			if (a2aKeyId(entry.publicKeyPem) !== entry.keyId) throw new Error("key mismatch");
 		} catch {
 			throw new FleetA2ARuntimeError("invalid-config", "trust store entry key identity is invalid");
 		}
 		if (trust.has(entry.keyId)) throw new FleetA2ARuntimeError("invalid-config", "trust store key ids must be unique");
-		trust.set(entry.keyId, entry);
+		trust.set(entry.keyId, {
+			...entry,
+			teamId: senderTeamId
+		});
 	}
 	return trust;
 }
 async function privateKeyPem(config) {
 	return readRegularFile$1(config.a2a.privateKeyPath, true);
 }
-async function signA2AMessage(config, recipientDeviceId, kind, payload, now = /* @__PURE__ */ new Date()) {
+async function signA2AMessage(config, recipientDeviceId, kind, payload, now = /* @__PURE__ */ new Date(), recipientTeamId) {
 	assertA2AReadyConfig(config);
+	const ttlMs = messageTtlMs(config, kind, payload, now, recipientTeamId !== void 0 && recipientTeamId !== config.a2a.teamId);
 	return createA2AEnvelope({
 		teamId: config.a2a.teamId,
 		sender: {
 			principalId: config.a2a.principalId,
 			deviceId: config.deviceId
 		},
-		recipient: { deviceId: recipientDeviceId },
+		recipient: {
+			teamId: recipientTeamId ?? config.a2a.teamId,
+			deviceId: recipientDeviceId
+		},
 		kind,
 		payload,
 		privateKey: await privateKeyPem(config),
 		now,
-		ttlMs: Math.min(3e5, config.a2a.maxMessageTtlMs)
+		ttlMs
 	});
+}
+function messageTtlMs(config, kind, payload, now, foreign) {
+	const shortTtlMs = Math.min(3e5, config.a2a.maxMessageTtlMs);
+	if (!foreign || !isFleetFederationAdvisoryKind(kind)) return shortTtlMs;
+	if (kind !== "approval.request") return config.a2a.maxMessageTtlMs;
+	const remainingMs = (typeof payload.expiresAt === "string" ? Date.parse(payload.expiresAt) : NaN) - now.getTime();
+	if (!Number.isFinite(remainingMs) || remainingMs < 1e3) throw new FleetA2ARuntimeError("message-expired", "federation approval request expires too soon to sign");
+	return Math.min(config.a2a.maxMessageTtlMs, remainingMs);
 }
 async function verifyA2AMessage(config, value, now = /* @__PURE__ */ new Date()) {
 	assertA2AReadyConfig(config);
@@ -3841,7 +5630,10 @@ function stateDigest(value, field, nullable = false) {
 	return value;
 }
 function parseTaskRecord(value, expectedTaskId) {
-	const raw = stateRecord(value, [
+	const schema = typeof value === "object" && value !== null && !Array.isArray(value) ? value.schemaVersion : void 0;
+	const legacy = schema === 1;
+	const executionBound = schema === 3;
+	const raw = stateRecord(value, legacy ? [
 		"schemaVersion",
 		"taskId",
 		"requestMessageId",
@@ -3856,21 +5648,74 @@ function parseTaskRecord(value, expectedTaskId) {
 		"deadlineAt",
 		"resultDigest",
 		"errorCode"
+	] : executionBound ? [
+		"schemaVersion",
+		"taskId",
+		"requestMessageId",
+		"senderDeviceId",
+		"senderPrincipalId",
+		"senderKeyId",
+		"workspaceId",
+		"workspacePath",
+		"profile",
+		"executionProfileHash",
+		"promptDigest",
+		"manifestDigest",
+		"releaseDigest",
+		"policyId",
+		"policyDigest",
+		"taskBindingDigest",
+		"state",
+		"createdAt",
+		"updatedAt",
+		"deadlineAt",
+		"resultDigest",
+		"errorCode"
+	] : [
+		"schemaVersion",
+		"taskId",
+		"requestMessageId",
+		"senderDeviceId",
+		"senderPrincipalId",
+		"senderKeyId",
+		"workspaceId",
+		"workspacePath",
+		"profile",
+		"promptDigest",
+		"manifestDigest",
+		"releaseDigest",
+		"policyId",
+		"policyDigest",
+		"taskBindingDigest",
+		"state",
+		"createdAt",
+		"updatedAt",
+		"deadlineAt",
+		"resultDigest",
+		"errorCode"
 	], "task record");
 	const taskId = stateText(raw.taskId, "task record.taskId");
 	taskSegment(taskId);
 	const state = stateText(raw.state, "task record.state", 24);
-	if (raw.schemaVersion !== 1 || taskId !== expectedTaskId || !TASK_STATES.has(state)) throw new FleetA2ARuntimeError("invalid-task-state", "task record identity, schema or state is invalid");
+	if (raw.schemaVersion !== 1 && raw.schemaVersion !== 2 && raw.schemaVersion !== 3 || taskId !== expectedTaskId || !TASK_STATES.has(state)) throw new FleetA2ARuntimeError("invalid-task-state", "task record identity, schema or state is invalid");
 	const errorCode = raw.errorCode === null ? null : stateText(raw.errorCode, "task record.errorCode", 64);
 	return {
-		schemaVersion: 1,
+		schemaVersion: raw.schemaVersion,
 		taskId,
 		requestMessageId: stateText(raw.requestMessageId, "task record.requestMessageId", 64),
 		senderDeviceId: stateText(raw.senderDeviceId, "task record.senderDeviceId", 64),
 		senderPrincipalId: stateText(raw.senderPrincipalId, "task record.senderPrincipalId", 64),
+		senderKeyId: legacy ? null : stateText(raw.senderKeyId, "task record.senderKeyId", 80),
 		workspaceId: stateText(raw.workspaceId, "task record.workspaceId", 64),
+		workspacePath: legacy ? null : stateText(raw.workspacePath, "task record.workspacePath", 4096),
 		profile: stateText(raw.profile, "task record.profile", 64),
+		executionProfileHash: executionBound ? stateDigest(raw.executionProfileHash, "task record.executionProfileHash") : null,
 		promptDigest: stateDigest(raw.promptDigest, "task record.promptDigest"),
+		manifestDigest: legacy ? null : stateDigest(raw.manifestDigest, "task record.manifestDigest"),
+		releaseDigest: legacy ? null : stateDigest(raw.releaseDigest, "task record.releaseDigest"),
+		policyId: legacy ? null : stateText(raw.policyId, "task record.policyId", 64),
+		policyDigest: legacy ? null : stateDigest(raw.policyDigest, "task record.policyDigest"),
+		taskBindingDigest: legacy ? null : stateDigest(raw.taskBindingDigest, "task record.taskBindingDigest"),
 		state,
 		createdAt: stateTime(raw.createdAt, "task record.createdAt"),
 		updatedAt: stateTime(raw.updatedAt, "task record.updatedAt"),
@@ -3880,7 +5725,10 @@ function parseTaskRecord(value, expectedTaskId) {
 	};
 }
 function parseTaskRequest(value, expectedTaskId) {
-	const raw = stateRecord(value, [
+	const schema = typeof value === "object" && value !== null && !Array.isArray(value) ? value.schemaVersion : void 0;
+	const legacy = schema === 1;
+	const executionBound = schema === 3;
+	const raw = stateRecord(value, legacy ? [
 		"schemaVersion",
 		"taskId",
 		"requestMessageId",
@@ -3890,19 +5738,65 @@ function parseTaskRequest(value, expectedTaskId) {
 		"profile",
 		"promptDigest",
 		"prompt"
+	] : executionBound ? [
+		"schemaVersion",
+		"taskId",
+		"requestMessageId",
+		"senderDeviceId",
+		"senderPrincipalId",
+		"senderKeyId",
+		"workspaceId",
+		"workspacePath",
+		"profile",
+		"executionProfileHash",
+		"promptDigest",
+		"manifestDigest",
+		"releaseDigest",
+		"policyId",
+		"policyDigest",
+		"taskBindingDigest",
+		"deadline",
+		"prompt"
+	] : [
+		"schemaVersion",
+		"taskId",
+		"requestMessageId",
+		"senderDeviceId",
+		"senderPrincipalId",
+		"senderKeyId",
+		"workspaceId",
+		"workspacePath",
+		"profile",
+		"promptDigest",
+		"manifestDigest",
+		"releaseDigest",
+		"policyId",
+		"policyDigest",
+		"taskBindingDigest",
+		"deadline",
+		"prompt"
 	], "task request");
-	if (raw.schemaVersion !== 1 || raw.taskId !== expectedTaskId || typeof raw.prompt !== "string" || raw.prompt.length === 0 || raw.prompt.includes("\0")) throw new FleetA2ARuntimeError("invalid-task-state", "task request identity, schema or prompt is invalid");
+	if (raw.schemaVersion !== 1 && raw.schemaVersion !== 2 && raw.schemaVersion !== 3 || raw.taskId !== expectedTaskId || typeof raw.prompt !== "string" || raw.prompt.length === 0 || raw.prompt.includes("\0")) throw new FleetA2ARuntimeError("invalid-task-state", "task request identity, schema or prompt is invalid");
 	const promptDigest = stateDigest(raw.promptDigest, "task request.promptDigest");
 	if (hash(raw.prompt) !== promptDigest) throw new FleetA2ARuntimeError("invalid-task-state", "task request prompt digest is invalid");
 	return {
-		schemaVersion: 1,
+		schemaVersion: raw.schemaVersion,
 		taskId: expectedTaskId,
 		requestMessageId: stateText(raw.requestMessageId, "task request.requestMessageId", 64),
 		senderDeviceId: stateText(raw.senderDeviceId, "task request.senderDeviceId", 64),
 		senderPrincipalId: stateText(raw.senderPrincipalId, "task request.senderPrincipalId", 64),
+		senderKeyId: legacy ? null : stateText(raw.senderKeyId, "task request.senderKeyId", 80),
 		workspaceId: stateText(raw.workspaceId, "task request.workspaceId", 64),
+		workspacePath: legacy ? null : stateText(raw.workspacePath, "task request.workspacePath", 4096),
 		profile: stateText(raw.profile, "task request.profile", 64),
+		executionProfileHash: executionBound ? stateDigest(raw.executionProfileHash, "task request.executionProfileHash") : null,
 		promptDigest,
+		manifestDigest: legacy ? null : stateDigest(raw.manifestDigest, "task request.manifestDigest"),
+		releaseDigest: legacy ? null : stateDigest(raw.releaseDigest, "task request.releaseDigest"),
+		policyId: legacy ? null : stateText(raw.policyId, "task request.policyId", 64),
+		policyDigest: legacy ? null : stateDigest(raw.policyDigest, "task request.policyDigest"),
+		taskBindingDigest: legacy ? null : stateDigest(raw.taskBindingDigest, "task request.taskBindingDigest"),
+		deadline: legacy ? null : stateTime(raw.deadline, "task request.deadline"),
 		prompt: raw.prompt
 	};
 }
@@ -4001,72 +5895,228 @@ async function launchTaskWorker(launch, taskId) {
 	child.stdin.end(JSON.stringify({ taskId }) + "\n");
 	child.unref();
 }
-async function staleProcessLock(path) {
-	let source;
+async function readProcessLockSnapshot(path) {
+	let handle;
 	try {
-		source = await readRegularFile$1(path);
+		handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+		const info = await handle.stat();
+		if (!info.isFile()) throw new FleetA2ARuntimeError("unsafe-state-file", "A2A lock must be a regular file");
+		return {
+			source: await handle.readFile("utf8"),
+			dev: info.dev,
+			ino: info.ino,
+			mtimeMs: info.mtimeMs
+		};
 	} catch (error) {
-		if (error.code === "ENOENT") return true;
+		if (error.code === "ENOENT") return null;
+		if (error.code === "ELOOP") throw new FleetA2ARuntimeError("unsafe-state-file", "A2A lock must not be a symbolic link");
+		throw error;
+	} finally {
+		await handle?.close();
+	}
+}
+async function observeProcessLock(path) {
+	const snapshot = await readProcessLockSnapshot(path);
+	if (snapshot === null) return { state: "missing" };
+	try {
+		const owner = JSON.parse(snapshot.source);
+		if (typeof owner.pid === "number" && Number.isSafeInteger(owner.pid) && owner.pid > 0 && typeof owner.token === "string") return await processAlive(owner.pid) ? { state: "active" } : {
+			state: "stale",
+			snapshot
+		};
+	} catch {}
+	return Date.now() - snapshot.mtimeMs > 3e4 ? {
+		state: "stale",
+		snapshot
+	} : { state: "active" };
+}
+function sameProcessLockIdentity(snapshot, expected) {
+	return snapshot !== null && snapshot.dev === expected.dev && snapshot.ino === expected.ino;
+}
+async function casUnlinkProcessLock(path, expected) {
+	const claimPath = path + ".reap-" + hash(expected.source);
+	try {
+		await link(path, claimPath);
+	} catch (error) {
+		if (error.code === "ENOENT" || error.code === "EEXIST") return false;
 		throw error;
 	}
 	try {
-		const owner = JSON.parse(source);
-		if (typeof owner.pid === "number" && Number.isSafeInteger(owner.pid) && owner.pid > 0 && typeof owner.token === "string") return !await processAlive(owner.pid);
-	} catch {}
-	const info = await lstat(path);
-	return Date.now() - info.mtimeMs > 3e4;
+		const [claimed, current] = await Promise.all([readProcessLockSnapshot(claimPath), readProcessLockSnapshot(path)]);
+		if (!sameProcessLockIdentity(claimed, expected) || !sameProcessLockIdentity(current, expected)) return false;
+		await rm(path);
+		return true;
+	} finally {
+		await rm(claimPath, { force: true });
+	}
 }
-async function acquireProcessLock(path, busyCode, busyMessage) {
+async function reclaimStaleProcessLock(path, observation, hooks) {
+	await hooks?.beforeStaleLockClaim?.(path);
+	return casUnlinkProcessLock(path, observation.snapshot);
+}
+async function createProcessLock(path, fields = {}) {
+	const token = randomUUID();
+	let handle;
+	let createdLock;
+	try {
+		handle = await open(path, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW, 384);
+		const info = await handle.stat();
+		createdLock = {
+			path,
+			token,
+			dev: info.dev,
+			ino: info.ino
+		};
+		await handle.writeFile(JSON.stringify({
+			...fields,
+			pid: process.pid,
+			token,
+			at: (/* @__PURE__ */ new Date()).toISOString()
+		}) + "\n");
+		await handle.sync();
+		return createdLock;
+	} catch (error) {
+		if (error.code === "EEXIST") return null;
+		if (createdLock !== void 0) try {
+			await releaseProcessLock(createdLock);
+		} catch {}
+		throw error;
+	} finally {
+		await handle?.close();
+	}
+}
+async function acquireProcessLock(path, busyCode, busyMessage, hooks) {
 	await ensureDirectory(dirname(path));
-	for (let attempt = 0; attempt < 3; attempt += 1) {
-		const token = randomUUID();
-		let handle;
-		try {
-			handle = await open(path, "wx", 384);
-			await handle.writeFile(JSON.stringify({
-				pid: process.pid,
-				token,
-				at: (/* @__PURE__ */ new Date()).toISOString()
-			}) + "\n");
-			await handle.sync();
-			return {
-				path,
-				token
-			};
-		} catch (error) {
-			if (error.code !== "EEXIST") throw error;
-			if (!await staleProcessLock(path)) throw new FleetA2ARuntimeError(busyCode, busyMessage);
-			await rm(path, { force: true });
-		} finally {
-			await handle?.close();
+	for (let attempt = 0; attempt < 4; attempt += 1) {
+		const created = await createProcessLock(path);
+		if (created !== null) return created;
+		const observation = await observeProcessLock(path);
+		if (observation.state === "missing") continue;
+		if (observation.state === "active") throw new FleetA2ARuntimeError(busyCode, busyMessage);
+		if (!await reclaimStaleProcessLock(path, observation, hooks)) {
+			if ((await observeProcessLock(path)).state === "active") throw new FleetA2ARuntimeError(busyCode, busyMessage);
 		}
 	}
 	throw new FleetA2ARuntimeError(busyCode, busyMessage);
 }
 async function releaseProcessLock(lock) {
 	try {
-		if (JSON.parse(await readRegularFile$1(lock.path)).token === lock.token) await rm(lock.path, { force: true });
+		const snapshot = await readProcessLockSnapshot(lock.path);
+		if (snapshot === null || snapshot.dev !== lock.dev || snapshot.ino !== lock.ino) return;
+		if (JSON.parse(snapshot.source).token === lock.token) await casUnlinkProcessLock(lock.path, snapshot);
 	} catch (error) {
 		if (error.code !== "ENOENT") throw error;
 	}
 }
 async function processLockActive(path) {
-	try {
-		if (!await staleProcessLock(path)) return true;
-		await rm(path, { force: true });
-		return false;
-	} catch (error) {
-		if (error.code === "ENOENT") return false;
-		throw error;
+	for (let attempt = 0; attempt < 3; attempt += 1) {
+		const observation = await observeProcessLock(path);
+		if (observation.state === "missing") return false;
+		if (observation.state === "active") return true;
+		if (await reclaimStaleProcessLock(path, observation)) return false;
 	}
+	return true;
 }
 function taskMatchesEnvelope(record, envelope, payload) {
-	return record.promptDigest === hash(payload.prompt) && record.senderDeviceId === envelope.sender.deviceId && record.senderPrincipalId === envelope.sender.principalId && record.workspaceId === payload.workspaceId && record.profile === payload.profile;
+	if (record.schemaVersion !== 3 || record.workspacePath === null || record.executionProfileHash === null || record.taskBindingDigest === null) return false;
+	let binding;
+	try {
+		binding = createTaskBindingDigest({
+			teamId: envelope.teamId,
+			submitMessageId: envelope.messageId,
+			submitPayloadDigest: envelope.payloadDigest,
+			sender: envelope.sender,
+			recipientDeviceId: envelope.recipient.deviceId,
+			taskId: payload.taskId,
+			workspaceId: payload.workspaceId,
+			workspacePath: record.workspacePath,
+			profile: payload.profile,
+			executionProfileHash: payload.executionProfileHash,
+			manifestDigest: payload.manifestDigest,
+			releaseDigest: payload.releaseDigest,
+			policyId: payload.policyId,
+			policyDigest: payload.policyDigest,
+			deadline: payload.deadline
+		});
+	} catch {
+		return false;
+	}
+	return record.promptDigest === hash(payload.prompt) && record.senderDeviceId === envelope.sender.deviceId && record.senderPrincipalId === envelope.sender.principalId && record.senderKeyId === envelope.sender.keyId && record.workspaceId === payload.workspaceId && record.profile === payload.profile && record.executionProfileHash === payload.executionProfileHash && record.manifestDigest === payload.manifestDigest && record.releaseDigest === payload.releaseDigest && record.policyId === payload.policyId && record.policyDigest === payload.policyDigest && record.deadlineAt === payload.deadline && record.taskBindingDigest === binding;
+}
+async function taskWorkspace(config, workspaceId) {
+	const configured = config.tasks.workspaces[workspaceId];
+	if (configured === void 0) throw new FleetA2ARuntimeError("task-policy-denied", "task workspace is not allowed by local policy");
+	const info = await lstat(configured).catch(() => void 0);
+	if (info === void 0 || info.isSymbolicLink() || !info.isDirectory()) throw new FleetA2ARuntimeError("task-policy-denied", "task workspace must be an existing real directory");
+	return realpath(configured);
+}
+async function assertTaskReleaseBinding(config, manifestDigest, releaseDigest) {
+	if (hash(await readRegularFile$1(config.manifestPath)) !== manifestDigest) throw new FleetA2ARuntimeError("task-release-mismatch", "task manifest does not match the active profile manifest");
+	const applied = await readAppliedRelease(config);
+	if (applied === null || applied.releaseDigest !== releaseDigest) throw new FleetA2ARuntimeError("task-release-mismatch", "task release does not match the active applied release");
+}
+async function assertTaskExecutionProfile(config, profile, executionProfileHash) {
+	try {
+		await assertExecutionProfileHash(config.dshHome, profile, executionProfileHash);
+	} catch {
+		throw new FleetA2ARuntimeError("task-execution-profile-mismatch", "task execution profile no longer matches its signed profile hash");
+	}
+}
+function taskPolicy(config, policyId, policyDigest) {
+	try {
+		return resolveTaskPolicy(config.tasks, policyId, policyDigest);
+	} catch {
+		throw new FleetA2ARuntimeError("task-policy-denied", "task policy is not installed, enabled, or digest-matched locally");
+	}
+}
+function assertTaskOwner(record, envelope) {
+	if (record.schemaVersion !== 2 && record.schemaVersion !== 3 || record.senderKeyId === null) throw new FleetA2ARuntimeError("legacy-task-owner-unbound", "legacy tasks cannot be controlled through the signed task channel");
+	if (record.senderDeviceId !== envelope.sender.deviceId || record.senderPrincipalId !== envelope.sender.principalId || record.senderKeyId !== envelope.sender.keyId) throw new FleetA2ARuntimeError("task-owner-mismatch", "the signed caller does not own this task");
+}
+function assertBoundTaskState(record, request) {
+	if (record.schemaVersion !== 3 || request.schemaVersion !== 3 || record.senderKeyId === null || record.workspacePath === null || record.manifestDigest === null || record.releaseDigest === null || record.executionProfileHash === null || record.policyId === null || record.policyDigest === null || record.taskBindingDigest === null || request.senderKeyId !== record.senderKeyId || request.workspacePath !== record.workspacePath || request.executionProfileHash !== record.executionProfileHash || request.manifestDigest !== record.manifestDigest || request.releaseDigest !== record.releaseDigest || request.policyId !== record.policyId || request.policyDigest !== record.policyDigest || request.taskBindingDigest !== record.taskBindingDigest || request.deadline !== record.deadlineAt) throw new FleetA2ARuntimeError("task-binding-invalid", "task execution requires an intact schema-v3 release, profile and policy binding");
+}
+async function assertExecutableTaskBinding(config, record, request) {
+	assertBoundTaskState(record, request);
+	if (request.requestMessageId !== record.requestMessageId || request.senderDeviceId !== record.senderDeviceId || request.senderPrincipalId !== record.senderPrincipalId || request.workspaceId !== record.workspaceId || request.profile !== record.profile || request.promptDigest !== record.promptDigest) throw new FleetA2ARuntimeError("task-request-mismatch", "task request does not match its durable record");
+	if (Date.now() >= Date.parse(record.deadlineAt)) throw new FleetA2ARuntimeError("task-timeout", "task deadline has expired");
+	await assertTaskReleaseBinding(config, record.manifestDigest, record.releaseDigest);
+	await assertTaskExecutionProfile(config, record.profile, record.executionProfileHash);
+	const policy = taskPolicy(config, record.policyId, record.policyDigest);
+	const workspacePath = await taskWorkspace(config, record.workspaceId);
+	if (workspacePath !== record.workspacePath) throw new FleetA2ARuntimeError("task-policy-denied", "task workspace binding changed after acceptance");
+	return {
+		workspacePath,
+		policy
+	};
 }
 async function acceptTask(config, envelope, launch) {
 	if (!config.tasks.enabled) throw new FleetA2ARuntimeError("tasks-disabled", "remote tasks are disabled on this device");
 	const payload = envelope.payload;
-	if (config.tasks.workspaces[payload.workspaceId] === void 0 || !config.tasks.profiles.includes(payload.profile)) throw new FleetA2ARuntimeError("task-policy-denied", "task workspace or profile is not allowed by local policy");
+	if (!config.tasks.profiles.includes(payload.profile)) throw new FleetA2ARuntimeError("task-policy-denied", "task workspace or profile is not allowed by local policy");
+	const deadline = Date.parse(payload.deadline);
+	if (deadline <= Date.now() || deadline > Date.parse(envelope.issuedAt) + config.tasks.timeoutMs) throw new FleetA2ARuntimeError("task-policy-denied", "task deadline is expired or exceeds the local task timeout");
+	await assertTaskReleaseBinding(config, payload.manifestDigest, payload.releaseDigest);
+	await assertTaskExecutionProfile(config, payload.profile, payload.executionProfileHash);
+	taskPolicy(config, payload.policyId, payload.policyDigest);
+	const workspacePath = await taskWorkspace(config, payload.workspaceId);
+	const taskBindingDigest = createTaskBindingDigest({
+		teamId: envelope.teamId,
+		submitMessageId: envelope.messageId,
+		submitPayloadDigest: envelope.payloadDigest,
+		sender: envelope.sender,
+		recipientDeviceId: config.deviceId,
+		taskId: payload.taskId,
+		workspaceId: payload.workspaceId,
+		workspacePath,
+		profile: payload.profile,
+		executionProfileHash: payload.executionProfileHash,
+		manifestDigest: payload.manifestDigest,
+		releaseDigest: payload.releaseDigest,
+		policyId: payload.policyId,
+		policyDigest: payload.policyDigest,
+		deadline: payload.deadline
+	});
 	const directory = taskDirectory(config, payload.taskId);
 	const promptDigest = hash(payload.prompt);
 	await ensureDirectory(directory);
@@ -4092,33 +6142,50 @@ async function acceptTask(config, envelope, launch) {
 			return existing;
 		}
 		const storedRequest = await readTaskRequest(config, payload.taskId);
-		if (storedRequest !== null && (storedRequest.promptDigest !== promptDigest || storedRequest.prompt !== payload.prompt || storedRequest.senderDeviceId !== envelope.sender.deviceId || storedRequest.senderPrincipalId !== envelope.sender.principalId || storedRequest.workspaceId !== payload.workspaceId || storedRequest.profile !== payload.profile)) throw new FleetA2ARuntimeError("task-id-conflict", "task id is already bound to a different request");
+		if (storedRequest !== null && (storedRequest.schemaVersion !== 3 || storedRequest.promptDigest !== promptDigest || storedRequest.prompt !== payload.prompt || storedRequest.senderDeviceId !== envelope.sender.deviceId || storedRequest.senderPrincipalId !== envelope.sender.principalId || storedRequest.senderKeyId !== envelope.sender.keyId || storedRequest.workspaceId !== payload.workspaceId || storedRequest.workspacePath !== workspacePath || storedRequest.profile !== payload.profile || storedRequest.executionProfileHash !== payload.executionProfileHash || storedRequest.manifestDigest !== payload.manifestDigest || storedRequest.releaseDigest !== payload.releaseDigest || storedRequest.policyId !== payload.policyId || storedRequest.policyDigest !== payload.policyDigest || storedRequest.taskBindingDigest !== taskBindingDigest || storedRequest.deadline !== payload.deadline)) throw new FleetA2ARuntimeError("task-id-conflict", "task id is already bound to a different request");
 		const request = storedRequest ?? {
-			schemaVersion: 1,
+			schemaVersion: 3,
 			taskId: payload.taskId,
 			requestMessageId: envelope.messageId,
 			senderDeviceId: envelope.sender.deviceId,
 			senderPrincipalId: envelope.sender.principalId,
+			senderKeyId: envelope.sender.keyId,
 			workspaceId: payload.workspaceId,
+			workspacePath,
 			profile: payload.profile,
+			executionProfileHash: payload.executionProfileHash,
 			promptDigest,
+			manifestDigest: payload.manifestDigest,
+			releaseDigest: payload.releaseDigest,
+			policyId: payload.policyId,
+			policyDigest: payload.policyDigest,
+			taskBindingDigest,
+			deadline: payload.deadline,
 			prompt: payload.prompt
 		};
 		if (storedRequest === null) await atomicJson(join(directory, "request.json"), request);
 		const createdAt = (/* @__PURE__ */ new Date()).toISOString();
 		const record = {
-			schemaVersion: 1,
+			schemaVersion: 3,
 			taskId: payload.taskId,
 			requestMessageId: request.requestMessageId,
 			senderDeviceId: request.senderDeviceId,
 			senderPrincipalId: request.senderPrincipalId,
+			senderKeyId: envelope.sender.keyId,
 			workspaceId: request.workspaceId,
+			workspacePath,
 			profile: request.profile,
+			executionProfileHash: payload.executionProfileHash,
 			promptDigest: request.promptDigest,
+			manifestDigest: payload.manifestDigest,
+			releaseDigest: payload.releaseDigest,
+			policyId: payload.policyId,
+			policyDigest: payload.policyDigest,
+			taskBindingDigest,
 			state: "accepted",
 			createdAt,
 			updatedAt: createdAt,
-			deadlineAt: new Date(Date.parse(createdAt) + config.tasks.timeoutMs).toISOString(),
+			deadlineAt: payload.deadline,
 			resultDigest: null,
 			errorCode: null
 		};
@@ -4129,9 +6196,164 @@ async function acceptTask(config, envelope, launch) {
 		await releaseProcessLock(creationLock);
 	}
 }
-async function requestCancellation(config, taskId) {
+async function approvalDirectories(config, taskId) {
+	const root = join(taskDirectory(config, taskId), "approvals");
+	let info;
+	try {
+		info = await lstat(root);
+	} catch (error) {
+		if (error.code === "ENOENT") return [];
+		throw error;
+	}
+	if (!info.isDirectory() || info.isSymbolicLink() || (info.mode & 63) !== 0 || typeof process.getuid === "function" && info.uid !== process.getuid()) throw new FleetA2ARuntimeError("unsafe-state-permissions", "task approval state must be an owner-only real directory");
+	return (await readdir(root, { withFileTypes: true })).flatMap((entry) => entry.isDirectory() && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(entry.name) ? [join(root, entry.name)] : []).sort();
+}
+async function readApprovalIntent(path) {
+	try {
+		return parseTaskApprovalIntent(JSON.parse(await readRegularFile$1(path, true)));
+	} catch (error) {
+		if (error.code === "ENOENT") throw error;
+		if (error instanceof FleetA2ARuntimeError) throw error;
+		throw new FleetA2ARuntimeError("task-approval-state-invalid", "task approval intent is invalid");
+	}
+}
+async function validatePendingApproval(config, record, policy, intent) {
+	if (intent.taskId !== record.taskId || intent.taskBindingDigest !== record.taskBindingDigest || intent.executionProfileHash !== record.executionProfileHash) throw new FleetA2ARuntimeError("task-approval-state-invalid", "task approval intent is bound to another task");
+	await assertTaskExecutionProfile(config, record.profile, record.executionProfileHash);
+	const classification = classifyTaskToolCall({
+		policy,
+		workspacePath: record.workspacePath,
+		toolName: intent.toolName,
+		arguments: intent.arguments
+	});
+	if (classification.decision !== "ask" || classification.capability !== intent.capability || classification.argumentsDigest !== intent.argumentsDigest) throw new FleetA2ARuntimeError("task-approval-state-invalid", "task approval intent no longer matches local policy");
+	if (!await validateTaskToolFilesystemScope({
+		workspacePath: record.workspacePath,
+		toolName: intent.toolName,
+		arguments: intent.arguments
+	})) throw new FleetA2ARuntimeError("task-approval-state-invalid", "task approval intent resolves outside the workspace boundary");
+}
+async function verifyCachedApprovalRequest(config, record, value, now) {
+	const privatePem = await privateKeyPem(config);
+	const publicPem = createPublicKey(privatePem).export({
+		type: "spki",
+		format: "pem"
+	}).toString();
+	const keyId = a2aKeyId(publicPem);
+	const envelope = verifyA2AEnvelope(value, {
+		expectedTeamId: config.a2a.teamId,
+		expectedDeviceId: record.senderDeviceId,
+		trust: /* @__PURE__ */ new Map([[keyId, {
+			teamId: config.a2a.teamId,
+			keyId,
+			principalId: config.a2a.principalId,
+			deviceId: config.deviceId,
+			publicKeyPem: publicPem,
+			allowedKinds: ["task.approval.request"]
+		}]]),
+		now,
+		maxTtlMs: config.a2a.maxMessageTtlMs
+	});
+	if (envelope.kind !== "task.approval.request") throw new FleetA2ARuntimeError("task-approval-state-invalid", "cached task approval request has the wrong kind");
+	return envelope;
+}
+async function approvalRequestEnvelope(config, record, approvalDirectory, intent, now) {
+	const path = join(approvalDirectory, "request-envelope.json");
+	try {
+		return await verifyCachedApprovalRequest(config, record, JSON.parse(await readRegularFile$1(path, true)), now);
+	} catch (error) {
+		if (error.code !== "ENOENT") throw error;
+	}
+	const lock = await acquireProcessLock(path + ".lock", "task-approval-in-progress", "task approval request is being prepared");
+	try {
+		try {
+			return await verifyCachedApprovalRequest(config, record, JSON.parse(await readRegularFile$1(path, true)), now);
+		} catch (error) {
+			if (error.code !== "ENOENT") throw error;
+		}
+		const payload = {
+			approvalId: intent.approvalId,
+			taskId: record.taskId,
+			taskBindingDigest: record.taskBindingDigest,
+			toolCallId: intent.toolCallId,
+			toolName: intent.toolName,
+			arguments: intent.arguments,
+			argumentsDigest: intent.argumentsDigest,
+			capability: intent.capability,
+			summary: `${intent.toolName} requests one ${intent.capability} execution`,
+			expiresAt: intent.expiresAt
+		};
+		validateA2APayload("task.approval.request", payload);
+		const envelope = await signA2AMessage(config, record.senderDeviceId, "task.approval.request", payload, now);
+		await atomicJson(path, envelope);
+		return envelope;
+	} finally {
+		await releaseProcessLock(lock);
+	}
+}
+async function pendingApprovalResponse(config, record, now) {
+	if (record.schemaVersion !== 3 || record.workspacePath === null || record.executionProfileHash === null || record.policyId === null || record.policyDigest === null || record.taskBindingDigest === null) return null;
+	const bound = record;
+	const policy = taskPolicy(config, bound.policyId, bound.policyDigest);
+	for (const directory of await approvalDirectories(config, record.taskId)) {
+		if (existsSync(join(directory, "decision.json")) || existsSync(join(directory, "consumed.json"))) continue;
+		const intent = await readApprovalIntent(join(directory, "intent.json"));
+		if (Date.parse(intent.expiresAt) <= now.getTime()) continue;
+		await validatePendingApproval(config, bound, policy, intent);
+		return approvalRequestEnvelope(config, bound, directory, intent, now);
+	}
+	return null;
+}
+async function acceptApprovalDecision(config, envelope, now) {
+	const payload = envelope.payload;
+	const record = await readTaskRecord(config, payload.taskId);
+	if (record === null) throw new FleetA2ARuntimeError("task-not-found", "task was not found");
+	assertTaskOwner(record, envelope);
+	if (record.schemaVersion !== 3 || record.workspacePath === null || record.executionProfileHash === null || record.policyId === null || record.policyDigest === null || record.taskBindingDigest === null || record.taskBindingDigest !== payload.taskBindingDigest) throw new FleetA2ARuntimeError("task-binding-invalid", "approval decision does not match an executable task");
+	if (record.state === "succeeded" || record.state === "failed" || record.state === "cancelled") throw new FleetA2ARuntimeError("task-not-active", "approval decisions are accepted only for active tasks");
+	const directory = join(taskDirectory(config, payload.taskId), "approvals", approvalSegment(payload.approvalId));
+	const intent = await readApprovalIntent(join(directory, "intent.json"));
+	await validatePendingApproval(config, record, taskPolicy(config, record.policyId, record.policyDigest), intent);
+	const request = await verifyCachedApprovalRequest(config, record, JSON.parse(await readRegularFile$1(join(directory, "request-envelope.json"), true)), now);
+	const requestPayload = request.payload;
+	if (payload.approvalId !== intent.approvalId || payload.approvalRequestMessageId !== request.messageId || payload.approvalRequestPayloadDigest !== request.payloadDigest || payload.toolCallId !== intent.toolCallId || payload.argumentsDigest !== intent.argumentsDigest || requestPayload.approvalId !== intent.approvalId || requestPayload.taskBindingDigest !== record.taskBindingDigest) throw new FleetA2ARuntimeError("task-approval-mismatch", "approval decision does not match the signed approval request");
+	const decidedAt = Date.parse(payload.decidedAt);
+	if (decidedAt < Date.parse(request.issuedAt) || decidedAt > now.getTime() + 3e4 || decidedAt >= Date.parse(intent.expiresAt)) throw new FleetA2ARuntimeError("task-approval-expired", "approval decision is outside the signed approval window");
+	const token = payload.decision === "allowed-once" ? createAllowedOnceToken({
+		approvalId: payload.approvalId,
+		approvalRequestMessageId: request.messageId,
+		approvalRequestPayloadDigest: request.payloadDigest,
+		decisionMessageId: envelope.messageId,
+		decisionPayloadDigest: envelope.payloadDigest,
+		taskBindingDigest: record.taskBindingDigest,
+		executionProfileHash: record.executionProfileHash,
+		toolCallId: intent.toolCallId,
+		toolName: intent.toolName,
+		argumentsDigest: intent.argumentsDigest,
+		expiresAt: intent.expiresAt
+	}) : null;
+	const decision = {
+		schemaVersion: 2,
+		decision: payload.decision,
+		decisionEnvelope: envelope,
+		token
+	};
+	const lock = await acquireProcessLock(join(directory, "decision.lock"), "task-approval-in-progress", "task approval decision is being recorded");
+	try {
+		if (existsSync(join(directory, "decision.json"))) {
+			if (sha256Canonical(JSON.parse(await readRegularFile$1(join(directory, "decision.json"), true))) === sha256Canonical(decision)) return;
+			throw new FleetA2ARuntimeError("task-approval-already-decided", "the first signed approval decision is final");
+		}
+		await exclusiveJson(join(directory, "decision.json"), decision);
+	} finally {
+		await releaseProcessLock(lock);
+	}
+}
+async function requestCancellation(config, envelope) {
+	const taskId = envelope.payload.taskId;
 	const record = await readTaskRecord(config, taskId);
 	if (record === null) throw new FleetA2ARuntimeError("task-not-found", "task was not found");
+	assertTaskOwner(record, envelope);
 	if (record.state === "succeeded" || record.state === "failed" || record.state === "cancelled") return record;
 	const marker = join(taskDirectory(config, taskId), "cancel");
 	let handle;
@@ -4148,12 +6370,42 @@ async function requestCancellation(config, taskId) {
 }
 async function receiptResponse(config, envelope, launch, now) {
 	let response;
-	if (envelope.kind === "task.submit") response = workerPayload(await acceptTask(config, envelope, launch), null);
+	if (envelope.teamId !== config.a2a.teamId) response = {
+		kind: "receipt",
+		payload: federationReceiptPayload((await receiveFederationEnvelope({
+			rootDirectory: join(config.stateDir, "federation"),
+			value: envelope,
+			verification: {
+				expectedTeamId: config.a2a.teamId,
+				expectedDeviceId: config.deviceId,
+				trust: await readA2ATrustStore(config),
+				now,
+				maxTtlMs: config.a2a.maxMessageTtlMs
+			},
+			receivedAt: now
+		})).record)
+	};
+	else if (envelope.kind === "task.submit") response = workerPayload(await acceptTask(config, envelope, launch), null);
 	else if (envelope.kind === "task.status") {
-		const { record, result } = await taskResult(config, envelope.payload.taskId);
+		const taskId = envelope.payload.taskId;
+		const ownerRecord = await readTaskRecord(config, taskId);
+		if (ownerRecord === null) throw new FleetA2ARuntimeError("task-not-found", "task was not found");
+		assertTaskOwner(ownerRecord, envelope);
+		const approval = await pendingApprovalResponse(config, ownerRecord, now);
+		if (approval !== null) return approval;
+		const { record, result } = await taskResult(config, taskId);
 		response = workerPayload(record, result);
-	} else if (envelope.kind === "task.cancel") response = workerPayload(await requestCancellation(config, envelope.payload.taskId), null);
-	else {
+	} else if (envelope.kind === "task.cancel") response = workerPayload(await requestCancellation(config, envelope), null);
+	else if (envelope.kind === "task.approval.decision") {
+		await acceptApprovalDecision(config, envelope, now);
+		response = {
+			kind: "receipt",
+			payload: {
+				requestMessageId: envelope.messageId,
+				status: "accepted"
+			}
+		};
+	} else {
 		await atomicJson(join(config.stateDir, "a2a", "inbox", hash(envelope.messageId) + ".json"), envelope);
 		response = {
 			kind: "receipt",
@@ -4169,28 +6421,45 @@ async function receiptResponse(config, envelope, launch, now) {
 			principalId: config.a2a.principalId,
 			deviceId: config.deviceId
 		},
-		recipient: { deviceId: envelope.sender.deviceId },
+		recipient: {
+			teamId: envelope.teamId,
+			deviceId: envelope.sender.deviceId
+		},
 		kind: response.kind,
 		payload: response.payload,
 		privateKey: await privateKeyPem(config),
 		now,
-		ttlMs: Math.min(3e5, config.a2a.maxMessageTtlMs)
+		ttlMs: messageTtlMs(config, response.kind, response.payload, now, envelope.teamId !== config.a2a.teamId)
 	});
 }
-async function receiveA2AMessage(config, value, launch, now = /* @__PURE__ */ new Date()) {
+async function receiveA2AMessage(config, value, launch, now = /* @__PURE__ */ new Date(), lockHooks) {
 	assertA2AReadyConfig(config);
 	const envelope = await verifyA2AMessage(config, value, now);
 	const receiptPath = join(config.stateDir, "a2a", "receipts", hash(envelope.messageId) + ".json");
 	const lockPath = receiptPath + ".lock";
 	try {
-		return JSON.parse(await readRegularFile$1(receiptPath));
+		return readStoredReceipt(JSON.parse(await readRegularFile$1(receiptPath)), envelope);
 	} catch (error) {
 		if (error.code !== "ENOENT") throw error;
 	}
-	const lock = await acquireProcessLock(lockPath, "message-in-progress", "A2A message is already being processed");
+	let lock;
+	try {
+		lock = await acquireProcessLock(lockPath, "message-in-progress", "A2A message is already being processed", lockHooks);
+	} catch (error) {
+		if (error.code !== "message-in-progress") throw error;
+		for (let attempt = 0; attempt < 80; attempt += 1) {
+			try {
+				return readStoredReceipt(JSON.parse(await readRegularFile$1(receiptPath)), envelope);
+			} catch (readError) {
+				if (readError.code !== "ENOENT") throw readError;
+			}
+			await new Promise((resolve) => setTimeout(resolve, 25));
+		}
+		throw error;
+	}
 	try {
 		try {
-			return JSON.parse(await readRegularFile$1(receiptPath));
+			return readStoredReceipt(JSON.parse(await readRegularFile$1(receiptPath)), envelope);
 		} catch (error) {
 			if (error.code !== "ENOENT") throw error;
 		}
@@ -4199,13 +6468,13 @@ async function receiveA2AMessage(config, value, launch, now = /* @__PURE__ */ ne
 			requestMessageId: envelope.messageId,
 			response
 		};
-		await atomicJson(receiptPath, receipt);
+		await atomicJson(receiptPath, storedReceipt(envelope, receipt));
 		return receipt;
 	} finally {
 		await releaseProcessLock(lock);
 	}
 }
-function taskEnvironment(config) {
+function taskEnvironment(config, input) {
 	const path = [
 		dirname(config.dshBinary),
 		dirname(process.execPath),
@@ -4215,6 +6484,8 @@ function taskEnvironment(config) {
 	].join(":");
 	const env = {
 		DSH_HOME: config.dshHome,
+		DSH_PERMISSION_MODE: input.permissionMode,
+		DSH_FLEET_TASK_CONTEXT: input.contextPath,
 		PATH: path,
 		GIT_TERMINAL_PROMPT: "0"
 	};
@@ -4230,21 +6501,54 @@ function taskEnvironment(config) {
 	]) if (process.env[key] !== void 0) env[key] = process.env[key];
 	return env;
 }
-async function runTaskProcess(config, request, cancelPath) {
-	const workspace = config.tasks.workspaces[request.workspaceId];
-	if (workspace === void 0 || !config.tasks.profiles.includes(request.profile)) throw new FleetA2ARuntimeError("task-policy-denied", "task no longer matches local policy");
-	const workspaceInfo = await lstat(workspace).catch(() => void 0);
-	if (workspaceInfo === void 0) throw new FleetA2ARuntimeError("task-policy-denied", "task workspace is unavailable");
-	if (workspaceInfo.isSymbolicLink() || !workspaceInfo.isDirectory()) throw new FleetA2ARuntimeError("task-policy-denied", "task workspace must be a real directory");
+async function runTaskProcess(config, record, request, cancelPath, workerBundlePath) {
+	const { workspacePath, policy } = await assertExecutableTaskBinding(config, record, request);
+	if (!isAbsolute(workerBundlePath) || normalize(workerBundlePath) !== workerBundlePath || /[\r\n\0]/.test(workerBundlePath)) throw new FleetA2ARuntimeError("worker-bundle-invalid", "task worker bundle path must be a normalized absolute path");
+	const workerInfo = await lstat(workerBundlePath).catch(() => void 0);
+	if (workerInfo === void 0 || workerInfo.isSymbolicLink() || !workerInfo.isFile() || typeof process.getuid === "function" && workerInfo.uid !== process.getuid()) throw new FleetA2ARuntimeError("worker-bundle-invalid", "task worker bundle must be a real file owned by the current user");
+	const directory = taskDirectory(config, record.taskId);
+	const contextPath = join(directory, "worker-context.json");
+	const approvalsDir = join(directory, "approvals");
+	await atomicJson(contextPath, {
+		schemaVersion: 2,
+		taskId: record.taskId,
+		taskBindingDigest: record.taskBindingDigest,
+		dshHome: config.dshHome,
+		profile: record.profile,
+		executionProfileHash: record.executionProfileHash,
+		workspacePath,
+		policy,
+		approvalsDir,
+		cancelPath,
+		deadline: record.deadlineAt
+	});
+	const patchPath = join(directory, "worker.patch.yml");
+	await atomicText(patchPath, [
+		"- update:",
+		"    id: approval",
+		"    config:",
+		"      policy: \"never\"",
+		"- insert:",
+		"    - id: fleet-task-policy",
+		`      name: ${JSON.stringify(workerBundlePath)}`,
+		""
+	].join("\n"));
+	const timeoutMs = Math.min(config.tasks.timeoutMs, Date.parse(record.deadlineAt) - Date.now());
+	if (timeoutMs <= 0) throw new FleetA2ARuntimeError("task-timeout", "task deadline has expired");
 	return new Promise((resolve, reject) => {
 		const grouped = process.platform !== "win32";
 		const child = spawn(config.dshBinary, [
 			"--profile",
 			request.profile,
+			"--patch",
+			patchPath,
 			request.prompt
 		], {
-			cwd: workspace,
-			env: taskEnvironment(config),
+			cwd: workspacePath,
+			env: taskEnvironment(config, {
+				permissionMode: policy.permissionMode,
+				contextPath
+			}),
 			stdio: [
 				"ignore",
 				"pipe",
@@ -4272,7 +6576,7 @@ async function runTaskProcess(config, request, cancelPath) {
 			forceTimer = setTimeout(() => kill("SIGKILL"), 2e3);
 			forceTimer.unref();
 		};
-		const timeout = setTimeout(() => stop("timeout"), config.tasks.timeoutMs);
+		const timeout = setTimeout(() => stop("timeout"), timeoutMs);
 		timeout.unref();
 		const cancel = setInterval(() => {
 			if (existsSync(cancelPath)) stop("cancelled");
@@ -4323,37 +6627,19 @@ async function processAlive(pid) {
 async function acquireTaskSlot(config, taskId) {
 	const directory = join(config.stateDir, "tasks", ".slots");
 	await ensureDirectory(directory);
-	const token = randomUUID();
 	for (;;) {
 		for (let index = 0; index < config.tasks.maxConcurrent; index += 1) {
 			const path = join(directory, String(index) + ".lock");
-			try {
-				const handle = await open(path, "wx", 384);
-				await handle.writeFile(JSON.stringify({
-					pid: process.pid,
-					taskId,
-					token
-				}) + "\n");
-				await handle.close();
-				return {
-					path,
-					token
-				};
-			} catch (error) {
-				if (error.code !== "EEXIST") throw error;
-				try {
-					if (await staleProcessLock(path)) await rm(path, { force: true });
-				} catch (readError) {
-					if (readError.code === "ENOENT") continue;
-					throw readError;
-				}
-			}
+			const created = await createProcessLock(path, { taskId });
+			if (created !== null) return created;
+			const observation = await observeProcessLock(path);
+			if (observation.state === "stale") await reclaimStaleProcessLock(path, observation);
 		}
 		if (existsSync(join(taskDirectory(config, taskId), "cancel"))) throw new FleetA2ARuntimeError("task-cancelled", "task was cancelled while queued");
 		await new Promise((resolve) => setTimeout(resolve, 500));
 	}
 }
-async function runTaskWorker(config, taskId) {
+async function runTaskWorker(config, taskId, workerBundlePath) {
 	assertA2AReadyConfig(config);
 	const directory = taskDirectory(config, taskId);
 	const workerLock = join(directory, "worker.lock");
@@ -4383,13 +6669,14 @@ async function runTaskWorker(config, taskId) {
 			"cancelled"
 		].includes(record.state)) return record;
 		const request = await readTaskRequest(config, taskId);
-		if (request === null || request.requestMessageId !== record.requestMessageId || request.senderDeviceId !== record.senderDeviceId || request.senderPrincipalId !== record.senderPrincipalId || request.workspaceId !== record.workspaceId || request.profile !== record.profile || request.promptDigest !== record.promptDigest) throw new FleetA2ARuntimeError("task-request-mismatch", "task request does not match its durable record");
+		if (request === null) throw new FleetA2ARuntimeError("task-request-mismatch", "task request is missing");
+		await assertExecutableTaskBinding(config, record, request);
 		const cancelPath = join(directory, "cancel");
 		if (existsSync(cancelPath)) return saveTaskRecord(config, record, "cancelled", { errorCode: "cancelled" });
 		slot = await acquireTaskSlot(config, taskId);
 		if (existsSync(cancelPath)) return saveTaskRecord(config, record, "cancelled", { errorCode: "cancelled" });
 		record = await saveTaskRecord(config, record, "running");
-		const result = await runTaskProcess(config, request, cancelPath);
+		const result = await runTaskProcess(config, record, request, cancelPath, workerBundlePath);
 		if (result.reason === "cancelled") return saveTaskRecord(config, record, "cancelled", { errorCode: "cancelled" });
 		if (result.reason !== void 0) return saveTaskRecord(config, record, "failed", { errorCode: result.reason });
 		if (result.code !== 0) return saveTaskRecord(config, record, "failed", { errorCode: "dsh-task-failed" });
@@ -4409,13 +6696,14 @@ async function runTaskWorker(config, taskId) {
 		return saveTaskRecord(config, record, code === "task-cancelled" ? "cancelled" : "failed", { errorCode: code });
 	} finally {
 		if (slot !== void 0) try {
-			if (JSON.parse(await readRegularFile$1(slot.path)).token === slot.token) await rm(slot.path, { force: true });
+			await releaseProcessLock(slot);
 		} catch {}
 		await releaseProcessLock(worker);
 	}
 }
 async function resumeAcceptedTasks(config, launch) {
 	assertA2AReadyConfig(config);
+	if (!config.tasks.enabled) return 0;
 	const root = join(config.stateDir, "tasks");
 	let entries;
 	try {
@@ -4435,9 +6723,19 @@ async function resumeAcceptedTasks(config, launch) {
 			"cancel-requested"
 		].includes(record.state)) continue;
 		if (await processLockActive(join(taskDirectory(config, taskId), "worker.lock"))) continue;
-		if (record.state === "accepted" && Date.now() <= Date.parse(record.deadlineAt) + 3e4) {
-			await launchTaskWorker(launch, taskId);
-			resumed += 1;
+		if (record.state === "accepted" && Date.now() < Date.parse(record.deadlineAt)) {
+			const request = await readTaskRequest(config, taskId);
+			if (request === null) {
+				await saveTaskRecord(config, record, "failed", { errorCode: "task-request-mismatch" });
+				continue;
+			}
+			try {
+				await assertExecutableTaskBinding(config, record, request);
+				await launchTaskWorker(launch, taskId);
+				resumed += 1;
+			} catch (error) {
+				await saveTaskRecord(config, record, "failed", { errorCode: typeof error.code === "string" ? error.code : "task-binding-invalid" });
+			}
 		} else await taskResult(config, taskId);
 	}
 	return resumed;
@@ -4487,21 +6785,30 @@ async function doctorAgent(config, now = /* @__PURE__ */ new Date(), signal) {
 		releaseId: inspection.assignedRelease.releaseId,
 		releaseVersion: inspection.assignedRelease.releaseVersion,
 		healthVerified: true,
+		observedRuntimeDigest: inspection.observedRuntimeDigest,
+		observedServiceDefinitionDigest: inspection.observedServiceDefinitionDigest,
+		teamId: config.a2a.teamId,
+		principalId: config.a2a.principalId,
 		identityKeyId: identityProbe.sender.keyId,
 		trustedPeerCount: trust.size,
+		trustedPeers: [...trust.values()].map((entry) => ({
+			keyId: entry.keyId,
+			principalId: entry.principalId,
+			deviceId: entry.deviceId,
+			allowedKinds: [...entry.allowedKinds]
+		})).sort((left, right) => left.deviceId.localeCompare(right.deviceId) || left.keyId.localeCompare(right.keyId)),
 		tasksEnabled: config.tasks.enabled,
 		workspaceIds: Object.keys(config.tasks.workspaces).sort(),
+		taskProfiles: [...config.tasks.profiles].sort(),
+		retention: inspection.retention,
 		executableChecks
 	};
 }
 //#endregion
 //#region src/bootstrap/team-pack.ts
-const FEDERATION_KINDS = /* @__PURE__ */ new Set([
-	"handoff",
-	"approval.request",
-	"approval.decision",
-	"receipt"
-]);
+function compareCanonicalIds(left, right) {
+	return left < right ? -1 : left > right ? 1 : 0;
+}
 function isRecord$1(value) {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -4534,6 +6841,44 @@ function exactVersion(value, field) {
 	if (valid(version) !== version) throw new TypeError(field + " must be an exact semantic version");
 	return version;
 }
+function routePath(value, field) {
+	const path = text(value, field, 1024);
+	if (!isAbsolute(path) || normalize(path) !== path || !/^\/[A-Za-z0-9._/-]+$/.test(path)) throw new TypeError(field + " must be a normalized absolute path without shell metacharacters");
+	return path;
+}
+function parseRoute(value) {
+	if (!isRecord$1(value)) throw new TypeError("route must be an object");
+	const transport = text(value.transport, "route.transport", 16);
+	if (transport !== "local" && transport !== "ssh") throw new TypeError("route.transport must be local or ssh");
+	exactKeys(value, transport === "local" ? [
+		"transport",
+		"nodeBinary",
+		"agentPath",
+		"configPath"
+	] : [
+		"transport",
+		"sshHost",
+		"nodeBinary",
+		"agentPath",
+		"configPath"
+	], "route");
+	const common = {
+		nodeBinary: routePath(value.nodeBinary, "route.nodeBinary"),
+		agentPath: routePath(value.agentPath, "route.agentPath"),
+		configPath: routePath(value.configPath, "route.configPath")
+	};
+	if (transport === "local") return {
+		transport,
+		...common
+	};
+	const sshHost = text(value.sshHost, "route.sshHost", 253);
+	if (sshHost.startsWith("-") || !/^[A-Za-z0-9._-]+$/.test(sshHost)) throw new TypeError("route.sshHost must be a configured host alias");
+	return {
+		transport,
+		sshHost,
+		...common
+	};
+}
 function strings(value, field) {
 	if (!Array.isArray(value) || value.length === 0 || value.some((item) => typeof item !== "string")) throw new TypeError(field + " must be a non-empty string array");
 	const values = value.map((item, index) => identifier$1(item, `${field}[${index}]`));
@@ -4550,6 +6895,7 @@ function runtimeModules(value, field) {
 function trustEntry(value, field, federationOnly) {
 	if (!isRecord$1(value)) throw new TypeError(field + " must be an object");
 	exactKeys(value, [
+		"teamId",
 		"keyId",
 		"principalId",
 		"deviceId",
@@ -4558,7 +6904,7 @@ function trustEntry(value, field, federationOnly) {
 	], field);
 	const allowedKinds = value.allowedKinds;
 	if (!Array.isArray(allowedKinds) || allowedKinds.length === 0 || allowedKinds.some((kind) => typeof kind !== "string" || !FLEET_A2A_KINDS.includes(kind))) throw new TypeError(field + ".allowedKinds is invalid");
-	if (federationOnly && allowedKinds.some((kind) => !FEDERATION_KINDS.has(kind))) throw new TypeError(field + " public federation anchors cannot grant task execution");
+	if (federationOnly && allowedKinds.some((kind) => !isFleetFederationAdvisoryKind(kind))) throw new TypeError(field + " public federation anchors cannot grant task execution");
 	if (new Set(allowedKinds).size !== allowedKinds.length) throw new TypeError(field + ".allowedKinds must not contain duplicates");
 	const keyId = text(value.keyId, field + ".keyId", 80);
 	if (!/^ed25519:[0-9a-f]{64}$/.test(keyId)) throw new TypeError(field + ".keyId is invalid");
@@ -4571,6 +6917,7 @@ function trustEntry(value, field, federationOnly) {
 	}
 	if (derivedKeyId !== keyId) throw new TypeError(field + ".keyId does not match publicKeyPem");
 	return {
+		teamId: identifier$1(value.teamId, field + ".teamId"),
 		keyId,
 		principalId: identifier$1(value.principalId, field + ".principalId"),
 		deviceId: identifier$1(value.deviceId, field + ".deviceId"),
@@ -4670,6 +7017,7 @@ function parseTeamOverlay(source) {
 		"schemaVersion",
 		"team",
 		"device",
+		"route",
 		"release",
 		"privatePlugins",
 		"workspacePaths",
@@ -4707,6 +7055,8 @@ function parseTeamOverlay(source) {
 			...modules === void 0 ? {} : { runtimeModules: modules }
 		};
 	});
+	const privatePluginIds = privatePlugins.map((plugin) => plugin.id);
+	if (new Set(privatePluginIds).size !== privatePluginIds.length) throw new TypeError("privatePlugins ids must be unique");
 	const workspacePaths = {};
 	for (const [rawId, path] of Object.entries(raw.workspacePaths)) {
 		const id = identifier$1(rawId, "workspace id");
@@ -4733,11 +7083,14 @@ function parseTeamOverlay(source) {
 		"enabled",
 		"timeoutMs",
 		"maxOutputBytes",
-		"maxConcurrent"
+		"maxConcurrent",
+		"policyIds"
 	], "agent.tasks");
 	const teamId = identifier$1(raw.team.id, "team.id");
 	const deviceId = identifier$1(raw.device.id, "device.id");
 	const principalId = identifier$1(raw.device.assignedTo, "device.assignedTo");
+	const trustedPeers = raw.trustedPeers.map((entry, index) => trustEntry(entry, `trustedPeers[${index}]`, false));
+	for (const peer of trustedPeers) if (peer.teamId !== teamId && peer.allowedKinds.some((kind) => !isFleetFederationAdvisoryKind(kind))) throw new TypeError("foreign trustedPeers can grant advisory federation messages only");
 	const probe = parseAgentConfig({
 		schemaVersion: 2,
 		deviceId,
@@ -4765,7 +7118,8 @@ function parseTeamOverlay(source) {
 			profiles: ["bootstrap"],
 			timeoutMs: raw.agent.tasks.timeoutMs,
 			maxOutputBytes: raw.agent.tasks.maxOutputBytes,
-			maxConcurrent: raw.agent.tasks.maxConcurrent
+			maxConcurrent: raw.agent.tasks.maxConcurrent,
+			policyIds: raw.agent.tasks.policyIds
 		}
 	});
 	assertReleaseReadyConfig(probe);
@@ -4782,13 +7136,14 @@ function parseTeamOverlay(source) {
 			class: identifier$1(raw.device.class, "device.class"),
 			channel: "stable"
 		},
+		route: parseRoute(raw.route),
 		release: {
 			id: identifier$1(raw.release.id, "release.id"),
 			version: exactVersion(raw.release.version, "release.version")
 		},
 		privatePlugins,
 		workspacePaths,
-		trustedPeers: raw.trustedPeers.map((entry, index) => trustEntry(entry, `trustedPeers[${index}]`, false)),
+		trustedPeers,
 		agent: {
 			dshHome: probe.dshHome,
 			dshBinary: probe.dshBinary,
@@ -4804,7 +7159,8 @@ function parseTeamOverlay(source) {
 				enabled: probe.tasks.enabled,
 				timeoutMs: probe.tasks.timeoutMs,
 				maxOutputBytes: probe.tasks.maxOutputBytes,
-				maxConcurrent: probe.tasks.maxConcurrent
+				maxConcurrent: probe.tasks.maxConcurrent,
+				policyIds: probe.tasks.policyIds
 			}
 		}
 	};
@@ -4814,10 +7170,11 @@ function absoluteOutputPath(value, field) {
 	return value;
 }
 function createTeamAgentConfig(pack, overlay, paths) {
-	const config = parseAgentConfig({
+	const parsed = parseAgentConfig({
 		schemaVersion: 2,
 		deviceId: overlay.device.id,
 		manifestPath: absoluteOutputPath(paths.manifestPath, "manifestPath"),
+		...paths.desiredManifestPath === void 0 ? {} : { desiredManifestPath: absoluteOutputPath(paths.desiredManifestPath, "desiredManifestPath") },
 		dshHome: overlay.agent.dshHome,
 		dshBinary: overlay.agent.dshBinary,
 		pnpmBinary: overlay.agent.pnpmBinary,
@@ -4841,25 +7198,68 @@ function createTeamAgentConfig(pack, overlay, paths) {
 			profiles: pack.taskPolicy.profiles,
 			timeoutMs: overlay.agent.tasks.timeoutMs,
 			maxOutputBytes: overlay.agent.tasks.maxOutputBytes,
-			maxConcurrent: overlay.agent.tasks.maxConcurrent
+			maxConcurrent: overlay.agent.tasks.maxConcurrent,
+			policyIds: overlay.agent.tasks.policyIds
 		}
 	});
-	assertReleaseReadyConfig(config);
-	assertA2AReadyConfig(config);
+	assertReleaseReadyConfig(parsed);
+	assertA2AReadyConfig(parsed);
+	const { policies: _resolvedPolicies, ...serializableTasks } = parsed.tasks;
+	const config = {
+		...parsed,
+		tasks: serializableTasks
+	};
 	return JSON.stringify(config, null, 2) + "\n";
 }
 function instantiateTeamPack(pack, overlay) {
+	const instantiated = instantiateTeamPackSet(pack, [overlay]);
+	const device = instantiated.devices[0];
+	if (device === void 0) throw new TypeError("team pack set did not produce a device");
+	return {
+		manifestYaml: instantiated.manifestYaml,
+		trustStoreJson: device.trustStoreJson,
+		taskPolicy: device.taskPolicy
+	};
+}
+function assertWorkspaceInstantiation(pack, overlay) {
 	const workspaceIds = Object.keys(overlay.workspacePaths).sort();
 	const expectedWorkspaceIds = [...pack.taskPolicy.workspaceIds].sort();
 	if (workspaceIds.length !== expectedWorkspaceIds.length || workspaceIds.some((id, index) => id !== expectedWorkspaceIds[index])) throw new TypeError("overlay workspacePaths must exactly instantiate the pack workspaceIds");
+}
+function assertStableSources(pack, overlay) {
+	if (overlay.device.channel !== "stable") throw new TypeError("device.channel must be stable");
+	const publicPluginIds = /* @__PURE__ */ new Set();
+	for (const plugin of pack.publicPlugins) {
+		if (publicPluginIds.has(plugin.id)) throw new TypeError("publicPlugins ids must be unique");
+		publicPluginIds.add(plugin.id);
+		if (plugin.source.kind === "npm") {
+			if (valid(plugin.source.version) !== plugin.source.version || !/^sha512-[A-Za-z0-9+/]+={0,2}$/.test(plugin.source.integrity)) throw new TypeError("public npm plugin source must use an exact version and sha512 integrity: " + plugin.id);
+		} else if (!/^[0-9a-f]{40}$/.test(plugin.source.revision)) throw new TypeError("public GitHub plugin source must use a lowercase 40-character SHA: " + plugin.id);
+	}
+	const privatePluginIds = /* @__PURE__ */ new Set();
+	for (const plugin of overlay.privatePlugins) {
+		if (privatePluginIds.has(plugin.id)) throw new TypeError("privatePlugins ids must be unique");
+		privatePluginIds.add(plugin.id);
+		if (valid(plugin.version) !== plugin.version || !/^[0-9a-f]{64}$/.test(plugin.digest)) throw new TypeError("private plugin source must use an exact version and lowercase SHA-256: " + plugin.id);
+	}
+}
+function releaseForOverlay(pack, overlay) {
 	const publicIds = new Set(pack.publicPlugins.map((plugin) => plugin.id));
 	for (const plugin of overlay.privatePlugins) if (publicIds.has(plugin.id)) throw new TypeError("private plugin id conflicts with a public pack plugin: " + plugin.id);
-	const releasePlugins = [...pack.publicPlugins.map((plugin) => ({
+	const releasePlugins = [...[...pack.publicPlugins].sort((left, right) => compareCanonicalIds(left.id, right.id)).map((plugin) => ({
 		id: plugin.id,
 		visibility: "public",
-		source: plugin.source,
-		...plugin.runtimeModules === void 0 ? {} : { runtimeModules: plugin.runtimeModules }
-	})), ...overlay.privatePlugins.map((plugin) => ({
+		source: plugin.source.kind === "npm" ? {
+			kind: "npm",
+			version: plugin.source.version,
+			integrity: plugin.source.integrity
+		} : {
+			kind: "github",
+			repository: plugin.source.repository,
+			revision: plugin.source.revision
+		},
+		...plugin.runtimeModules === void 0 ? {} : { runtimeModules: [...plugin.runtimeModules].sort() }
+	})), ...[...overlay.privatePlugins].sort((left, right) => compareCanonicalIds(left.id, right.id)).map((plugin) => ({
 		id: plugin.id,
 		visibility: "private",
 		source: {
@@ -4867,26 +7267,16 @@ function instantiateTeamPack(pack, overlay) {
 			version: plugin.version,
 			digest: plugin.digest
 		},
-		...plugin.runtimeModules === void 0 ? {} : { runtimeModules: plugin.runtimeModules }
+		...plugin.runtimeModules === void 0 ? {} : { runtimeModules: [...plugin.runtimeModules].sort() }
 	}))];
-	const manifestObject = {
-		schemaVersion: 2,
-		team: overlay.team,
-		devices: { [overlay.device.id]: {
-			assignedTo: overlay.device.assignedTo,
-			class: overlay.device.class,
-			channel: overlay.device.channel
-		} },
-		profileReleases: { [overlay.release.id]: {
-			version: overlay.release.version,
-			profile: pack.profile.id,
-			dshRange: pack.profile.dshRange,
-			plugins: releasePlugins
-		} },
-		assignments: { [overlay.device.id]: { [pack.profile.id]: overlay.release.id } }
+	return {
+		version: overlay.release.version,
+		profile: pack.profile.id,
+		dshRange: pack.profile.dshRange,
+		plugins: releasePlugins
 	};
-	const manifestYaml = stringify(manifestObject, { lineWidth: 0 });
-	parseFleetManifest(manifestYaml);
+}
+function deviceTrustAndPolicy(pack, overlay) {
 	const trustEntries = [...pack.trustAnchors, ...overlay.trustedPeers];
 	const keys = /* @__PURE__ */ new Set();
 	for (const entry of trustEntries) {
@@ -4894,9 +7284,8 @@ function instantiateTeamPack(pack, overlay) {
 		keys.add(entry.keyId);
 	}
 	return {
-		manifestYaml,
 		trustStoreJson: JSON.stringify({
-			schemaVersion: 1,
+			schemaVersion: 2,
 			teamId: overlay.team.id,
 			entries: trustEntries
 		}, null, 2) + "\n",
@@ -4904,6 +7293,55 @@ function instantiateTeamPack(pack, overlay) {
 			profiles: pack.taskPolicy.profiles,
 			workspaces: overlay.workspacePaths
 		}
+	};
+}
+function instantiateTeamPackSet(pack, overlays) {
+	if (overlays.length === 0) throw new TypeError("team pack set requires at least one device overlay");
+	const orderedOverlays = [...overlays].sort((left, right) => compareCanonicalIds(left.device.id, right.device.id));
+	const canonicalTeam = orderedOverlays[0]?.team;
+	if (canonicalTeam === void 0) throw new TypeError("team pack set requires at least one device overlay");
+	const seenDevices = /* @__PURE__ */ new Set();
+	const releases = /* @__PURE__ */ new Map();
+	const devices = [];
+	for (const overlay of orderedOverlays) {
+		if (overlay.team.id !== canonicalTeam.id || overlay.team.name !== canonicalTeam.name) throw new TypeError("all overlays must use the exact same team id and name");
+		if (seenDevices.has(overlay.device.id)) throw new TypeError("duplicate device id: " + overlay.device.id);
+		seenDevices.add(overlay.device.id);
+		assertWorkspaceInstantiation(pack, overlay);
+		assertStableSources(pack, overlay);
+		const release = releaseForOverlay(pack, overlay);
+		const existingRelease = releases.get(overlay.release.id);
+		if (existingRelease !== void 0 && JSON.stringify(existingRelease) !== JSON.stringify(release)) throw new TypeError("release id has conflicting definitions: " + overlay.release.id);
+		if (existingRelease === void 0) releases.set(overlay.release.id, release);
+		devices.push({
+			deviceId: overlay.device.id,
+			releaseId: overlay.release.id,
+			overlay,
+			...deviceTrustAndPolicy(pack, overlay)
+		});
+	}
+	const manifestDevices = Object.fromEntries(devices.map((device) => [device.deviceId, {
+		assignedTo: device.overlay.device.assignedTo,
+		class: device.overlay.device.class,
+		channel: device.overlay.device.channel
+	}]));
+	const manifestReleases = Object.fromEntries([...releases.entries()].sort(([left], [right]) => compareCanonicalIds(left, right)));
+	const assignments = Object.fromEntries(devices.map((device) => [device.deviceId, { [pack.profile.id]: device.releaseId }]));
+	const manifestObject = {
+		schemaVersion: 2,
+		team: {
+			id: canonicalTeam.id,
+			...canonicalTeam.name === void 0 ? {} : { name: canonicalTeam.name }
+		},
+		devices: manifestDevices,
+		profileReleases: manifestReleases,
+		assignments
+	};
+	const manifestYaml = stringify(manifestObject, { lineWidth: 0 });
+	parseFleetManifest(manifestYaml);
+	return {
+		manifestYaml,
+		devices
 	};
 }
 //#endregion
@@ -4926,13 +7364,19 @@ async function ensurePrivateDirectory(path) {
 	if ((info.mode & 63) !== 0) throw new TypeError("bootstrap output directory must be owner-only (0700)");
 	if (typeof process.getuid === "function" && info.uid !== process.getuid()) throw new TypeError("bootstrap output directory must be owned by the current user");
 }
-async function readRegularFile(path, privateFile = false) {
+async function assertPrivateDirectory(path, field) {
+	const info = await lstat(path);
+	if (!info.isDirectory() || info.isSymbolicLink()) throw new TypeError(field + " must be a real directory");
+	if ((info.mode & 63) !== 0) throw new TypeError(field + " must be owner-only");
+	if (typeof process.getuid === "function" && info.uid !== process.getuid()) throw new TypeError(field + " must be owned by the current user");
+}
+async function readRegularFile(path, privateLabel) {
 	let handle;
 	try {
 		handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
 		const info = await handle.stat();
 		if (!info.isFile()) throw new TypeError("bootstrap inputs must be regular files");
-		if (privateFile && (info.mode & 63) !== 0) throw new TypeError("bootstrap private key must be owner-only (0600)");
+		if (privateLabel !== void 0 && (info.mode & 63) !== 0) throw new TypeError(privateLabel + " must be owner-only (0600)");
 		if (typeof process.getuid === "function" && info.uid !== process.getuid()) throw new TypeError("bootstrap inputs must be owned by the current user");
 		return await handle.readFile("utf8");
 	} catch (error) {
@@ -4950,11 +7394,12 @@ async function assertMissing(paths) {
 		if (error.code !== "ENOENT") throw error;
 	}
 }
-async function writeExclusive(path, contents) {
+async function writeExclusive(path, contents, mode = 384) {
 	let handle;
 	try {
-		handle = await open(path, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW, 384);
-		await handle.writeFile(contents, "utf8");
+		handle = await open(path, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW, mode);
+		if (typeof contents === "string") await handle.writeFile(contents, "utf8");
+		else await handle.writeFile(contents);
 		await handle.sync();
 	} finally {
 		await handle?.close();
@@ -4984,6 +7429,20 @@ function parseInvite(value) {
 	};
 	if (a2aKeyId(invite.publicKeyPem) !== invite.keyId) throw new TypeError("identity invite key id does not match its public key");
 	return invite;
+}
+async function validateIdentity(identityDirectory, overlay) {
+	await assertPrivateDirectory(identityDirectory, "identityDirectory");
+	const privateKeyPath = join(identityDirectory, "identity.private.pem");
+	const invitePath = join(identityDirectory, "identity.invite.json");
+	const privateKeyPem = await readRegularFile(privateKeyPath, "bootstrap private key");
+	const invite = parseInvite(JSON.parse(await readRegularFile(invitePath)));
+	if (invite.teamId !== overlay.team.id || invite.principalId !== overlay.device.assignedTo || invite.deviceId !== overlay.device.id) throw new TypeError("identity invite does not match the overlay team, principal and device");
+	if (a2aKeyId(privateKeyPem) !== invite.keyId) throw new TypeError("identity private key does not match the invite");
+	if (a2aKeyId(createPublicKey(privateKeyPem).export({
+		type: "spki",
+		format: "pem"
+	}).toString()) !== a2aKeyId(invite.publicKeyPem)) throw new TypeError("identity private and public keys do not match");
+	return privateKeyPath;
 }
 async function createBootstrapIdentity(input) {
 	const outputDirectory = safeAbsolutePath(input.outputDirectory, "outputDirectory");
@@ -5035,17 +7494,8 @@ async function renderBootstrapBundle(input) {
 	const overlayPath = safeAbsolutePath(input.overlayPath, "overlayPath");
 	await ensurePrivateDirectory(outputDirectory);
 	const pack = parseTeamPack(await readRegularFile(packPath));
-	const overlay = parseTeamOverlay(await readRegularFile(overlayPath));
-	const privateKeyPath = join(identityDirectory, "identity.private.pem");
-	const invitePath = join(identityDirectory, "identity.invite.json");
-	const privateKeyPem = await readRegularFile(privateKeyPath, true);
-	const invite = parseInvite(JSON.parse(await readRegularFile(invitePath)));
-	if (invite.teamId !== overlay.team.id || invite.principalId !== overlay.device.assignedTo || invite.deviceId !== overlay.device.id) throw new TypeError("identity invite does not match the overlay team, principal and device");
-	if (a2aKeyId(privateKeyPem) !== invite.keyId) throw new TypeError("identity private key does not match the invite");
-	if (a2aKeyId(createPublicKey(privateKeyPem).export({
-		type: "spki",
-		format: "pem"
-	}).toString()) !== a2aKeyId(invite.publicKeyPem)) throw new TypeError("identity private and public keys do not match");
+	const overlay = parseTeamOverlay(await readRegularFile(overlayPath, "bootstrap overlay"));
+	const privateKeyPath = await validateIdentity(identityDirectory, overlay);
 	const manifestPath = join(outputDirectory, "fleet.lock.yaml");
 	const trustStorePath = join(outputDirectory, "trust-store.json");
 	const taskPolicyPath = join(outputDirectory, "task-policy.json");
@@ -5107,7 +7557,7 @@ var AgentClientError = class extends Error {
 	}
 };
 function isMutationCommand(command) {
-	return command === "apply" || command === "status" || command === "release-apply" || command === "release-status" || command === "a2a-receive" || command === "tasks-resume";
+	return command === "apply" || command === "status" || command === "release-apply" || command === "release-status" || command === "release-rollback-apply" || command === "release-rollback-status" || command === "release-retention-apply" || command === "release-retention-status" || command === "a2a-receive" || command === "tasks-prune" || command === "tasks-resume" || command === "federation-ack" || command === "federation-prune";
 }
 function agentTerminationGraceMs(command) {
 	return isMutationCommand(command) ? MUTATION_TERMINATION_GRACE_MS : NON_MUTATION_TERMINATION_GRACE_MS;
@@ -5168,7 +7618,15 @@ function safeAgentError(value) {
 		"plan-not-found": "approved plan was not found",
 		"approval-mismatch": "approval no longer matches current target state",
 		"plan-expired": "plan has expired",
-		"approval-expired": "approval has expired"
+		"approval-expired": "approval has expired",
+		"release-ownership-conflict": "live release binding is no longer owned by the approved transition",
+		"rollback-not-available": "the release transition has no usable rollback state",
+		"rollback-target-mismatch": "the retained rollback target no longer matches the approved state",
+		"rollback-descriptor-invalid": "the durable rollback descriptor is missing or invalid",
+		"rollback-backup-missing": "the retained release backup is missing",
+		"idempotency-conflict": "the release action already has a different approval",
+		"action-state-invalid": "the stored release action no longer matches its approved plan",
+		"legacy-task-owner-unbound": "this task was created before signed owner binding; clear the saved task reference and submit a new task"
 	};
 	const candidate = isRecord(value) ? value.code : void 0;
 	const code = typeof candidate === "string" && Object.hasOwn(messages, candidate) ? candidate : "agent-rejected";

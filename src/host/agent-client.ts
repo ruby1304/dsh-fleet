@@ -12,7 +12,10 @@ export type AgentTransport = 'local' | 'ssh'
 export type AgentCommand =
   | 'inspect' | 'plan' | 'apply' | 'status'
   | 'release-inspect' | 'release-plan' | 'release-apply' | 'release-status'
-  | 'a2a-sign' | 'a2a-verify' | 'a2a-receive' | 'tasks-resume' | 'doctor'
+  | 'release-rollback-plan' | 'release-rollback-apply' | 'release-rollback-status'
+  | 'release-retention-plan' | 'release-retention-apply' | 'release-retention-status'
+  | 'a2a-sign' | 'a2a-verify' | 'a2a-receive' | 'tasks-list' | 'tasks-prune' | 'tasks-resume'
+  | 'federation-list' | 'federation-ack' | 'federation-retention-plan' | 'federation-prune' | 'doctor'
 
 export interface AgentTargetConfig {
   deviceId: string
@@ -51,7 +54,10 @@ type StopReason = 'cancelled' | 'timeout' | 'output-limit'
 
 function isMutationCommand(command: AgentCommand): boolean {
   return command === 'apply' || command === 'status' || command === 'release-apply' || command === 'release-status' ||
-    command === 'a2a-receive' || command === 'tasks-resume'
+    command === 'release-rollback-apply' || command === 'release-rollback-status' ||
+    command === 'release-retention-apply' || command === 'release-retention-status' ||
+    command === 'a2a-receive' || command === 'tasks-prune' || command === 'tasks-resume' ||
+    command === 'federation-ack' || command === 'federation-prune'
 }
 
 export function agentTerminationGraceMs(command: AgentCommand): number {
@@ -115,6 +121,14 @@ function safeAgentError(value: unknown): AgentClientError {
     'approval-mismatch': 'approval no longer matches current target state',
     'plan-expired': 'plan has expired',
     'approval-expired': 'approval has expired',
+    'release-ownership-conflict': 'live release binding is no longer owned by the approved transition',
+    'rollback-not-available': 'the release transition has no usable rollback state',
+    'rollback-target-mismatch': 'the retained rollback target no longer matches the approved state',
+    'rollback-descriptor-invalid': 'the durable rollback descriptor is missing or invalid',
+    'rollback-backup-missing': 'the retained release backup is missing',
+    'idempotency-conflict': 'the release action already has a different approval',
+    'action-state-invalid': 'the stored release action no longer matches its approved plan',
+    'legacy-task-owner-unbound': 'this task was created before signed owner binding; clear the saved task reference and submit a new task',
   }
   const candidate = isRecord(value) ? value.code : undefined
   const code = typeof candidate === 'string' && Object.hasOwn(messages, candidate) ? candidate : 'agent-rejected'

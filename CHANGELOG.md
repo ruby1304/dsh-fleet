@@ -1,6 +1,19 @@
 # Changelog
 
-## 0.3.8 - Unreleased
+## 0.4.0 - Unreleased candidate
+
+- Add canonical multi-device generations with private per-device overlays, atomic activation and an explicit rollback path.
+- Pin launcher, Agent, config and worker to one generation per call; recover dead lifecycle locks with owner/token/inode CAS checks.
+- Bind signed tasks to the active manifest, release, local workspace, actual execution-profile hash and installed task policy before execution and before every tool call.
+- Add durable task indexing, reconnect-safe status recovery and bounded retention without persisting prompts or results in the browser.
+- Require local tool policy for every task call and an argument-bound, single-use decision for each approved workspace mutation.
+- Bind atomic release plans to the actual running DSH runtime and launchd service definition, retain explicit rollback state, and add CAS-bound backup retention planning.
+- Keep task execution capabilities in private device trust while adding a manual signed federation inbox for advisory handoff/approval metadata.
+- Add Fleet Settings task visibility, release rollback and collaboration controls without reintroducing a floating sidebar control.
+
+This candidate is not published. Promotion still requires the repository gates, sanitized tarball inspection, real-device install/upgrade/rollback evidence, protected `main`, a release tag, GitHub Release approval and npm provenance.
+
+## 0.3.8 - 2026-08-19
 
 - Persist only the selected target device and durable task ID in browser storage so a signed A2A task can be recovered after a page reload or disconnect without retaining its prompt or output.
 - Add strict stored-reference validation, automatic status recovery, manual task-ID lookup and an explicit local-reference clear action.

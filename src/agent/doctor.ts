@@ -9,7 +9,7 @@ import {
   type FleetAgentConfig,
   type ReleaseReadyFleetAgentConfig,
 } from './config.ts'
-import { inspectReleaseAgent, verifyReleaseAgentHealth } from './runtime.ts'
+import { inspectReleaseAgent, verifyReleaseAgentHealth, type ReleaseRetentionInspection } from './runtime.ts'
 
 export interface FleetAgentDoctorReport {
   protocolVersion: 1
@@ -19,10 +19,22 @@ export interface FleetAgentDoctorReport {
   releaseId: string
   releaseVersion: string
   healthVerified: true
+  observedRuntimeDigest: string
+  observedServiceDefinitionDigest: string | null
+  teamId: string
+  principalId: string
   identityKeyId: string
   trustedPeerCount: number
+  trustedPeers: Array<{
+    keyId: string
+    principalId: string
+    deviceId: string
+    allowedKinds: string[]
+  }>
   tasksEnabled: boolean
   workspaceIds: string[]
+  taskProfiles: string[]
+  retention: ReleaseRetentionInspection
   executableChecks: string[]
 }
 
@@ -81,10 +93,22 @@ export async function doctorAgent(
     releaseId: inspection.assignedRelease.releaseId,
     releaseVersion: inspection.assignedRelease.releaseVersion,
     healthVerified: true,
+    observedRuntimeDigest: inspection.observedRuntimeDigest,
+    observedServiceDefinitionDigest: inspection.observedServiceDefinitionDigest,
+    teamId: config.a2a.teamId,
+    principalId: config.a2a.principalId,
     identityKeyId: identityProbe.sender.keyId,
     trustedPeerCount: trust.size,
+    trustedPeers: [...trust.values()].map(entry => ({
+      keyId: entry.keyId,
+      principalId: entry.principalId,
+      deviceId: entry.deviceId,
+      allowedKinds: [...entry.allowedKinds],
+    })).sort((left, right) => left.deviceId.localeCompare(right.deviceId) || left.keyId.localeCompare(right.keyId)),
     tasksEnabled: config.tasks.enabled,
     workspaceIds: Object.keys(config.tasks.workspaces).sort(),
+    taskProfiles: [...config.tasks.profiles].sort(),
+    retention: inspection.retention,
     executableChecks,
   }
 }

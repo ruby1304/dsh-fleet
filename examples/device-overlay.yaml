@@ -1,5 +1,7 @@
-# PRIVATE TEMPLATE: copy outside the repository and replace every example path,
-# digest, device identity and trust entry. It contains no private key material.
+# PRIVATE TEMPLATE: make one owner-controlled copy per device, then pass the
+# complete overlay set to `plan` and each device-local `render-set` invocation.
+# Replace every example path, digest, device identity and trust entry. The
+# overlay contains no private key material.
 schemaVersion: 1
 team:
   id: example-team
@@ -9,6 +11,13 @@ device:
   assignedTo: owner
   class: always-on-worker
   channel: stable
+# Controller route. For an SSH worker add `sshHost: configured-host-alias` and
+# change transport to ssh; local routes must not contain sshHost.
+route:
+  transport: local
+  nodeBinary: /opt/homebrew/bin/node
+  agentPath: /Users/example/.local/share/dsh-fleet/current/launcher.mjs
+  configPath: /Users/example/.local/share/dsh-fleet/current/agent.config.json
 release:
   id: web-1.0.0
   version: 1.0.0
@@ -45,6 +54,7 @@ agent:
   maxMessageTtlMs: 900000
   tasks:
     enabled: false
+    policyIds: [readonly-v1]
     timeoutMs: 3600000
     maxOutputBytes: 1048576
     maxConcurrent: 1

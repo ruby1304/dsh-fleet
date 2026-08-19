@@ -1,29 +1,47 @@
 #!/usr/bin/env node
-import { isAbsolute, normalize } from 'node:path'
+import { dirname, isAbsolute, join, normalize } from 'node:path'
 import { readAgentConfig } from './config.ts'
 import {
   applyStoredPlan,
+  applyStoredReleaseRollbackPlan,
+  applyStoredReleaseRetentionPlan,
   applyStoredReleasePlan,
   createStoredPlan,
+  createStoredReleaseRollbackPlan,
+  createStoredReleaseRetentionPlan,
   createStoredReleasePlan,
   inspectAgent,
   inspectReleaseAgent,
   readOrRecoverAction,
+  readOrRecoverReleaseRollbackAction,
   readOrRecoverReleaseAction,
+  readReleaseRetentionActionStatus,
   safeRuntimeError,
 } from './runtime.ts'
 import type { FleetPlanApproval } from './protocol.ts'
-import type { FleetReleaseApproval } from './release-protocol.ts'
+import type { FleetReleaseApproval, FleetReleaseRollbackApproval } from './release-protocol.ts'
+import type { FleetReleaseRetentionApproval } from './release-retention.ts'
 import {
+  listFleetTasks,
+  pruneFleetTasks,
   receiveA2AMessage,
   resumeAcceptedTasks,
   runTaskWorker,
   safeA2ARuntimeError,
   signA2AMessage,
   verifyA2AMessage,
+  type FleetTerminalTaskState,
 } from '../a2a/runtime.ts'
 import { FLEET_A2A_KINDS, type FleetA2AEnvelope, type FleetA2AKind } from '../a2a/protocol.ts'
 import { doctorAgent } from './doctor.ts'
+import {
+  applyFederationInboxPrune,
+  acknowledgeFederationMessage,
+  listFederationInbox,
+  planFederationInboxPrune,
+  safeFederationError,
+  type FleetFederationPruneCandidate,
+} from '../federation/inbox.ts'
 
 const MAX_INPUT_BYTES = 64 * 1024
 const shutdown = new AbortController()
@@ -77,7 +95,10 @@ async function readStdin(): Promise<unknown> {
 type AgentCliCommand =
   | 'inspect' | 'plan' | 'apply' | 'status'
   | 'release-inspect' | 'release-plan' | 'release-apply' | 'release-status'
-  | 'a2a-sign' | 'a2a-verify' | 'a2a-receive' | 'task-worker' | 'tasks-resume' | 'doctor'
+  | 'release-rollback-plan' | 'release-rollback-apply' | 'release-rollback-status'
+  | 'release-retention-plan' | 'release-retention-apply' | 'release-retention-status'
+  | 'a2a-sign' | 'a2a-verify' | 'a2a-receive' | 'task-worker' | 'tasks-list' | 'tasks-prune' | 'tasks-resume'
+  | 'federation-list' | 'federation-ack' | 'federation-retention-plan' | 'federation-prune' | 'doctor'
 
 function parseArgs(argv: string[]): { configPath: string; command: AgentCliCommand } {
   if (argv.length !== 3 || argv[0] !== '--config') throw Object.assign(new Error('usage: dsh-fleet-agent --config <path> <command>'), { code: 'invalid-invocation' })
@@ -89,7 +110,10 @@ function parseArgs(argv: string[]): { configPath: string; command: AgentCliComma
   if (![
     'inspect', 'plan', 'apply', 'status',
     'release-inspect', 'release-plan', 'release-apply', 'release-status',
-    'a2a-sign', 'a2a-verify', 'a2a-receive', 'task-worker', 'tasks-resume', 'doctor',
+    'release-rollback-plan', 'release-rollback-apply', 'release-rollback-status',
+    'release-retention-plan', 'release-retention-apply', 'release-retention-status',
+    'a2a-sign', 'a2a-verify', 'a2a-receive', 'task-worker', 'tasks-list', 'tasks-prune', 'tasks-resume',
+    'federation-list', 'federation-ack', 'federation-retention-plan', 'federation-prune', 'doctor',
   ].includes(command as string)) {
     throw Object.assign(new Error('unsupported command'), { code: 'invalid-invocation' })
   }
@@ -115,11 +139,20 @@ async function dispatch(): Promise<unknown> {
     return doctorAgent(config, new Date(), shutdown.signal)
   }
   if (command === 'a2a-sign') {
-    const body = exactObject(payload, ['kind', 'payload', 'recipientDeviceId'], 'A2A sign payload')
+    const body = isRecord(payload) && Object.hasOwn(payload, 'recipientTeamId')
+      ? exactObject(payload, ['kind', 'payload', 'recipientDeviceId', 'recipientTeamId'], 'A2A sign payload')
+      : exactObject(payload, ['kind', 'payload', 'recipientDeviceId'], 'A2A sign payload')
     const kind = stringField(body.kind, 'kind')
     if (!FLEET_A2A_KINDS.includes(kind as FleetA2AKind)) throw Object.assign(new Error('unsupported A2A kind'), { code: 'invalid-payload' })
     if (!isRecord(body.payload)) throw Object.assign(new Error('A2A payload must be an object'), { code: 'invalid-payload' })
-    return signA2AMessage(config, stringField(body.recipientDeviceId, 'recipientDeviceId'), kind as FleetA2AKind, body.payload, new Date())
+    return signA2AMessage(
+      config,
+      stringField(body.recipientDeviceId, 'recipientDeviceId'),
+      kind as FleetA2AKind,
+      body.payload,
+      new Date(),
+      body.recipientTeamId === undefined ? undefined : stringField(body.recipientTeamId, 'recipientTeamId'),
+    )
   }
   if (command === 'a2a-receive') {
     const body = exactObject(payload, ['envelope'], 'A2A receive payload')
@@ -131,13 +164,90 @@ async function dispatch(): Promise<unknown> {
   }
   if (command === 'task-worker') {
     const body = exactObject(payload, ['taskId'], 'task worker payload')
-    return runTaskWorker(config, stringField(body.taskId, 'taskId'))
+    return runTaskWorker(config, stringField(body.taskId, 'taskId'), join(dirname(agentPath), 'worker.mjs'))
+  }
+  if (command === 'tasks-list') {
+    const body = exactObject(payload, ['limit'], 'tasks-list payload')
+    if (typeof body.limit !== 'number' || !Number.isSafeInteger(body.limit) || body.limit < 1 || body.limit > 100) {
+      throw Object.assign(new Error('tasks-list limit must be an integer from 1 to 100'), { code: 'invalid-payload' })
+    }
+    return listFleetTasks(config, body.limit)
+  }
+  if (command === 'tasks-prune') {
+    const body = exactObject(payload, ['olderThan', 'states'], 'tasks-prune payload')
+    if (!Array.isArray(body.states) || body.states.some(state => typeof state !== 'string')) {
+      throw Object.assign(new Error('tasks-prune states must be strings'), { code: 'invalid-payload' })
+    }
+    return pruneFleetTasks(config, {
+      olderThan: stringField(body.olderThan, 'olderThan'),
+      states: body.states as FleetTerminalTaskState[],
+    })
   }
   if (command === 'tasks-resume') {
     if (payload !== null && (isRecord(payload) ? Object.keys(payload).length !== 0 : true)) {
       throw Object.assign(new Error('tasks-resume payload must be empty'), { code: 'invalid-payload' })
     }
     return { resumed: await resumeAcceptedTasks(config, workerLaunch) }
+  }
+  if (command === 'federation-list') {
+    const body = exactObject(payload, ['limit'], 'federation-list payload')
+    if (typeof body.limit !== 'number' || !Number.isSafeInteger(body.limit) || body.limit < 1 || body.limit > 100) {
+      throw Object.assign(new Error('federation-list limit must be an integer from 1 to 100'), { code: 'invalid-payload' })
+    }
+    return listFederationInbox(join(config.stateDir, 'federation'), { limit: body.limit })
+  }
+  if (command === 'federation-ack') {
+    const body = exactObject(payload, ['disposition', 'messageId', 'payloadDigest'], 'federation-ack payload')
+    const disposition = stringField(body.disposition, 'disposition')
+    if (disposition !== 'acknowledged' && disposition !== 'dismissed') {
+      throw Object.assign(new Error('federation acknowledgement disposition is invalid'), { code: 'invalid-payload' })
+    }
+    return acknowledgeFederationMessage({
+      rootDirectory: join(config.stateDir, 'federation'),
+      messageId: stringField(body.messageId, 'messageId'),
+      expectedPayloadDigest: stringField(body.payloadDigest, 'payloadDigest'),
+      disposition,
+      acknowledgedAt: new Date(),
+    })
+  }
+  if (command === 'federation-retention-plan') {
+    const body = exactObject(payload, ['acknowledgedRetentionMs', 'expiredRetentionMs', 'maxEntries'], 'federation retention payload')
+    for (const field of ['acknowledgedRetentionMs', 'expiredRetentionMs', 'maxEntries'] as const) {
+      if (typeof body[field] !== 'number' || !Number.isSafeInteger(body[field])) {
+        throw Object.assign(new Error(field + ' must be an integer'), { code: 'invalid-payload' })
+      }
+    }
+    const items = await listFederationInbox(join(config.stateDir, 'federation'), { limit: 500 })
+    return {
+      generatedAt: new Date().toISOString(),
+      candidates: planFederationInboxPrune(items, {
+        acknowledgedRetentionMs: body.acknowledgedRetentionMs as number,
+        expiredRetentionMs: body.expiredRetentionMs as number,
+        maxEntries: body.maxEntries as number,
+      }),
+    }
+  }
+  if (command === 'federation-prune') {
+    const body = exactObject(payload, ['candidates', 'policy'], 'federation-prune payload')
+    const policy = exactObject(body.policy, ['acknowledgedRetentionMs', 'expiredRetentionMs', 'maxEntries'], 'federation-prune policy')
+    for (const field of ['acknowledgedRetentionMs', 'expiredRetentionMs', 'maxEntries'] as const) {
+      if (typeof policy[field] !== 'number' || !Number.isSafeInteger(policy[field])) {
+        throw Object.assign(new Error(field + ' must be an integer'), { code: 'invalid-payload' })
+      }
+    }
+    if (!Array.isArray(body.candidates)) {
+      throw Object.assign(new Error('federation-prune candidates must be an array'), { code: 'invalid-payload' })
+    }
+    return applyFederationInboxPrune({
+      rootDirectory: join(config.stateDir, 'federation'),
+      candidates: body.candidates as FleetFederationPruneCandidate[],
+      policy: {
+        acknowledgedRetentionMs: policy.acknowledgedRetentionMs as number,
+        expiredRetentionMs: policy.expiredRetentionMs as number,
+        maxEntries: policy.maxEntries as number,
+      },
+      now: new Date(),
+    })
   }
   if (command === 'release-inspect' || command === 'release-plan') {
     if (payload !== null && (isRecord(payload) ? Object.keys(payload).length !== 0 : true)) {
@@ -156,6 +266,41 @@ async function dispatch(): Promise<unknown> {
   if (command === 'release-apply') {
     const body = exactObject(payload, ['approval'], 'release apply payload')
     return applyStoredReleasePlan(config, body.approval as FleetReleaseApproval, new Date(), shutdown.signal)
+  }
+  if (command === 'release-rollback-plan') {
+    const body = exactObject(payload, ['transitionPlanId'], 'release rollback plan payload')
+    return createStoredReleaseRollbackPlan(
+      config,
+      stringField(body.transitionPlanId, 'transitionPlanId'),
+      new Date(),
+      shutdown.signal,
+    )
+  }
+  if (command === 'release-rollback-status') {
+    const body = exactObject(payload, ['planId'], 'release rollback status payload')
+    const action = await readOrRecoverReleaseRollbackAction(config, stringField(body.planId, 'planId'))
+    if (action === null) throw Object.assign(new Error('release rollback action not found'), { code: 'action-not-found' })
+    return action
+  }
+  if (command === 'release-rollback-apply') {
+    const body = exactObject(payload, ['approval'], 'release rollback apply payload')
+    return applyStoredReleaseRollbackPlan(config, body.approval as FleetReleaseRollbackApproval, new Date(), shutdown.signal)
+  }
+  if (command === 'release-retention-plan') {
+    if (payload !== null && (isRecord(payload) ? Object.keys(payload).length !== 0 : true)) {
+      throw Object.assign(new Error('release retention plan payload must be empty'), { code: 'invalid-payload' })
+    }
+    return createStoredReleaseRetentionPlan(config, new Date())
+  }
+  if (command === 'release-retention-status') {
+    const body = exactObject(payload, ['planId'], 'release retention status payload')
+    const action = await readReleaseRetentionActionStatus(config, stringField(body.planId, 'planId'))
+    if (action === null) throw Object.assign(new Error('release retention action not found'), { code: 'action-not-found' })
+    return action
+  }
+  if (command === 'release-retention-apply') {
+    const body = exactObject(payload, ['approval'], 'release retention apply payload')
+    return applyStoredReleaseRetentionPlan(config, body.approval as FleetReleaseRetentionApproval, new Date())
   }
   if (command === 'inspect') {
     if (payload !== null && (isRecord(payload) ? Object.keys(payload).length !== 0 : true)) {
@@ -182,7 +327,11 @@ try {
   process.stdout.write(JSON.stringify({ ok: true, value }) + '\n')
 } catch (error: unknown) {
   const a2a = safeA2ARuntimeError(error)
-  process.stdout.write(JSON.stringify({ ok: false, error: a2a.code === 'internal' ? safeRuntimeError(error) : a2a }) + '\n')
+  const federation = safeFederationError(error)
+  process.stdout.write(JSON.stringify({
+    ok: false,
+    error: a2a.code !== 'internal' ? a2a : federation.code !== 'internal' ? federation : safeRuntimeError(error),
+  }) + '\n')
 } finally {
   process.off('SIGINT', onSigint)
   process.off('SIGTERM', onSigterm)

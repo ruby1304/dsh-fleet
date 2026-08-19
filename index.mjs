@@ -3,10 +3,9 @@ import { createHash } from "node:crypto";
 import { constants, existsSync } from "node:fs";
 import { lstat, open, readFile, realpath, stat } from "node:fs/promises";
 import { arch, homedir, hostname, platform } from "node:os";
-import { basename, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
-import { gt, valid, validRange } from "semver";
+import { basename, dirname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
+import { gt, satisfies, valid, validRange } from "semver";
 import { parse } from "yaml";
-//#region src/agent/protocol.ts
 var FleetProtocolError = class extends Error {
 	code;
 	constructor(code, message) {
@@ -15,8 +14,11 @@ var FleetProtocolError = class extends Error {
 		this.code = code;
 	}
 };
-function isRecord$3(value) {
+function isRecord$5(value) {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function isSupportedDshVersion(value) {
+	return valid(value) === value && satisfies(value, ">=0.1.0-rc.7 <0.2.0", { includePrerelease: true });
 }
 function canonicalize(value, seen) {
 	if (value === null) return "null";
@@ -32,7 +34,7 @@ function canonicalize(value, seen) {
 		seen.delete(value);
 		return encoded;
 	}
-	if (isRecord$3(value)) {
+	if (isRecord$5(value)) {
 		const prototype = Object.getPrototypeOf(value);
 		if (prototype !== Object.prototype && prototype !== null) throw new FleetProtocolError("invalid-payload", "canonical JSON accepts only plain objects");
 		if (seen.has(value)) throw new FleetProtocolError("invalid-payload", "canonical JSON rejects cycles");
@@ -50,6 +52,199 @@ function canonicalize(value, seen) {
 function canonicalJson(value) {
 	return canonicalize(value, /* @__PURE__ */ new Set());
 }
+function sha256Canonical(value) {
+	return createHash("sha256").update(canonicalJson(value), "utf8").digest("hex");
+}
+const ROLLBACK_PLAN_BODY_KEYS = [
+	"protocolVersion",
+	"kind",
+	"transitionPlanId",
+	"transitionPlanDigest",
+	"deviceId",
+	"profile",
+	"fromManifestDigest",
+	"toManifestDigest",
+	"fromReleaseDigest",
+	"toReleaseDigest",
+	"fromProfileHash",
+	"toProfileHash",
+	"observedDshVersion",
+	"observedRuntimeDigest",
+	"observedServiceDefinitionDigest",
+	"createdAt",
+	"expiresAt"
+];
+const ROLLBACK_PLAN_KEYS = [
+	...ROLLBACK_PLAN_BODY_KEYS,
+	"planId",
+	"digest"
+];
+function isRecord$4(value) {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function assertExactKeys(value, keys, label) {
+	if (!isRecord$4(value)) throw new FleetProtocolError("invalid-payload", label + " must be an object");
+	const expected = new Set(keys);
+	for (const key of Object.keys(value)) if (!expected.has(key)) throw new FleetProtocolError("invalid-payload", label + " contains unsupported field " + JSON.stringify(key));
+	for (const key of keys) if (!Object.hasOwn(value, key)) throw new FleetProtocolError("invalid-payload", label + " is missing field " + JSON.stringify(key));
+}
+function assertString(value, field) {
+	if (typeof value !== "string" || value.length === 0 || value !== value.trim()) throw new FleetProtocolError("invalid-payload", field + " must be a trimmed non-empty string");
+}
+function assertIdentifier(value, field) {
+	assertString(value, field);
+	if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(value)) throw new FleetProtocolError("invalid-payload", field + " contains unsupported characters");
+}
+function assertDigest(value, field) {
+	if (typeof value !== "string" || !/^[0-9a-f]{64}$/.test(value)) throw new FleetProtocolError("invalid-digest", field + " must be a lowercase SHA-256 digest");
+}
+function assertNullableDigest(value, field) {
+	if (value !== null) assertDigest(value, field);
+}
+function parseTime(value, field) {
+	if (typeof value !== "string") throw new FleetProtocolError("invalid-time", field + " must be a canonical ISO timestamp");
+	const timestamp = Date.parse(value);
+	if (!Number.isFinite(timestamp) || new Date(timestamp).toISOString() !== value) throw new FleetProtocolError("invalid-time", field + " must be a canonical ISO timestamp");
+	return timestamp;
+}
+function validateRollbackPlanBody(value) {
+	assertExactKeys(value, ROLLBACK_PLAN_BODY_KEYS, "release rollback plan body");
+	if (value.protocolVersion !== 2 || value.kind !== "profile-release-rollback") throw new FleetProtocolError("invalid-protocol", "unsupported release rollback protocol");
+	if (!/^release-plan:[0-9a-f]{64}$/.test(value.transitionPlanId)) throw new FleetProtocolError("invalid-payload", "transitionPlanId is invalid");
+	assertDigest(value.transitionPlanDigest, "transitionPlanDigest");
+	if (value.transitionPlanId !== "release-plan:" + value.transitionPlanDigest) throw new FleetProtocolError("plan-integrity-failed", "transition plan id does not match transitionPlanDigest");
+	assertIdentifier(value.deviceId, "deviceId");
+	assertIdentifier(value.profile, "profile");
+	assertDigest(value.fromManifestDigest, "fromManifestDigest");
+	assertDigest(value.toManifestDigest, "toManifestDigest");
+	assertDigest(value.fromReleaseDigest, "fromReleaseDigest");
+	assertNullableDigest(value.toReleaseDigest, "toReleaseDigest");
+	assertDigest(value.fromProfileHash, "fromProfileHash");
+	assertDigest(value.toProfileHash, "toProfileHash");
+	assertString(value.observedDshVersion, "observedDshVersion");
+	if (!isSupportedDshVersion(value.observedDshVersion)) throw new FleetProtocolError("unsupported-dsh-version", "DSH version is outside the supported Agent range");
+	assertDigest(value.observedRuntimeDigest, "observedRuntimeDigest");
+	assertNullableDigest(value.observedServiceDefinitionDigest, "observedServiceDefinitionDigest");
+	if (value.fromManifestDigest === value.toManifestDigest && value.fromReleaseDigest === value.toReleaseDigest) throw new FleetProtocolError("invalid-payload", "release rollback must change a manifest or applied release binding");
+	const createdAt = parseTime(value.createdAt, "createdAt");
+	if (parseTime(value.expiresAt, "expiresAt") <= createdAt) throw new FleetProtocolError("invalid-time", "expiresAt must be after createdAt");
+}
+function validateFleetReleaseRollbackPlan(value) {
+	assertExactKeys(value, ROLLBACK_PLAN_KEYS, "release rollback plan");
+	const body = Object.fromEntries(ROLLBACK_PLAN_BODY_KEYS.map((key) => [key, value[key]]));
+	validateRollbackPlanBody(body);
+	assertDigest(value.digest, "digest");
+	const digest = sha256Canonical(body);
+	if (value.digest !== digest || value.planId !== "release-rollback-plan:" + digest) throw new FleetProtocolError("plan-integrity-failed", "release rollback plan id or digest does not match its canonical body");
+}
+const BODY_KEYS$1 = [
+	"protocolVersion",
+	"kind",
+	"deviceId",
+	"profile",
+	"currentTransitionPlanId",
+	"retainedTransitionPlanIds",
+	"entries",
+	"orphanBackupProfiles",
+	"orphanStageProfiles",
+	"orphanFailedProfiles",
+	"createdAt",
+	"expiresAt"
+];
+const PLAN_KEYS = [
+	...BODY_KEYS$1,
+	"planId",
+	"digest"
+];
+const ENTRY_KEYS = [
+	"transitionPlanId",
+	"descriptorDigest",
+	"backupProfile",
+	"backupManifestDigest",
+	"backupProfileHash",
+	"reason"
+];
+function object(value, label) {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) throw new FleetProtocolError("invalid-payload", label + " must be an object");
+	return value;
+}
+function exact(value, keys, label) {
+	const body = object(value, label);
+	const actual = Object.keys(body).sort();
+	const expected = [...keys].sort();
+	if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) throw new FleetProtocolError("invalid-payload", label + " has unsupported or missing fields");
+	return body;
+}
+function identifier$1(value, label) {
+	if (typeof value !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(value)) throw new FleetProtocolError("invalid-payload", label + " is invalid");
+}
+function digest$1(value, label) {
+	if (typeof value !== "string" || !/^[0-9a-f]{64}$/.test(value)) throw new FleetProtocolError("invalid-digest", label + " must be a lowercase SHA-256 digest");
+}
+function transitionId(value, label) {
+	if (typeof value !== "string" || !/^release-plan:[0-9a-f]{64}$/.test(value)) throw new FleetProtocolError("invalid-payload", label + " is invalid");
+}
+function timestamp(value, label) {
+	if (typeof value !== "string") throw new FleetProtocolError("invalid-time", label + " must be a canonical timestamp");
+	const time = Date.parse(value);
+	if (!Number.isFinite(time) || new Date(time).toISOString() !== value) throw new FleetProtocolError("invalid-time", label + " must be a canonical timestamp");
+	return time;
+}
+function sortedUnique(values, label, validate) {
+	if (!Array.isArray(values)) throw new FleetProtocolError("invalid-payload", label + " must be an array");
+	values.forEach((value, index) => validate(value, `${label}[${index}]`));
+	if (new Set(values).size !== values.length || values.some((value, index) => index > 0 && value <= values[index - 1])) throw new FleetProtocolError("invalid-payload", label + " must be unique and sorted");
+	return values;
+}
+function validateEntry(value, index) {
+	const body = exact(value, ENTRY_KEYS, `entries[${index}]`);
+	transitionId(body.transitionPlanId, `entries[${index}].transitionPlanId`);
+	digest$1(body.descriptorDigest, `entries[${index}].descriptorDigest`);
+	if (body.backupProfile === null) {
+		if (body.backupManifestDigest !== null || body.backupProfileHash !== null) throw new FleetProtocolError("invalid-payload", "marker-only retention entries cannot bind a backup");
+	} else {
+		if (typeof body.backupProfile !== "string" || !/^fleet-backup-[0-9a-f]{24}$/.test(body.backupProfile)) throw new FleetProtocolError("invalid-payload", "retention backup profile is invalid");
+		digest$1(body.backupManifestDigest, `entries[${index}].backupManifestDigest`);
+		digest$1(body.backupProfileHash, `entries[${index}].backupProfileHash`);
+	}
+	if (body.reason !== "superseded") throw new FleetProtocolError("invalid-payload", "retention reason is invalid");
+}
+function validateBody(value) {
+	exact(value, BODY_KEYS$1, "release retention plan body");
+	if (value.protocolVersion !== 1 || value.kind !== "profile-release-retention") throw new FleetProtocolError("invalid-protocol", "unsupported release retention protocol");
+	identifier$1(value.deviceId, "deviceId");
+	identifier$1(value.profile, "profile");
+	if (value.currentTransitionPlanId !== null) transitionId(value.currentTransitionPlanId, "currentTransitionPlanId");
+	const retained = sortedUnique(value.retainedTransitionPlanIds, "retainedTransitionPlanIds", transitionId);
+	if (retained.length > 2) throw new FleetProtocolError("invalid-payload", "release retention keeps at most the current and previous transitions");
+	if (value.currentTransitionPlanId !== null && !retained.includes(value.currentTransitionPlanId)) throw new FleetProtocolError("invalid-payload", "retained transitions must include the current transition");
+	if (value.currentTransitionPlanId === null && retained.length !== 0) throw new FleetProtocolError("invalid-payload", "retained transitions require a current transition");
+	if (!Array.isArray(value.entries)) throw new FleetProtocolError("invalid-payload", "entries must be an array");
+	value.entries.forEach(validateEntry);
+	if (value.currentTransitionPlanId === null && value.entries.length !== 0) throw new FleetProtocolError("invalid-payload", "retention entries require a current transition");
+	const entryIds = value.entries.map((entry) => entry.transitionPlanId);
+	if (new Set(entryIds).size !== entryIds.length || entryIds.some((id, index) => index > 0 && id <= entryIds[index - 1])) throw new FleetProtocolError("invalid-payload", "retention entries must be unique and sorted");
+	if (entryIds.some((id) => retained.includes(id))) throw new FleetProtocolError("invalid-payload", "retained transitions cannot be pruned");
+	sortedUnique(value.orphanBackupProfiles, "orphanBackupProfiles", (item, label) => {
+		if (typeof item !== "string" || !/^fleet-backup-[0-9a-f]{24}$/.test(item)) throw new FleetProtocolError("invalid-payload", label + " is invalid");
+	});
+	sortedUnique(value.orphanStageProfiles, "orphanStageProfiles", (item, label) => {
+		if (typeof item !== "string" || !/^fleet-stage-[0-9a-f]{24}$/.test(item)) throw new FleetProtocolError("invalid-payload", label + " is invalid");
+	});
+	sortedUnique(value.orphanFailedProfiles, "orphanFailedProfiles", (item, label) => {
+		if (typeof item !== "string" || !/^fleet-failed-[0-9a-f]{24}$/.test(item)) throw new FleetProtocolError("invalid-payload", label + " is invalid");
+	});
+	const createdAt = timestamp(value.createdAt, "createdAt");
+	const expiresAt = timestamp(value.expiresAt, "expiresAt");
+	if (expiresAt <= createdAt || expiresAt - createdAt > 36e5) throw new FleetProtocolError("invalid-time", "release retention plan lifetime is invalid");
+}
+function validateFleetReleaseRetentionPlan(value) {
+	exact(value, PLAN_KEYS, "release retention plan");
+	const body = Object.fromEntries(BODY_KEYS$1.map((key) => [key, value[key]]));
+	validateBody(body);
+	digest$1(value.digest, "digest");
+	if (value.planId !== "release-retention-plan:" + value.digest || sha256Canonical(body) !== value.digest) throw new FleetProtocolError("plan-integrity-failed", "release retention plan identity is invalid");
+}
 //#endregion
 //#region src/shared.ts
 const DEVICE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
@@ -60,7 +255,44 @@ function normalizeDeviceId(value, field = "deviceId") {
 	return deviceId;
 }
 //#endregion
-//#region src/a2a/protocol.ts
+//#region src/worker/context.ts
+const MAX_TASK_TOOL_ARGUMENT_BYTES = 16384;
+var WorkerPolicyError = class extends Error {
+	code;
+	constructor(code, message) {
+		super(message);
+		this.name = "WorkerPolicyError";
+		this.code = code;
+	}
+};
+function isRecord$3(value) {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function canonicalArguments(toolArguments, maxBytes) {
+	if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > 16384) throw new WorkerPolicyError("invalid-context", "maxBytes exceeds the Fleet tool-argument ceiling");
+	if (!isRecord$3(toolArguments)) throw new WorkerPolicyError("invalid-arguments", "tool arguments must be a JSON object");
+	let canonical;
+	try {
+		canonical = canonicalJson(toolArguments);
+	} catch (error) {
+		throw new WorkerPolicyError("invalid-arguments", error instanceof Error ? error.message : "tool arguments are not canonical JSON");
+	}
+	if (Buffer.byteLength(canonical, "utf8") > maxBytes) throw new WorkerPolicyError("arguments-too-large", `tool arguments exceed ${maxBytes} bytes`);
+	return canonical;
+}
+function digestToolArguments(toolArguments, maxBytes = MAX_TASK_TOOL_ARGUMENT_BYTES) {
+	const canonical = canonicalArguments(toolArguments, maxBytes);
+	return sha256Canonical(JSON.parse(canonical));
+}
+const FEDERATION_ADVISORY_KINDS = /* @__PURE__ */ new Set([
+	"approval.request",
+	"approval.decision",
+	"handoff",
+	"receipt"
+]);
+function isFleetFederationAdvisoryKind(kind) {
+	return FEDERATION_ADVISORY_KINDS.has(kind);
+}
 var FleetA2AError = class extends Error {
 	code;
 	constructor(code, message) {
@@ -117,11 +349,23 @@ function validateA2APayload(kind, payload) {
 			"taskId",
 			"workspaceId",
 			"profile",
+			"executionProfileHash",
+			"manifestDigest",
+			"releaseDigest",
+			"policyId",
+			"policyDigest",
+			"deadline",
 			"prompt"
 		], kind);
 		taskId(payload.taskId);
 		identifier(payload.workspaceId, "payload.workspaceId");
 		identifier(payload.profile, "payload.profile");
+		digest(payload.executionProfileHash, "payload.executionProfileHash");
+		digest(payload.manifestDigest, "payload.manifestDigest");
+		digest(payload.releaseDigest, "payload.releaseDigest");
+		identifier(payload.policyId, "payload.policyId");
+		digest(payload.policyDigest, "payload.policyDigest");
+		canonicalTime(payload.deadline, "payload.deadline");
 		longText(payload.prompt, "payload.prompt", 32768);
 		return;
 	}
@@ -168,6 +412,64 @@ function validateA2APayload(kind, payload) {
 		if (payload.errorCode !== null) identifier(payload.errorCode, "payload.errorCode");
 		return;
 	}
+	if (kind === "task.approval.request") {
+		exactPayload(payload, [
+			"approvalId",
+			"taskId",
+			"taskBindingDigest",
+			"toolCallId",
+			"toolName",
+			"arguments",
+			"argumentsDigest",
+			"capability",
+			"summary",
+			"expiresAt"
+		], kind);
+		messageId(payload.approvalId, "payload.approvalId", "approval");
+		taskId(payload.taskId);
+		digest(payload.taskBindingDigest, "payload.taskBindingDigest");
+		text(payload.toolCallId, "payload.toolCallId");
+		identifier(payload.toolName, "payload.toolName");
+		let argumentsDigest;
+		try {
+			argumentsDigest = digestToolArguments(payload.arguments, MAX_TASK_TOOL_ARGUMENT_BYTES);
+		} catch {
+			throw new FleetA2AError("invalid-payload", "task approval arguments must be a bounded canonical JSON object");
+		}
+		digest(payload.argumentsDigest, "payload.argumentsDigest");
+		if (payload.argumentsDigest !== argumentsDigest) throw new FleetA2AError("invalid-payload", "task approval argumentsDigest does not match arguments");
+		if (![
+			"workspace-mutation",
+			"command-execution",
+			"network-access"
+		].includes(text(payload.capability, "payload.capability", 32))) throw new FleetA2AError("invalid-payload", "task approval capability is invalid");
+		longText(payload.summary, "payload.summary", 2048);
+		canonicalTime(payload.expiresAt, "payload.expiresAt");
+		return;
+	}
+	if (kind === "task.approval.decision") {
+		exactPayload(payload, [
+			"approvalId",
+			"taskId",
+			"approvalRequestMessageId",
+			"approvalRequestPayloadDigest",
+			"taskBindingDigest",
+			"toolCallId",
+			"argumentsDigest",
+			"decision",
+			"decidedAt"
+		], kind);
+		messageId(payload.approvalId, "payload.approvalId", "approval");
+		taskId(payload.taskId);
+		messageId(payload.approvalRequestMessageId, "payload.approvalRequestMessageId", "msg");
+		digest(payload.approvalRequestPayloadDigest, "payload.approvalRequestPayloadDigest");
+		digest(payload.taskBindingDigest, "payload.taskBindingDigest");
+		text(payload.toolCallId, "payload.toolCallId");
+		digest(payload.argumentsDigest, "payload.argumentsDigest");
+		if (!["allowed-once", "rejected"].includes(text(payload.decision, "payload.decision", 16))) throw new FleetA2AError("invalid-payload", "task approval decision is invalid");
+		canonicalTime(payload.decidedAt, "payload.decidedAt");
+		return;
+	}
 	if (kind === "approval.request") {
 		exactPayload(payload, [
 			"approvalId",
@@ -185,11 +487,17 @@ function validateA2APayload(kind, payload) {
 		exactPayload(payload, [
 			"approvalId",
 			"taskId",
-			"decision"
+			"approvalRequestMessageId",
+			"approvalRequestPayloadDigest",
+			"decision",
+			"decidedAt"
 		], kind);
 		messageId(payload.approvalId, "payload.approvalId", "approval");
 		taskId(payload.taskId);
-		if (!["approved", "denied"].includes(text(payload.decision, "payload.decision", 16))) throw new FleetA2AError("invalid-payload", "approval decision is invalid");
+		messageId(payload.approvalRequestMessageId, "payload.approvalRequestMessageId", "msg");
+		digest(payload.approvalRequestPayloadDigest, "payload.approvalRequestPayloadDigest");
+		if (!["endorsed", "declined"].includes(text(payload.decision, "payload.decision", 16))) throw new FleetA2AError("invalid-payload", "federation approval decision is invalid");
+		canonicalTime(payload.decidedAt, "payload.decidedAt");
 		return;
 	}
 	if (kind === "receipt") {
@@ -234,7 +542,7 @@ var AgentClientError = class extends Error {
 	}
 };
 function isMutationCommand(command) {
-	return command === "apply" || command === "status" || command === "release-apply" || command === "release-status" || command === "a2a-receive" || command === "tasks-resume";
+	return command === "apply" || command === "status" || command === "release-apply" || command === "release-status" || command === "release-rollback-apply" || command === "release-rollback-status" || command === "release-retention-apply" || command === "release-retention-status" || command === "a2a-receive" || command === "tasks-prune" || command === "tasks-resume" || command === "federation-ack" || command === "federation-prune";
 }
 function agentTerminationGraceMs(command) {
 	return isMutationCommand(command) ? MUTATION_TERMINATION_GRACE_MS : NON_MUTATION_TERMINATION_GRACE_MS;
@@ -298,7 +606,15 @@ function safeAgentError(value) {
 		"plan-not-found": "approved plan was not found",
 		"approval-mismatch": "approval no longer matches current target state",
 		"plan-expired": "plan has expired",
-		"approval-expired": "approval has expired"
+		"approval-expired": "approval has expired",
+		"release-ownership-conflict": "live release binding is no longer owned by the approved transition",
+		"rollback-not-available": "the release transition has no usable rollback state",
+		"rollback-target-mismatch": "the retained rollback target no longer matches the approved state",
+		"rollback-descriptor-invalid": "the durable rollback descriptor is missing or invalid",
+		"rollback-backup-missing": "the retained release backup is missing",
+		"idempotency-conflict": "the release action already has a different approval",
+		"action-state-invalid": "the stored release action no longer matches its approved plan",
+		"legacy-task-owner-unbound": "this task was created before signed owner binding; clear the saved task reference and submit a new task"
 	};
 	const candidate = isRecord$1(value) ? value.code : void 0;
 	const code = typeof candidate === "string" && Object.hasOwn(messages, candidate) ? candidate : "agent-rejected";
@@ -563,7 +879,7 @@ function exactSemver(value, field) {
 	if (valid(version) !== version) throw new TypeError(field + " must be an exact semantic version");
 	return version;
 }
-function sha256Digest(value, field) {
+function sha256Digest$1(value, field) {
 	const digest = nonEmpty(value, field);
 	if (!/^[0-9a-f]{64}$/.test(digest)) throw new TypeError(field + " must be a lowercase SHA-256 digest");
 	return digest;
@@ -671,7 +987,7 @@ function parseReleaseSource(value, field, visibility) {
 		if (visibility !== "private") throw new TypeError(field + " artifact sources must be declared private");
 		return {
 			kind: "artifact",
-			digest: sha256Digest(value.digest, field + ".digest"),
+			digest: sha256Digest$1(value.digest, field + ".digest"),
 			version: exactSemver(value.version, field + ".version")
 		};
 	}
@@ -911,6 +1227,105 @@ function reconcileFleet(input) {
 		unmanaged,
 		summary
 	};
+}
+//#endregion
+//#region src/host/runtime-identity.ts
+const DSH_PACKAGE_NAME = "@deepseek-ai/dsh";
+const MAX_PACKAGE_SEARCH_DEPTH = 8;
+function sha256(value) {
+	return createHash("sha256").update(value).digest("hex");
+}
+async function readRegularFile(path) {
+	let handle;
+	try {
+		handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+		if (!(await handle.stat()).isFile()) throw new TypeError("runtime identity accepts regular files only");
+		return await handle.readFile();
+	} catch (error) {
+		if (error.code === "ELOOP") throw new TypeError("runtime identity accepts regular files only");
+		throw error;
+	} finally {
+		await handle?.close();
+	}
+}
+async function findDshPackage(entrypoint) {
+	let directory = dirname(entrypoint);
+	for (let depth = 0; depth < MAX_PACKAGE_SEARCH_DEPTH; depth += 1) {
+		const candidate = join(directory, "package.json");
+		try {
+			const packageJson = await readRegularFile(candidate);
+			const metadata = JSON.parse(packageJson.toString("utf8"));
+			if (metadata.name === DSH_PACKAGE_NAME) {
+				if (typeof metadata.version !== "string" || metadata.version.trim() !== metadata.version || metadata.version.length === 0) throw new TypeError("DSH runtime package version is invalid");
+				return {
+					packageRealpath: await realpath(directory),
+					packageJson,
+					version: metadata.version
+				};
+			}
+		} catch (error) {
+			if (error.code !== "ENOENT") throw error;
+		}
+		const parent = dirname(directory);
+		if (parent === directory) break;
+		directory = parent;
+	}
+	throw new TypeError("running DSH package metadata was not found");
+}
+async function inspectCurrentRuntimeIdentity(input = {}) {
+	const execPath = input.execPath ?? process.execPath;
+	const entrypointPath = input.entrypointPath ?? process.argv[1];
+	if (typeof entrypointPath !== "string" || !isAbsolute(execPath) || !isAbsolute(entrypointPath)) throw new TypeError("runtime identity needs absolute Node and DSH entrypoint paths");
+	const [nodeRealpath, dshEntrypointRealpath] = await Promise.all([realpath(execPath), realpath(entrypointPath)]);
+	const [entrypoint, packageMetadata] = await Promise.all([readRegularFile(dshEntrypointRealpath), findDshPackage(dshEntrypointRealpath)]);
+	const entrypointDigest = sha256(entrypoint);
+	const packageJsonDigest = sha256(packageMetadata.packageJson);
+	const identity = {
+		nodeRealpath,
+		dshEntrypointRealpath,
+		dshPackageRealpath: packageMetadata.packageRealpath,
+		dshVersion: packageMetadata.version,
+		entrypointDigest,
+		packageJsonDigest
+	};
+	return {
+		...identity,
+		runtimeDigest: sha256(JSON.stringify(identity))
+	};
+}
+function validateRuntimeIdentity(value) {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) throw new TypeError("runtime identity must be an object");
+	const body = value;
+	const expected = [
+		"nodeRealpath",
+		"dshEntrypointRealpath",
+		"dshPackageRealpath",
+		"dshVersion",
+		"entrypointDigest",
+		"packageJsonDigest",
+		"runtimeDigest"
+	].sort();
+	if (Object.keys(body).sort().join(",") !== expected.join(",")) throw new TypeError("runtime identity has unsupported or missing fields");
+	for (const field of [
+		"nodeRealpath",
+		"dshEntrypointRealpath",
+		"dshPackageRealpath"
+	]) if (typeof body[field] !== "string" || !isAbsolute(body[field]) || normalize(body[field]) !== body[field]) throw new TypeError("runtime identity path is invalid");
+	if (typeof body.dshVersion !== "string" || body.dshVersion.length === 0 || body.dshVersion !== body.dshVersion.trim()) throw new TypeError("runtime identity DSH version is invalid");
+	for (const field of [
+		"entrypointDigest",
+		"packageJsonDigest",
+		"runtimeDigest"
+	]) if (typeof body[field] !== "string" || !/^[0-9a-f]{64}$/.test(body[field])) throw new TypeError("runtime identity digest is invalid");
+	const identity = {
+		nodeRealpath: body.nodeRealpath,
+		dshEntrypointRealpath: body.dshEntrypointRealpath,
+		dshPackageRealpath: body.dshPackageRealpath,
+		dshVersion: body.dshVersion,
+		entrypointDigest: body.entrypointDigest,
+		packageJsonDigest: body.packageJsonDigest
+	};
+	if (sha256(JSON.stringify(identity)) !== body.runtimeDigest) throw new TypeError("runtime identity digest does not match its fields");
 }
 //#endregion
 //#region src/host/updates.ts
@@ -1283,10 +1698,12 @@ function defaultDshBinary() {
 }
 function resolveConfig(config) {
 	const dshHome = expandHome(config?.dshHome ?? process.env.DSH_HOME ?? "~/.dsh");
+	const manifestPath = expandHome(config?.manifestPath ?? process.env.DSH_FLEET_MANIFEST ?? "~/.dsh/fleet/fleet.lock.yaml");
 	const boundedNumber = (value, fallback, minimum, maximum) => value === void 0 || !Number.isFinite(value) ? fallback : Math.min(maximum, Math.max(minimum, Math.round(value)));
 	return {
 		deviceId: normalizeDeviceId(config?.deviceId ?? process.env.DSH_FLEET_DEVICE_ID ?? hostname()),
-		manifestPath: expandHome(config?.manifestPath ?? process.env.DSH_FLEET_MANIFEST ?? "~/.dsh/fleet/fleet.lock.yaml"),
+		manifestPath,
+		desiredManifestPath: expandHome(config?.desiredManifestPath ?? process.env.DSH_FLEET_DESIRED_MANIFEST ?? manifestPath),
 		profile: (config?.profile ?? process.env.DSH_FLEET_PROFILE ?? "web").trim(),
 		dshHome,
 		dshBinary: expandHome(config?.dshBinary ?? process.env.DSH_FLEET_DSH_BINARY ?? defaultDshBinary()),
@@ -1344,8 +1761,10 @@ const EMPTY_MANIFEST = {
 	devices: {},
 	plugins: []
 };
-async function collectFleetStatus(ctx, configInput) {
+async function collectFleetStatus(ctx, configInput, hostDependencies = {}) {
 	const config = resolveConfig(configInput);
+	const runtimeIdentity = await (hostDependencies.inspectRuntimeIdentity ?? inspectCurrentRuntimeIdentity)();
+	validateRuntimeIdentity(runtimeIdentity);
 	const profilePath = join(config.dshHome, "profiles", config.profile, "package.json");
 	const runtime = runtimeSnapshot(ctx.loader);
 	let manifest = EMPTY_MANIFEST;
@@ -1403,9 +1822,10 @@ async function collectFleetStatus(ctx, configInput) {
 			nodeVersion: process.version
 		},
 		dsh: {
-			version: readDshVersion(config.dshBinary),
+			version: runtimeIdentity.dshVersion,
 			profile: config.profile
 		},
+		runtimeIdentity,
 		manifest: {
 			path: config.manifestPath,
 			loaded: manifestLoaded,
@@ -1442,6 +1862,280 @@ function requiredString(value, field) {
 	if (typeof value !== "string" || value.trim().length === 0 || value !== value.trim()) throw new TypeError(field + " must be a trimmed non-empty string");
 	return value;
 }
+const TASK_CATALOG_STATES = /* @__PURE__ */ new Set([
+	"accepted",
+	"running",
+	"cancel-requested",
+	"succeeded",
+	"failed",
+	"cancelled"
+]);
+const TERMINAL_TASK_STATES = /* @__PURE__ */ new Set([
+	"succeeded",
+	"failed",
+	"cancelled"
+]);
+function canonicalTimestamp(value, field) {
+	const result = requiredString(value, field);
+	const time = Date.parse(result);
+	if (!Number.isFinite(time) || new Date(time).toISOString() !== result) throw new TypeError(field + " must be a canonical timestamp");
+	return result;
+}
+function taskCatalog(value, targetDeviceId) {
+	const body = closedPayload(value, ["generatedAt", "tasks"], "task catalog");
+	if (!Array.isArray(body.tasks)) throw new TypeError("task catalog tasks must be an array");
+	const tasks = body.tasks.map((item, index) => {
+		const row = closedPayload(item, [
+			"createdAt",
+			"errorCode",
+			"profile",
+			"resultDigest",
+			"state",
+			"targetDeviceId",
+			"taskId",
+			"updatedAt",
+			"workspaceId"
+		], `task catalog tasks[${index}]`);
+		const taskId = requiredString(row.taskId, `task catalog tasks[${index}].taskId`);
+		validateA2APayload("task.status", { taskId });
+		const state = requiredString(row.state, `task catalog tasks[${index}].state`);
+		if (!TASK_CATALOG_STATES.has(state)) throw new TypeError(`task catalog tasks[${index}].state is invalid`);
+		if (row.targetDeviceId !== targetDeviceId) throw new TypeError(`task catalog tasks[${index}] targets another device`);
+		const nullable = (field) => {
+			const raw = row[field];
+			if (raw === null) return null;
+			const text = requiredString(raw, `task catalog tasks[${index}].${field}`);
+			if (field === "resultDigest" && !/^[0-9a-f]{64}$/.test(text)) throw new TypeError(`task catalog tasks[${index}].resultDigest is invalid`);
+			return text;
+		};
+		return {
+			taskId,
+			state,
+			targetDeviceId,
+			workspaceId: requiredString(row.workspaceId, `task catalog tasks[${index}].workspaceId`),
+			profile: requiredString(row.profile, `task catalog tasks[${index}].profile`),
+			createdAt: canonicalTimestamp(row.createdAt, `task catalog tasks[${index}].createdAt`),
+			updatedAt: canonicalTimestamp(row.updatedAt, `task catalog tasks[${index}].updatedAt`),
+			errorCode: nullable("errorCode"),
+			resultDigest: nullable("resultDigest")
+		};
+	});
+	return {
+		generatedAt: canonicalTimestamp(body.generatedAt, "task catalog generatedAt"),
+		tasks
+	};
+}
+function taskPruneResult(value) {
+	const body = closedPayload(value, ["pruned", "skippedActive"], "task prune result");
+	if (typeof body.pruned !== "number" || !Number.isSafeInteger(body.pruned) || body.pruned < 0 || typeof body.skippedActive !== "number" || !Number.isSafeInteger(body.skippedActive) || body.skippedActive < 0) throw new TypeError("task prune result counts must be non-negative integers");
+	return {
+		pruned: body.pruned,
+		skippedActive: body.skippedActive
+	};
+}
+function taskResumeResult(value) {
+	const body = closedPayload(value, ["resumed"], "tasks resume result");
+	if (typeof body.resumed !== "number" || !Number.isSafeInteger(body.resumed) || body.resumed < 0) throw new TypeError("tasks resume result must be a non-negative integer");
+	return { resumed: body.resumed };
+}
+const SHA256_PATTERN = /^[0-9a-f]{64}$/;
+const FEDERATION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+const MESSAGE_ID_PATTERN = /^msg:[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const AGENT_ACTION_STATES = /* @__PURE__ */ new Set([
+	"approved",
+	"staging",
+	"staged",
+	"applying",
+	"restarting",
+	"verifying",
+	"succeeded",
+	"rollback",
+	"rollback-restarting",
+	"rollback-verifying",
+	"rolled-back",
+	"manual-intervention"
+]);
+function sha256Digest(value, field) {
+	const result = requiredString(value, field);
+	if (!SHA256_PATTERN.test(result)) throw new TypeError(field + " must be a lowercase SHA-256 digest");
+	return result;
+}
+function federationIdentifier(value, field) {
+	const result = requiredString(value, field);
+	if (!FEDERATION_ID_PATTERN.test(result)) throw new TypeError(field + " is invalid");
+	return result;
+}
+function namespacedMessageId(value, field) {
+	const result = requiredString(value, field);
+	if (!MESSAGE_ID_PATTERN.test(result)) throw new TypeError(field + " is invalid");
+	return result;
+}
+function federationEnvelope(value, label = "federation envelope") {
+	const body = closedPayload(value, [
+		"expiresAt",
+		"issuedAt",
+		"kind",
+		"messageId",
+		"payload",
+		"payloadDigest",
+		"recipient",
+		"schemaVersion",
+		"sender",
+		"signature",
+		"teamId"
+	], label);
+	if (body.schemaVersion !== 2) throw new TypeError(label + " schemaVersion is invalid");
+	const kind = requiredString(body.kind, label + ".kind");
+	if (!isFleetFederationAdvisoryKind(kind)) throw new TypeError(label + " kind is not a federation advisory");
+	const sender = closedPayload(body.sender, [
+		"deviceId",
+		"keyId",
+		"principalId"
+	], label + ".sender");
+	const recipient = closedPayload(body.recipient, ["deviceId", "teamId"], label + ".recipient");
+	federationIdentifier(body.teamId, label + ".teamId");
+	federationIdentifier(sender.principalId, label + ".sender.principalId");
+	federationIdentifier(sender.deviceId, label + ".sender.deviceId");
+	const keyId = requiredString(sender.keyId, label + ".sender.keyId");
+	if (!/^ed25519:[0-9a-f]{64}$/.test(keyId)) throw new TypeError(label + ".sender.keyId is invalid");
+	federationIdentifier(recipient.teamId, label + ".recipient.teamId");
+	federationIdentifier(recipient.deviceId, label + ".recipient.deviceId");
+	namespacedMessageId(body.messageId, label + ".messageId");
+	const issuedAt = canonicalTimestamp(body.issuedAt, label + ".issuedAt");
+	const expiresAt = canonicalTimestamp(body.expiresAt, label + ".expiresAt");
+	if (Date.parse(expiresAt) <= Date.parse(issuedAt)) throw new TypeError(label + " validity window is invalid");
+	sha256Digest(body.payloadDigest, label + ".payloadDigest");
+	if (!/^[A-Za-z0-9_-]{86}$/.test(requiredString(body.signature, label + ".signature"))) throw new TypeError(label + ".signature is invalid");
+	validateA2APayload(kind, body.payload);
+	return value;
+}
+function federationInbox(value, localTeamId, localDeviceId) {
+	if (!Array.isArray(value) || value.length > 100) throw new TypeError("federation inbox must be a bounded array");
+	const seen = /* @__PURE__ */ new Set();
+	return value.map((entry, index) => {
+		const item = closedPayload(entry, [
+			"acknowledgement",
+			"expired",
+			"record"
+		], `federation inbox[${index}]`);
+		if (typeof item.expired !== "boolean") throw new TypeError(`federation inbox[${index}].expired must be boolean`);
+		const record = closedPayload(item.record, [
+			"envelope",
+			"receivedAt",
+			"schemaVersion"
+		], `federation inbox[${index}].record`);
+		if (record.schemaVersion !== 1) throw new TypeError(`federation inbox[${index}].record schema is invalid`);
+		canonicalTimestamp(record.receivedAt, `federation inbox[${index}].record.receivedAt`);
+		const envelope = federationEnvelope(record.envelope, `federation inbox[${index}].record.envelope`);
+		if (envelope.teamId === localTeamId || envelope.recipient.teamId !== localTeamId || envelope.recipient.deviceId !== localDeviceId) throw new TypeError(`federation inbox[${index}] is not a foreign message for this fixed signer`);
+		if (seen.has(envelope.messageId)) throw new TypeError("federation inbox contains duplicate message ids");
+		seen.add(envelope.messageId);
+		let acknowledgement = null;
+		if (item.acknowledgement !== null) {
+			const ack = closedPayload(item.acknowledgement, [
+				"acknowledgedAt",
+				"disposition",
+				"messageId",
+				"payloadDigest",
+				"schemaVersion"
+			], `federation inbox[${index}].acknowledgement`);
+			if (ack.schemaVersion !== 1 || ack.disposition !== "acknowledged" && ack.disposition !== "dismissed" || ack.messageId !== envelope.messageId || ack.payloadDigest !== envelope.payloadDigest) throw new TypeError(`federation inbox[${index}].acknowledgement does not match its message`);
+			canonicalTimestamp(ack.acknowledgedAt, `federation inbox[${index}].acknowledgement.acknowledgedAt`);
+			acknowledgement = ack;
+		}
+		return {
+			record: {
+				schemaVersion: 1,
+				receivedAt: record.receivedAt,
+				envelope
+			},
+			acknowledgement,
+			expired: item.expired
+		};
+	});
+}
+function federationAcknowledgement(value, expected) {
+	const body = closedPayload(value, ["acknowledgement", "status"], "federation acknowledgement result");
+	if (body.status !== "acknowledged" && body.status !== "duplicate") throw new TypeError("federation acknowledgement status is invalid");
+	const ack = closedPayload(body.acknowledgement, [
+		"acknowledgedAt",
+		"disposition",
+		"messageId",
+		"payloadDigest",
+		"schemaVersion"
+	], "federation acknowledgement");
+	if (ack.schemaVersion !== 1 || ack.disposition !== "acknowledged" && ack.disposition !== "dismissed") throw new TypeError("federation acknowledgement is invalid");
+	namespacedMessageId(ack.messageId, "federation acknowledgement.messageId");
+	sha256Digest(ack.payloadDigest, "federation acknowledgement.payloadDigest");
+	canonicalTimestamp(ack.acknowledgedAt, "federation acknowledgement.acknowledgedAt");
+	if (ack.messageId !== expected.messageId || ack.payloadDigest !== expected.payloadDigest || ack.disposition !== expected.disposition) throw new TypeError("federation acknowledgement does not match the requested first-final disposition");
+	return value;
+}
+function federationRetentionPlan(value) {
+	const body = closedPayload(value, ["candidates", "generatedAt"], "federation retention plan");
+	const generatedAt = canonicalTimestamp(body.generatedAt, "federation retention plan.generatedAt");
+	if (!Array.isArray(body.candidates) || body.candidates.length > 500) throw new TypeError("federation retention candidates are invalid");
+	return {
+		generatedAt,
+		candidates: body.candidates.map((candidate, index) => {
+			const row = closedPayload(candidate, [
+				"messageId",
+				"payloadDigest",
+				"reason"
+			], `federation retention candidates[${index}]`);
+			if (row.reason !== "acknowledged-retention" && row.reason !== "expired-retention" && row.reason !== "capacity") throw new TypeError(`federation retention candidates[${index}].reason is invalid`);
+			const reason = row.reason;
+			return {
+				messageId: namespacedMessageId(row.messageId, `federation retention candidates[${index}].messageId`),
+				payloadDigest: sha256Digest(row.payloadDigest, `federation retention candidates[${index}].payloadDigest`),
+				reason
+			};
+		})
+	};
+}
+function releaseAction(value, deviceId, profile) {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) throw new TypeError("release action is invalid");
+	const action = value;
+	if (action.deviceId !== deviceId || action.profile !== profile || typeof action.planId !== "string" || typeof action.planDigest !== "string" || !SHA256_PATTERN.test(action.planDigest) || typeof action.releaseId !== "string" || typeof action.releaseVersion !== "string" || typeof action.releaseDigest !== "string" || !SHA256_PATTERN.test(action.releaseDigest) || typeof action.fromManifestDigest !== "string" || !SHA256_PATTERN.test(action.fromManifestDigest) || typeof action.toManifestDigest !== "string" || !SHA256_PATTERN.test(action.toManifestDigest) || action.fromReleaseDigest !== null && (typeof action.fromReleaseDigest !== "string" || !SHA256_PATTERN.test(action.fromReleaseDigest)) || typeof action.toReleaseDigest !== "string" || !SHA256_PATTERN.test(action.toReleaseDigest) || typeof action.rollbackDescriptorDigest !== "string" || !SHA256_PATTERN.test(action.rollbackDescriptorDigest) || typeof action.state !== "string" || !AGENT_ACTION_STATES.has(action.state) || typeof action.updatedAt !== "string") throw new TypeError("release action does not match the requested device and profile");
+	canonicalTimestamp(action.updatedAt, "release action.updatedAt");
+	return value;
+}
+function releaseRollbackAction(value, deviceId, profile) {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) throw new TypeError("release rollback action is invalid");
+	const action = value;
+	if (action.deviceId !== deviceId || action.profile !== profile || typeof action.planId !== "string" || typeof action.planDigest !== "string" || !SHA256_PATTERN.test(action.planDigest) || typeof action.transitionPlanId !== "string" || !/^release-plan:[0-9a-f]{64}$/.test(action.transitionPlanId) || typeof action.fromManifestDigest !== "string" || !SHA256_PATTERN.test(action.fromManifestDigest) || typeof action.toManifestDigest !== "string" || !SHA256_PATTERN.test(action.toManifestDigest) || typeof action.fromReleaseDigest !== "string" || !SHA256_PATTERN.test(action.fromReleaseDigest) || action.toReleaseDigest !== null && (typeof action.toReleaseDigest !== "string" || !SHA256_PATTERN.test(action.toReleaseDigest)) || typeof action.state !== "string" || !AGENT_ACTION_STATES.has(action.state) || typeof action.updatedAt !== "string") throw new TypeError("release rollback action does not match the requested device and profile");
+	canonicalTimestamp(action.updatedAt, "release rollback action.updatedAt");
+	return value;
+}
+function releaseRetentionAction(value, expected) {
+	const action = closedPayload(value, [
+		"activeBackupQuarantinePrepared",
+		"activeBackupRemoved",
+		"activeTransitionPlanId",
+		"approvalId",
+		"currentTransitionPlanId",
+		"deviceId",
+		"idempotencyKey",
+		"planDigest",
+		"planId",
+		"principalId",
+		"profile",
+		"removedTransitionPlanIds",
+		"result",
+		"state",
+		"updatedAt"
+	], "release retention action");
+	if (action.planId !== expected.planId || action.planDigest !== expected.planDigest || action.deviceId !== expected.deviceId || action.profile !== expected.profile || action.principalId !== expected.principalId || expected.approvalId !== void 0 && action.approvalId !== expected.approvalId) throw new TypeError("release retention action does not match its approved plan and principal");
+	if (typeof action.approvalId !== "string" || !FEDERATION_ID_PATTERN.test(action.approvalId) || typeof action.idempotencyKey !== "string" || !SHA256_PATTERN.test(action.idempotencyKey) || action.currentTransitionPlanId !== null && (typeof action.currentTransitionPlanId !== "string" || !/^release-plan:[0-9a-f]{64}$/.test(action.currentTransitionPlanId)) || action.activeTransitionPlanId !== null && (typeof action.activeTransitionPlanId !== "string" || !/^release-plan:[0-9a-f]{64}$/.test(action.activeTransitionPlanId)) || typeof action.activeBackupQuarantinePrepared !== "boolean" || typeof action.activeBackupRemoved !== "boolean" || !Array.isArray(action.removedTransitionPlanIds)) throw new TypeError("release retention action progress is invalid");
+	const removedTransitionPlanIds = action.removedTransitionPlanIds;
+	if (removedTransitionPlanIds.some((id) => typeof id !== "string" || !/^release-plan:[0-9a-f]{64}$/.test(id)) || new Set(removedTransitionPlanIds).size !== removedTransitionPlanIds.length || removedTransitionPlanIds.some((id, index) => index > 0 && id <= removedTransitionPlanIds[index - 1])) throw new TypeError("release retention action progress is invalid");
+	if (action.currentTransitionPlanId !== null && removedTransitionPlanIds.includes(action.currentTransitionPlanId) || action.activeTransitionPlanId !== null && removedTransitionPlanIds.includes(action.activeTransitionPlanId)) throw new TypeError("release retention action cannot remove an active or current transition");
+	canonicalTimestamp(action.updatedAt, "release retention action.updatedAt");
+	if (action.state !== "approved" && action.state !== "applying" && action.state !== "succeeded") throw new TypeError("release retention action state is invalid");
+	if (action.state === "succeeded" ? action.result !== "success" : action.result !== null) throw new TypeError("release retention action result is inconsistent with its state");
+	if (action.activeTransitionPlanId === null && (action.activeBackupQuarantinePrepared !== false || action.activeBackupRemoved !== false)) throw new TypeError("release retention action has unbound backup progress");
+	return value;
+}
 async function digestManifest(path) {
 	return createHash("sha256").update(await readFile(path, "utf8"), "utf8").digest("hex");
 }
@@ -1457,7 +2151,7 @@ function assertAgentConfiguration(expected, response) {
 	if (response.profile !== expected.profile) throw new AgentClientError("agent-profile-mismatch", "fleet agent profile does not match the configured Host profile");
 	if (response.manifestDigest !== expected.manifestDigest) throw new AgentClientError("agent-manifest-mismatch", "fleet agent manifest does not match the configured Host manifest");
 }
-function apply(ctx, config) {
+function apply(ctx, config, hostDependencies = {}) {
 	const host = ctx;
 	const resolved = resolveConfig(config);
 	const updates = createUpdateMonitor({
@@ -1471,25 +2165,66 @@ function apply(ctx, config) {
 		dshVersion: readDshVersion(resolved.dshBinary)
 	});
 	const agents = createAgentClient(resolved.convergence);
+	const assertActiveRoute = async (deviceId) => {
+		const binding = await loadManifestBinding(resolved.desiredManifestPath);
+		if (binding.manifest.devices[deviceId] === void 0) throw new AgentClientError("target-revoked", "target is not authorized by the active Fleet manifest");
+		if (!resolved.convergence.targets.some((target) => target.deviceId === deviceId)) throw new AgentClientError("target-not-found", "fleet target is not configured");
+		return binding;
+	};
+	const callActiveAgent = async (deviceId, command, payload, signal) => {
+		await assertActiveRoute(deviceId);
+		return agents.call(deviceId, command, payload, signal);
+	};
+	const federationSigner = async (signal) => {
+		const deviceId = resolved.convergence.signerDeviceId;
+		if (deviceId === void 0) throw new AgentClientError("a2a-signer-missing", "a fixed local A2A signer is not configured");
+		const target = resolved.convergence.targets.find((candidate) => candidate.deviceId === deviceId);
+		if (target === void 0 || target.transport !== "local") throw new AgentClientError("a2a-signer-invalid", "A2A signer must be a configured local Agent target");
+		const report = await callActiveAgent(deviceId, "doctor", null, signal);
+		if (report.protocolVersion !== 1 || report.ready !== true || report.deviceId !== deviceId || !FEDERATION_ID_PATTERN.test(report.teamId) || report.principalId !== resolved.convergence.principalId || !/^ed25519:[0-9a-f]{64}$/.test(report.identityKeyId)) throw new AgentClientError("a2a-signer-unready", "local A2A signer doctor identity is invalid");
+		return {
+			deviceId,
+			teamId: report.teamId,
+			principalId: report.principalId,
+			keyId: report.identityKeyId
+		};
+	};
+	const signFederationAdvisory = async (recipientTeamId, recipientDeviceId, kind, advisoryPayload, signal) => {
+		const signer = await federationSigner(signal);
+		const targetTeamId = federationIdentifier(recipientTeamId, "recipientTeamId");
+		const targetDeviceId = normalizeDeviceId(federationIdentifier(recipientDeviceId, "recipientDeviceId"));
+		if (targetTeamId === signer.teamId) throw new AgentClientError("federation-same-team", "cross-team export requires a foreign recipient team");
+		validateA2APayload(kind, advisoryPayload);
+		const envelope = federationEnvelope(await callActiveAgent(signer.deviceId, "a2a-sign", {
+			recipientDeviceId: targetDeviceId,
+			recipientTeamId: targetTeamId,
+			kind,
+			payload: advisoryPayload
+		}, signal), "signed federation export");
+		if (envelope.kind !== kind || envelope.teamId !== signer.teamId || envelope.sender.deviceId !== signer.deviceId || envelope.sender.principalId !== signer.principalId || envelope.sender.keyId !== signer.keyId || envelope.recipient.teamId !== targetTeamId || envelope.recipient.deviceId !== targetDeviceId || canonicalJson(envelope.payload) !== canonicalJson(advisoryPayload)) throw new AgentClientError("federation-export-mismatch", "signed federation export does not match its requested binding");
+		return envelope;
+	};
 	const signedTaskCall = async (targetDeviceId, kind, taskPayload, signal) => {
 		const signerDeviceId = resolved.convergence.signerDeviceId;
 		if (signerDeviceId === void 0) throw new AgentClientError("a2a-signer-missing", "a fixed local A2A signer is not configured");
 		const signer = resolved.convergence.targets.find((target) => target.deviceId === signerDeviceId);
 		if (signer === void 0 || signer.transport !== "local") throw new AgentClientError("a2a-signer-invalid", "A2A signer must be a configured local Agent target");
-		const envelope = await agents.call(signerDeviceId, "a2a-sign", {
+		await assertActiveRoute(targetDeviceId);
+		await assertActiveRoute(signerDeviceId);
+		const envelope = await callActiveAgent(signerDeviceId, "a2a-sign", {
 			recipientDeviceId: targetDeviceId,
 			kind,
 			payload: taskPayload
 		}, signal);
-		const receipt = await agents.call(targetDeviceId, "a2a-receive", { envelope }, signal);
+		const receipt = await callActiveAgent(targetDeviceId, "a2a-receive", { envelope }, signal);
 		if (receipt.requestMessageId !== envelope.messageId || typeof receipt.response !== "object" || receipt.response === null) throw new AgentClientError("a2a-receipt-invalid", "target returned an invalid A2A receipt");
-		const verified = await agents.call(signerDeviceId, "a2a-verify", { envelope: receipt.response }, signal);
-		if (verified.sender.deviceId !== targetDeviceId || verified.payload.taskId !== taskPayload.taskId || verified.kind !== "task.progress" && verified.kind !== "task.result") throw new AgentClientError("a2a-response-mismatch", "signed task response does not match the requested target and task");
+		const verified = await callActiveAgent(signerDeviceId, "a2a-verify", { envelope: receipt.response }, signal);
+		if (verified.sender.deviceId !== targetDeviceId || verified.payload.taskId !== taskPayload.taskId || verified.kind !== "task.progress" && verified.kind !== "task.result" && verified.kind !== "task.approval.request") throw new AgentClientError("a2a-response-mismatch", "signed task response does not match the requested target and task");
 		return verified;
 	};
 	host.connection.rpc.handle(RPC_CHANNEL, async (endpoint, payload) => {
 		try {
-			if (endpoint === "status") return ok(await collectFleetStatus(host, config));
+			if (endpoint === "status") return ok(await collectFleetStatus(host, config, hostDependencies));
 			if (endpoint === "updates") {
 				let mode = "if-stale";
 				if (payload !== null && payload !== void 0) {
@@ -1513,21 +2248,35 @@ function apply(ctx, config) {
 					enabled: false,
 					targets: []
 				});
-				const binding = await loadManifestBinding(resolved.manifestPath);
+				const binding = await loadManifestBinding(resolved.desiredManifestPath);
 				const targets = await Promise.all(agents.targets.map(async (target) => {
 					try {
 						const releaseMode = binding.manifest.schemaVersion === 2;
-						const inspection = releaseMode ? await agents.call(target.deviceId, "release-inspect", null, signal) : await agents.call(target.deviceId, "inspect", null, signal);
-						assertAgentConfiguration({
+						const inspection = releaseMode ? await callActiveAgent(target.deviceId, "release-inspect", null, signal) : await callActiveAgent(target.deviceId, "inspect", null, signal);
+						if (releaseMode && "kind" in inspection && inspection.kind === "profile-release") {
+							assertAgentIdentity(target.deviceId, inspection);
+							if (!SHA256_PATTERN.test(inspection.observedRuntimeDigest) || inspection.observedServiceDefinitionDigest !== null && !SHA256_PATTERN.test(inspection.observedServiceDefinitionDigest)) throw new AgentClientError("agent-runtime-identity-invalid", "fleet agent runtime identity is invalid");
+							if (inspection.profile !== resolved.profile) throw new AgentClientError("agent-profile-mismatch", "fleet agent profile does not match the configured Host profile");
+							if (inspection.desiredManifestDigest !== binding.digest) throw new AgentClientError("agent-manifest-mismatch", "fleet agent desired manifest does not match the configured Host manifest");
+						} else assertAgentConfiguration({
 							deviceId: target.deviceId,
 							profile: resolved.profile,
 							manifestDigest: binding.digest
 						}, inspection);
+						let readiness;
+						let readinessErrorCode;
+						if (releaseMode) try {
+							readiness = await callActiveAgent(target.deviceId, "doctor", null, signal);
+						} catch (error) {
+							readinessErrorCode = error instanceof AgentClientError ? error.code : "agent-readiness-unavailable";
+						}
 						return {
 							...target,
 							online: true,
 							mode: releaseMode ? "profile-release" : "single-plugin",
-							inspection
+							inspection,
+							...readiness === void 0 ? {} : { readiness },
+							...readinessErrorCode === void 0 ? {} : { readinessErrorCode }
 						};
 					} catch (error) {
 						const code = error instanceof AgentClientError ? error.code : "agent-unavailable";
@@ -1538,8 +2287,31 @@ function apply(ctx, config) {
 						};
 					}
 				}));
+				const signerDeviceId = resolved.convergence.signerDeviceId;
+				const signerConfig = signerDeviceId === void 0 ? void 0 : agents.targets.find((target) => target.deviceId === signerDeviceId);
+				const signerTarget = signerDeviceId === void 0 ? void 0 : targets.find((target) => target.deviceId === signerDeviceId);
+				const signer = signerDeviceId === void 0 ? {
+					configured: false,
+					ready: false,
+					errorCode: "a2a-signer-missing"
+				} : signerConfig?.transport !== "local" ? {
+					configured: true,
+					deviceId: signerDeviceId,
+					ready: false,
+					errorCode: "a2a-signer-invalid"
+				} : signerTarget?.online === true && "readiness" in signerTarget ? {
+					configured: true,
+					deviceId: signerDeviceId,
+					ready: true
+				} : {
+					configured: true,
+					deviceId: signerDeviceId,
+					ready: false,
+					errorCode: "a2a-signer-unready"
+				};
 				return ok({
 					enabled: true,
+					signer,
 					targets
 				});
 			}
@@ -1547,7 +2319,7 @@ function apply(ctx, config) {
 				const body = closedPayload(payload, ["deviceId", "pluginId"], "plan payload");
 				const deviceId = requiredString(body.deviceId, "deviceId");
 				const pluginId = requiredString(body.pluginId, "pluginId");
-				const plan = await agents.call(deviceId, "plan", { pluginId }, signal);
+				const plan = await callActiveAgent(deviceId, "plan", { pluginId }, signal);
 				assertAgentConfiguration({
 					deviceId,
 					profile: resolved.profile,
@@ -1557,12 +2329,32 @@ function apply(ctx, config) {
 			}
 			if (endpoint === "release-plan") {
 				const deviceId = requiredString(closedPayload(payload, ["deviceId"], "release plan payload").deviceId, "deviceId");
-				const plan = await agents.call(deviceId, "release-plan", null, signal);
-				assertAgentConfiguration({
-					deviceId,
-					profile: resolved.profile,
-					manifestDigest: await digestManifest(resolved.manifestPath)
-				}, plan);
+				const plan = await callActiveAgent(deviceId, "release-plan", null, signal);
+				assertAgentIdentity(deviceId, plan);
+				if (plan.profile !== resolved.profile) throw new AgentClientError("agent-profile-mismatch", "fleet agent profile does not match the configured Host profile");
+				if (plan.toManifestDigest !== await digestManifest(resolved.desiredManifestPath)) throw new AgentClientError("agent-manifest-mismatch", "release transition does not target the active Host manifest");
+				return ok(plan);
+			}
+			if (endpoint === "release-rollback-plan") {
+				const body = closedPayload(payload, ["deviceId", "transitionPlanId"], "release rollback plan payload");
+				const deviceId = normalizeDeviceId(requiredString(body.deviceId, "deviceId"));
+				const transitionPlanId = requiredString(body.transitionPlanId, "transitionPlanId");
+				const transition = releaseAction(await callActiveAgent(deviceId, "release-status", { planId: transitionPlanId }, signal), deviceId, resolved.profile);
+				if (transition.planId !== transitionPlanId || transition.state !== "succeeded" || transition.result !== "success") throw new AgentClientError("rollback-not-available", "only a successfully applied release transition can be rolled back");
+				const plan = await callActiveAgent(deviceId, "release-rollback-plan", { transitionPlanId }, signal);
+				validateFleetReleaseRollbackPlan(plan);
+				const activeManifestDigest = await digestManifest(resolved.desiredManifestPath);
+				if (plan.deviceId !== deviceId || plan.profile !== resolved.profile || plan.transitionPlanId !== transitionPlanId || plan.transitionPlanDigest !== transition.planDigest || plan.fromManifestDigest !== transition.toManifestDigest || plan.toManifestDigest !== transition.fromManifestDigest || plan.fromReleaseDigest !== transition.toReleaseDigest || plan.toReleaseDigest !== transition.fromReleaseDigest || plan.fromManifestDigest !== activeManifestDigest) throw new AgentClientError("release-rollback-mismatch", "release rollback plan is not the exact inverse of the active successful transition");
+				if (Date.parse(plan.expiresAt) <= Date.now()) throw new AgentClientError("plan-expired", "release rollback plan has expired");
+				return ok(plan);
+			}
+			if (endpoint === "release-retention-plan") {
+				const deviceId = normalizeDeviceId(requiredString(closedPayload(payload, ["deviceId"], "release retention plan payload").deviceId, "deviceId"));
+				const plan = await callActiveAgent(deviceId, "release-retention-plan", null, signal);
+				validateFleetReleaseRetentionPlan(plan);
+				assertAgentIdentity(deviceId, plan);
+				if (plan.profile !== resolved.profile) throw new AgentClientError("agent-profile-mismatch", "release retention plan profile does not match the configured Host profile");
+				if (Date.parse(plan.expiresAt) <= Date.now()) throw new AgentClientError("plan-expired", "release retention plan has expired");
 				return ok(plan);
 			}
 			if (endpoint === "approve") {
@@ -1583,15 +2375,106 @@ function apply(ctx, config) {
 					approvalId: requiredString(body.approvalId, "approvalId"),
 					principalId: resolved.convergence.principalId,
 					planId: requiredString(body.planId, "planId"),
-					planDigest: requiredString(body.planDigest, "planDigest"),
+					planDigest: sha256Digest(body.planDigest, "planDigest"),
 					deviceId,
 					profile: requiredString(body.profile, "profile"),
 					approvedAt: approvedAt.toISOString(),
 					expiresAt: new Date(Math.min(planExpiresAt.getTime(), approvedAt.getTime() + 12e4)).toISOString()
 				};
-				return ok(await agents.call(deviceId, "apply", { approval }, signal));
+				return ok(await callActiveAgent(deviceId, "apply", { approval }, signal));
 			}
 			if (endpoint === "release-approve") {
+				const body = closedPayload(payload, [
+					"approvalId",
+					"deviceId",
+					"fromManifestDigest",
+					"fromReleaseDigest",
+					"planDigest",
+					"planExpiresAt",
+					"planId",
+					"profile",
+					"toManifestDigest",
+					"toReleaseDigest"
+				], "release approve payload");
+				const deviceId = requiredString(body.deviceId, "deviceId");
+				const profile = requiredString(body.profile, "profile");
+				if (profile !== resolved.profile) throw new AgentClientError("agent-profile-mismatch", "release approval profile does not match the configured Host profile");
+				const fromManifestDigest = sha256Digest(body.fromManifestDigest, "fromManifestDigest");
+				const toManifestDigest = sha256Digest(body.toManifestDigest, "toManifestDigest");
+				const fromReleaseDigest = body.fromReleaseDigest === null ? null : sha256Digest(body.fromReleaseDigest, "fromReleaseDigest");
+				const toReleaseDigest = sha256Digest(body.toReleaseDigest, "toReleaseDigest");
+				if (toManifestDigest !== await digestManifest(resolved.desiredManifestPath)) throw new AgentClientError("agent-manifest-mismatch", "release approval no longer targets the desired Host manifest");
+				const approvedAt = /* @__PURE__ */ new Date();
+				const planExpiresAt = new Date(requiredString(body.planExpiresAt, "planExpiresAt"));
+				if (!Number.isFinite(planExpiresAt.getTime()) || planExpiresAt <= approvedAt) throw new TypeError("planExpiresAt must be in the future");
+				const approval = {
+					protocolVersion: 2,
+					kind: "profile-release",
+					approvalId: requiredString(body.approvalId, "approvalId"),
+					principalId: resolved.convergence.principalId,
+					planId: requiredString(body.planId, "planId"),
+					planDigest: sha256Digest(body.planDigest, "planDigest"),
+					deviceId,
+					profile,
+					fromManifestDigest,
+					toManifestDigest,
+					fromReleaseDigest,
+					toReleaseDigest,
+					approvedAt: approvedAt.toISOString(),
+					expiresAt: new Date(Math.min(planExpiresAt.getTime(), approvedAt.getTime() + 12e4)).toISOString()
+				};
+				return ok(await callActiveAgent(deviceId, "release-apply", { approval }, signal));
+			}
+			if (endpoint === "release-rollback-approve") {
+				const body = closedPayload(payload, [
+					"approvalId",
+					"deviceId",
+					"fromManifestDigest",
+					"fromReleaseDigest",
+					"planDigest",
+					"planExpiresAt",
+					"planId",
+					"profile",
+					"toManifestDigest",
+					"toReleaseDigest",
+					"transitionPlanId"
+				], "release rollback approve payload");
+				const deviceId = normalizeDeviceId(requiredString(body.deviceId, "deviceId"));
+				const profile = requiredString(body.profile, "profile");
+				if (profile !== resolved.profile) throw new AgentClientError("agent-profile-mismatch", "release rollback profile does not match the configured Host profile");
+				const transitionPlanId = requiredString(body.transitionPlanId, "transitionPlanId");
+				const transition = releaseAction(await callActiveAgent(deviceId, "release-status", { planId: transitionPlanId }, signal), deviceId, profile);
+				if (transition.planId !== transitionPlanId || transition.state !== "succeeded" || transition.result !== "success") throw new AgentClientError("rollback-not-available", "release transition is no longer eligible for explicit rollback");
+				const fromManifestDigest = sha256Digest(body.fromManifestDigest, "fromManifestDigest");
+				const toManifestDigest = sha256Digest(body.toManifestDigest, "toManifestDigest");
+				const fromReleaseDigest = sha256Digest(body.fromReleaseDigest, "fromReleaseDigest");
+				const toReleaseDigest = body.toReleaseDigest === null ? null : sha256Digest(body.toReleaseDigest, "toReleaseDigest");
+				if (fromManifestDigest !== transition.toManifestDigest || toManifestDigest !== transition.fromManifestDigest || fromReleaseDigest !== transition.toReleaseDigest || toReleaseDigest !== transition.fromReleaseDigest || fromManifestDigest !== await digestManifest(resolved.desiredManifestPath)) throw new AgentClientError("release-rollback-mismatch", "release rollback approval does not invert the active successful transition");
+				const approvedAt = /* @__PURE__ */ new Date();
+				const planExpiresAt = new Date(requiredString(body.planExpiresAt, "planExpiresAt"));
+				if (!Number.isFinite(planExpiresAt.getTime()) || planExpiresAt <= approvedAt) throw new TypeError("planExpiresAt must be in the future");
+				const approval = {
+					protocolVersion: 2,
+					kind: "profile-release-rollback",
+					approvalId: requiredString(body.approvalId, "approvalId"),
+					principalId: resolved.convergence.principalId,
+					planId: requiredString(body.planId, "planId"),
+					planDigest: sha256Digest(body.planDigest, "planDigest"),
+					transitionPlanId,
+					deviceId,
+					profile,
+					fromManifestDigest,
+					toManifestDigest,
+					fromReleaseDigest,
+					toReleaseDigest,
+					approvedAt: approvedAt.toISOString(),
+					expiresAt: new Date(Math.min(planExpiresAt.getTime(), approvedAt.getTime() + 12e4)).toISOString()
+				};
+				const action = releaseRollbackAction(await callActiveAgent(deviceId, "release-rollback-apply", { approval }, signal), deviceId, profile);
+				if (action.planId !== approval.planId || action.transitionPlanId !== transitionPlanId) throw new AgentClientError("release-rollback-mismatch", "release rollback action does not match its approved plan");
+				return ok(action);
+			}
+			if (endpoint === "release-retention-approve") {
 				const body = closedPayload(payload, [
 					"approvalId",
 					"deviceId",
@@ -1599,39 +2482,177 @@ function apply(ctx, config) {
 					"planExpiresAt",
 					"planId",
 					"profile"
-				], "release approve payload");
-				const deviceId = requiredString(body.deviceId, "deviceId");
+				], "release retention approve payload");
+				const deviceId = normalizeDeviceId(requiredString(body.deviceId, "deviceId"));
+				const profile = federationIdentifier(body.profile, "profile");
+				if (profile !== resolved.profile) throw new AgentClientError("agent-profile-mismatch", "release retention approval profile does not match the configured Host profile");
+				const planDigest = sha256Digest(body.planDigest, "planDigest");
+				const planId = requiredString(body.planId, "planId");
+				if (planId !== "release-retention-plan:" + planDigest) throw new TypeError("release retention planId does not match planDigest");
+				const approvalId = federationIdentifier(body.approvalId, "approvalId");
+				const principalId = federationIdentifier(resolved.convergence.principalId, "principalId");
 				const approvedAt = /* @__PURE__ */ new Date();
-				const planExpiresAt = new Date(requiredString(body.planExpiresAt, "planExpiresAt"));
-				if (!Number.isFinite(planExpiresAt.getTime()) || planExpiresAt <= approvedAt) throw new TypeError("planExpiresAt must be in the future");
+				const planExpiresAt = new Date(canonicalTimestamp(body.planExpiresAt, "planExpiresAt"));
+				if (planExpiresAt <= approvedAt) throw new TypeError("planExpiresAt must be in the future");
 				const approval = {
 					protocolVersion: 1,
-					kind: "profile-release",
-					approvalId: requiredString(body.approvalId, "approvalId"),
-					principalId: resolved.convergence.principalId,
-					planId: requiredString(body.planId, "planId"),
-					planDigest: requiredString(body.planDigest, "planDigest"),
+					kind: "profile-release-retention",
+					approvalId,
+					principalId,
+					planId,
+					planDigest,
 					deviceId,
-					profile: requiredString(body.profile, "profile"),
+					profile,
 					approvedAt: approvedAt.toISOString(),
 					expiresAt: new Date(Math.min(planExpiresAt.getTime(), approvedAt.getTime() + 12e4)).toISOString()
 				};
-				return ok(await agents.call(deviceId, "release-apply", { approval }, signal));
+				const action = releaseRetentionAction(await callActiveAgent(deviceId, "release-retention-apply", { approval }, signal), {
+					approvalId,
+					deviceId,
+					planDigest,
+					planId,
+					principalId,
+					profile
+				});
+				return ok(action);
 			}
 			if (endpoint === "action-status") {
 				const body = closedPayload(payload, ["deviceId", "planId"], "status payload");
 				const deviceId = requiredString(body.deviceId, "deviceId");
 				const planId = requiredString(body.planId, "planId");
-				return ok(await agents.call(deviceId, "status", { planId }, signal));
+				return ok(await callActiveAgent(deviceId, "status", { planId }, signal));
 			}
 			if (endpoint === "release-action-status") {
 				const body = closedPayload(payload, ["deviceId", "planId"], "release status payload");
 				const deviceId = requiredString(body.deviceId, "deviceId");
 				const planId = requiredString(body.planId, "planId");
-				return ok(await agents.call(deviceId, "release-status", { planId }, signal));
+				return ok(await callActiveAgent(deviceId, "release-status", { planId }, signal));
+			}
+			if (endpoint === "release-rollback-action-status") {
+				const body = closedPayload(payload, ["deviceId", "planId"], "release rollback status payload");
+				const deviceId = normalizeDeviceId(requiredString(body.deviceId, "deviceId"));
+				const planId = requiredString(body.planId, "planId");
+				const action = releaseRollbackAction(await callActiveAgent(deviceId, "release-rollback-status", { planId }, signal), deviceId, resolved.profile);
+				if (action.planId !== planId) throw new AgentClientError("release-rollback-mismatch", "release rollback status does not match the requested plan");
+				return ok(action);
+			}
+			if (endpoint === "release-retention-action-status") {
+				const body = closedPayload(payload, ["deviceId", "planId"], "release retention status payload");
+				const deviceId = normalizeDeviceId(requiredString(body.deviceId, "deviceId"));
+				const planId = requiredString(body.planId, "planId");
+				const match = /^release-retention-plan:([0-9a-f]{64})$/.exec(planId);
+				if (match?.[1] === void 0) throw new TypeError("release retention planId is invalid");
+				const action = releaseRetentionAction(await callActiveAgent(deviceId, "release-retention-status", { planId }, signal), {
+					deviceId,
+					planDigest: match[1],
+					planId,
+					principalId: federationIdentifier(resolved.convergence.principalId, "principalId"),
+					profile: resolved.profile
+				});
+				return ok(action);
+			}
+			if (endpoint === "federation-list") {
+				const body = closedPayload(payload, ["limit"], "federation list payload");
+				if (typeof body.limit !== "number" || !Number.isSafeInteger(body.limit) || body.limit < 1 || body.limit > 100) throw new TypeError("federation list limit must be an integer from 1 to 100");
+				const signer = await federationSigner(signal);
+				return ok(federationInbox(await callActiveAgent(signer.deviceId, "federation-list", { limit: body.limit }, signal), signer.teamId, signer.deviceId));
+			}
+			if (endpoint === "ack") {
+				const body = closedPayload(payload, [
+					"disposition",
+					"messageId",
+					"payloadDigest"
+				], "federation acknowledgement payload");
+				const disposition = body.disposition;
+				if (disposition !== "acknowledged" && disposition !== "dismissed") throw new TypeError("federation acknowledgement disposition is invalid");
+				const signer = await federationSigner(signal);
+				const acknowledgement = {
+					disposition,
+					messageId: namespacedMessageId(body.messageId, "messageId"),
+					payloadDigest: sha256Digest(body.payloadDigest, "payloadDigest")
+				};
+				return ok(federationAcknowledgement(await callActiveAgent(signer.deviceId, "federation-ack", acknowledgement, signal), acknowledgement));
+			}
+			if (endpoint === "retention-plan") {
+				if (payload !== null) throw new TypeError("federation retention plan payload must be null");
+				const signer = await federationSigner(signal);
+				return ok(federationRetentionPlan(await callActiveAgent(signer.deviceId, "federation-retention-plan", {
+					acknowledgedRetentionMs: 2592e6,
+					expiredRetentionMs: 2592e6,
+					maxEntries: 500
+				}, signal)));
+			}
+			if (endpoint === "import") {
+				const body = closedPayload(payload, ["envelope"], "federation import payload");
+				const signer = await federationSigner(signal);
+				const incoming = federationEnvelope(body.envelope, "federation import envelope");
+				if (incoming.teamId === signer.teamId || incoming.recipient.teamId !== signer.teamId || incoming.recipient.deviceId !== signer.deviceId) throw new AgentClientError("federation-recipient-mismatch", "federation import must be a foreign advisory addressed to the fixed local signer");
+				const receipt = await callActiveAgent(signer.deviceId, "a2a-receive", { envelope: incoming }, signal);
+				if (receipt.requestMessageId !== incoming.messageId) throw new AgentClientError("a2a-receipt-invalid", "federation import returned an unrelated receipt");
+				const signedReceipt = federationEnvelope(receipt.response, "federation import receipt");
+				const expectedStatus = incoming.kind === "handoff" ? "stored" : "accepted";
+				if (signedReceipt.kind !== "receipt" || signedReceipt.teamId !== signer.teamId || signedReceipt.sender.deviceId !== signer.deviceId || signedReceipt.sender.principalId !== signer.principalId || signedReceipt.sender.keyId !== signer.keyId || signedReceipt.recipient.teamId !== incoming.teamId || signedReceipt.recipient.deviceId !== incoming.sender.deviceId || signedReceipt.payload.requestMessageId !== incoming.messageId || signedReceipt.payload.status !== expectedStatus) throw new AgentClientError("a2a-receipt-invalid", "federation import returned an invalid signed receipt");
+				return ok(signedReceipt);
+			}
+			if (endpoint === "handoff-export") {
+				const body = closedPayload(payload, [
+					"artifactRefs",
+					"handoffId",
+					"recipientDeviceId",
+					"recipientTeamId",
+					"summary",
+					"taskId"
+				], "federation handoff export payload");
+				const handoffPayload = {
+					handoffId: requiredString(body.handoffId, "handoffId"),
+					taskId: body.taskId === null ? null : requiredString(body.taskId, "taskId"),
+					summary: requiredString(body.summary, "summary"),
+					artifactRefs: body.artifactRefs
+				};
+				return ok(await signFederationAdvisory(requiredString(body.recipientTeamId, "recipientTeamId"), requiredString(body.recipientDeviceId, "recipientDeviceId"), "handoff", handoffPayload, signal));
+			}
+			if (endpoint === "approval-request-export") {
+				const body = closedPayload(payload, [
+					"approvalId",
+					"expiresAt",
+					"recipientDeviceId",
+					"recipientTeamId",
+					"summary",
+					"taskId"
+				], "federation approval request export payload");
+				const expiresAt = canonicalTimestamp(body.expiresAt, "expiresAt");
+				const now = Date.now();
+				if (Date.parse(expiresAt) <= now || Date.parse(expiresAt) > now + 864e5) throw new TypeError("federation approval request expiry must be within the next 24 hours");
+				const requestPayload = {
+					approvalId: requiredString(body.approvalId, "approvalId"),
+					taskId: requiredString(body.taskId, "taskId"),
+					summary: requiredString(body.summary, "summary"),
+					expiresAt
+				};
+				return ok(await signFederationAdvisory(requiredString(body.recipientTeamId, "recipientTeamId"), requiredString(body.recipientDeviceId, "recipientDeviceId"), "approval.request", requestPayload, signal));
+			}
+			if (endpoint === "approval-decision-export") {
+				const body = closedPayload(payload, ["decision", "request"], "federation approval decision export payload");
+				const decision = requiredString(body.decision, "decision");
+				if (decision !== "endorsed" && decision !== "declined") throw new TypeError("federation approval decision is invalid");
+				const signer = await federationSigner(signal);
+				const supplied = federationEnvelope(body.request, "federation approval request");
+				if (supplied.kind !== "approval.request" || supplied.teamId === signer.teamId || supplied.recipient.teamId !== signer.teamId || supplied.recipient.deviceId !== signer.deviceId) throw new AgentClientError("federation-approval-mismatch", "approval decision requires a foreign request addressed to the fixed local signer");
+				const request = federationEnvelope(await callActiveAgent(signer.deviceId, "a2a-verify", { envelope: supplied }, signal), "verified federation approval request");
+				if (request.kind !== "approval.request" || request.messageId !== supplied.messageId || request.payloadDigest !== supplied.payloadDigest || request.teamId !== supplied.teamId || request.sender.deviceId !== supplied.sender.deviceId || Date.parse(request.expiresAt) <= Date.now() || Date.parse(request.payload.expiresAt) <= Date.now()) throw new AgentClientError("federation-approval-mismatch", "verified federation approval request is stale or does not match the supplied envelope");
+				const decisionPayload = {
+					approvalId: request.payload.approvalId,
+					taskId: request.payload.taskId,
+					approvalRequestMessageId: request.messageId,
+					approvalRequestPayloadDigest: request.payloadDigest,
+					decision,
+					decidedAt: (/* @__PURE__ */ new Date()).toISOString()
+				};
+				return ok(await signFederationAdvisory(request.teamId, request.sender.deviceId, "approval.decision", decisionPayload, signal));
 			}
 			if (endpoint === "task-submit") {
 				const body = closedPayload(payload, [
+					"policyId",
 					"profile",
 					"prompt",
 					"targetDeviceId",
@@ -1639,17 +2660,99 @@ function apply(ctx, config) {
 					"workspaceId"
 				], "task submit payload");
 				const targetDeviceId = normalizeDeviceId(requiredString(body.targetDeviceId, "targetDeviceId"));
+				const taskId = requiredString(body.taskId, "taskId");
+				const workspaceId = requiredString(body.workspaceId, "workspaceId");
+				const profile = requiredString(body.profile, "profile");
+				const policyId = requiredString(body.policyId, "policyId");
+				const prompt = requiredString(body.prompt, "prompt");
+				validateA2APayload("task.status", { taskId });
+				const desiredBinding = await assertActiveRoute(targetDeviceId);
+				const liveBinding = await loadManifestBinding(resolved.manifestPath);
+				if (desiredBinding.manifest.schemaVersion !== 2 || desiredBinding.manifest.v2?.assignments[targetDeviceId]?.[resolved.profile] === void 0) throw new AgentClientError("task-target-not-assigned", "task target is not assigned to the active profile release");
+				const inspection = await callActiveAgent(targetDeviceId, "release-inspect", null, signal);
+				assertAgentIdentity(targetDeviceId, inspection);
+				if (inspection.profile !== resolved.profile || inspection.liveManifestDigest !== liveBinding.digest || inspection.desiredManifestDigest !== desiredBinding.digest || liveBinding.digest !== desiredBinding.digest) throw new AgentClientError("task-release-mismatch", "task target and Host must agree on the same live and desired Fleet manifest");
+				if (inspection.currentRelease === null || inspection.currentRelease.releaseDigest !== inspection.assignedRelease.releaseDigest || inspection.currentRelease.releaseId !== inspection.assignedRelease.releaseId || inspection.currentRelease.releaseVersion !== inspection.assignedRelease.releaseVersion || inspection.changes.length !== 0) throw new AgentClientError("task-target-not-aligned", "task target must be fully aligned with its assigned release");
+				if (!inspection.tasks.enabled) throw new AgentClientError("tasks-disabled", "remote tasks are disabled on this target");
+				if (!inspection.tasks.workspaceIds.includes(workspaceId) || !inspection.tasks.profiles.includes(profile)) throw new AgentClientError("task-policy-denied", "task workspace or profile is not enabled on this target");
+				if (!Array.isArray(inspection.tasks.executionProfiles) || !Array.isArray(inspection.tasks.profiles) || !inspection.tasks.profiles.every((candidate) => typeof candidate === "string")) throw new AgentClientError("task-profile-unbound", "target did not bind its executable task profiles");
+				const executionProfileBindings = /* @__PURE__ */ new Map();
+				for (const candidate of inspection.tasks.executionProfiles) {
+					if (typeof candidate !== "object" || candidate === null || Array.isArray(candidate)) throw new AgentClientError("task-profile-unbound", "task execution profile hash is missing, duplicated, or invalid");
+					const binding = candidate;
+					if (Object.keys(binding).length !== 2 || !Object.hasOwn(binding, "profile") || !Object.hasOwn(binding, "profileHash") || typeof binding.profile !== "string" || !inspection.tasks.profiles.includes(binding.profile) || typeof binding.profileHash !== "string" || !SHA256_PATTERN.test(binding.profileHash) || executionProfileBindings.has(binding.profile)) throw new AgentClientError("task-profile-unbound", "task execution profile hash is missing, duplicated, or invalid");
+					executionProfileBindings.set(binding.profile, binding.profileHash);
+				}
+				const executionProfileHash = executionProfileBindings.get(profile);
+				if (executionProfileHash === void 0 || executionProfileBindings.size !== inspection.tasks.profiles.length || new Set(inspection.tasks.profiles).size !== inspection.tasks.profiles.length) throw new AgentClientError("task-profile-unbound", "task execution profile hash is missing, duplicated, or invalid");
+				const policy = inspection.tasks.policies.find((candidate) => candidate.policyId === policyId);
+				if (policy === void 0) throw new AgentClientError("task-policy-denied", "requested task policy is not enabled on this target");
+				const timeoutMs = Math.min(6e5, inspection.tasks.timeoutMs ?? 6e5);
 				const taskPayload = {
-					taskId: requiredString(body.taskId, "taskId"),
-					workspaceId: requiredString(body.workspaceId, "workspaceId"),
-					profile: requiredString(body.profile, "profile"),
-					prompt: requiredString(body.prompt, "prompt")
+					taskId,
+					workspaceId,
+					profile,
+					executionProfileHash,
+					manifestDigest: liveBinding.digest,
+					releaseDigest: inspection.currentRelease.releaseDigest,
+					policyId: policy.policyId,
+					policyDigest: policy.policyDigest,
+					deadline: new Date(Date.now() + timeoutMs).toISOString(),
+					prompt
 				};
 				validateA2APayload("task.submit", taskPayload);
 				const response = await signedTaskCall(targetDeviceId, "task.submit", taskPayload, signal);
 				return ok({
 					taskId: taskPayload.taskId,
 					response
+				});
+			}
+			if (endpoint === "task-approval-decision") {
+				const body = closedPayload(payload, [
+					"decision",
+					"request",
+					"targetDeviceId",
+					"taskId"
+				], "task approval decision payload");
+				const targetDeviceId = normalizeDeviceId(requiredString(body.targetDeviceId, "targetDeviceId"));
+				const taskId = requiredString(body.taskId, "taskId");
+				const decision = requiredString(body.decision, "decision");
+				if (decision !== "allowed-once" && decision !== "rejected") throw new TypeError("decision must be allowed-once or rejected");
+				const signerDeviceId = resolved.convergence.signerDeviceId;
+				if (signerDeviceId === void 0) throw new AgentClientError("a2a-signer-missing", "a fixed local A2A signer is not configured");
+				const signer = resolved.convergence.targets.find((target) => target.deviceId === signerDeviceId);
+				if (signer === void 0 || signer.transport !== "local") throw new AgentClientError("a2a-signer-invalid", "A2A signer must be a configured local Agent target");
+				await assertActiveRoute(targetDeviceId);
+				await assertActiveRoute(signerDeviceId);
+				const request = await callActiveAgent(signerDeviceId, "a2a-verify", { envelope: body.request }, signal);
+				if (request.kind !== "task.approval.request" || request.sender.deviceId !== targetDeviceId || request.payload.taskId !== taskId) throw new AgentClientError("task-approval-mismatch", "signed approval request does not match the target and task");
+				const requestPayload = request.payload;
+				validateA2APayload("task.approval.request", requestPayload);
+				if (Date.parse(requestPayload.expiresAt) <= Date.now()) throw new AgentClientError("task-approval-expired", "signed task approval request has expired");
+				const decisionPayload = {
+					approvalId: requestPayload.approvalId,
+					taskId,
+					approvalRequestMessageId: request.messageId,
+					approvalRequestPayloadDigest: request.payloadDigest,
+					taskBindingDigest: requestPayload.taskBindingDigest,
+					toolCallId: requestPayload.toolCallId,
+					argumentsDigest: requestPayload.argumentsDigest,
+					decision,
+					decidedAt: (/* @__PURE__ */ new Date()).toISOString()
+				};
+				validateA2APayload("task.approval.decision", decisionPayload);
+				const envelope = await callActiveAgent(signerDeviceId, "a2a-sign", {
+					recipientDeviceId: targetDeviceId,
+					kind: "task.approval.decision",
+					payload: decisionPayload
+				}, signal);
+				const receipt = await callActiveAgent(targetDeviceId, "a2a-receive", { envelope }, signal);
+				if (receipt.requestMessageId !== envelope.messageId) throw new AgentClientError("a2a-receipt-invalid", "target returned an invalid approval receipt");
+				const verified = await callActiveAgent(signerDeviceId, "a2a-verify", { envelope: receipt.response }, signal);
+				if (verified.kind !== "receipt" || verified.sender.deviceId !== targetDeviceId || verified.payload.requestMessageId !== envelope.messageId || verified.payload.status !== "accepted") throw new AgentClientError("a2a-response-mismatch", "signed approval receipt does not match the decision");
+				return ok({
+					taskId,
+					response: verified
 				});
 			}
 			if (endpoint === "task-status" || endpoint === "task-cancel") {
@@ -1663,9 +2766,29 @@ function apply(ctx, config) {
 					response
 				});
 			}
+			if (endpoint === "tasks-list") {
+				const body = closedPayload(payload, ["limit", "targetDeviceId"], "tasks-list payload");
+				const targetDeviceId = normalizeDeviceId(requiredString(body.targetDeviceId, "targetDeviceId"));
+				if (typeof body.limit !== "number" || !Number.isSafeInteger(body.limit) || body.limit < 1 || body.limit > 100) throw new TypeError("tasks-list limit must be an integer from 1 to 100");
+				return ok(taskCatalog(await callActiveAgent(targetDeviceId, "tasks-list", { limit: body.limit }, signal), targetDeviceId));
+			}
+			if (endpoint === "tasks-prune") {
+				const body = closedPayload(payload, [
+					"olderThan",
+					"states",
+					"targetDeviceId"
+				], "tasks-prune payload");
+				const targetDeviceId = normalizeDeviceId(requiredString(body.targetDeviceId, "targetDeviceId"));
+				const olderThan = canonicalTimestamp(body.olderThan, "olderThan");
+				if (!Array.isArray(body.states) || body.states.length === 0 || body.states.length > TERMINAL_TASK_STATES.size || body.states.some((state) => typeof state !== "string" || !TERMINAL_TASK_STATES.has(state)) || new Set(body.states).size !== body.states.length) throw new TypeError("tasks-prune states must be unique terminal task states");
+				return ok(taskPruneResult(await callActiveAgent(targetDeviceId, "tasks-prune", {
+					olderThan,
+					states: body.states
+				}, signal)));
+			}
 			if (endpoint === "tasks-resume") {
 				const targetDeviceId = normalizeDeviceId(requiredString(closedPayload(payload, ["targetDeviceId"], "tasks resume payload").targetDeviceId, "targetDeviceId"));
-				return ok(await agents.call(targetDeviceId, "tasks-resume", null, signal));
+				return ok(taskResumeResult(await callActiveAgent(targetDeviceId, "tasks-resume", null, signal)));
 			}
 			return fail("unknown agent endpoint: " + endpoint);
 		} catch (error) {

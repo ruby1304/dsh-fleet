@@ -37,7 +37,16 @@ try {
 const forbiddenNames = /(^|\/)(?:\.env(?:\..*)?|id_(?:rsa|ed25519)|[^/]+\.(?:pem|p12|pfx|key))$/i
 const textExtensions = new Set(['', '.cjs', '.js', '.json', '.jsx', '.map', '.md', '.mjs', '.ts', '.tsx', '.txt', '.yaml', '.yml'])
 const forbiddenContent = [
-  ['maintainer-local path', new RegExp('/Users/' + 'qudian' + '(?:/|\\b)')],
+  ['non-example macOS home path', /\/Users\/(?!example(?:\/|$))[A-Za-z0-9._-]+(?:\/|\b)/],
+  ['private fleet team identifier', new RegExp('\\b' + 'ruby' + '-team\\b')],
+  ['private fleet host identifier', new RegExp('\\b(?:' + [
+    'ruby' + '-mac',
+    'm3' + '-mac',
+    'xxl' + '-mac',
+    'pm' + '-codex',
+    'ruby' + '-win',
+  ].join('|') + ')\\b')],
+  ['maintainer GitHub coordinate used as a fixture', new RegExp('github:' + 'ruby' + '1304/')],
   ['private key', /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/],
   ['GitHub token', /\bgh[pousr]_[A-Za-z0-9_]{20,}\b/],
   ['npm token', /\bnpm_[A-Za-z0-9]{20,}\b/],
@@ -50,6 +59,10 @@ for (const file of tracked) {
   const source = await readFile(join(root, file), 'utf8')
   for (const [label, pattern] of forbiddenContent) {
     if (pattern.test(source)) fail(`${label} found in ${file}`)
+  }
+
+  if (/^(?:tests|examples)\//.test(file) && new RegExp('\\bm' + '[35]\\b').test(source)) {
+    fail(`private fleet device fixture found in ${file}`)
   }
 
   if (file.endsWith('.md')) {
@@ -85,6 +98,42 @@ for (const file of [
 }
 if (!/^pnpm@\d+\.\d+\.\d+$/.test(pkg.packageManager ?? '')) fail('packageManager must pin an exact pnpm version')
 
+const readme = await readFile(join(root, 'README.md'), 'utf8')
+const changelog = await readFile(join(root, 'CHANGELOG.md'), 'utf8')
+const security = await readFile(join(root, 'SECURITY.md'), 'utf8')
+const issueTemplate = await readFile(join(root, '.github/ISSUE_TEMPLATE/bug_report.yml'), 'utf8')
+const changelogHeading = changelog.match(/^## (\d+\.\d+\.\d+) - (.+)$/m)
+if (changelogHeading?.[1] !== pkg.version) fail('top changelog version does not match package.json')
+if (!/^(?:Unreleased candidate|\d{4}-\d{2}-\d{2})$/.test(changelogHeading?.[2] ?? '')) {
+  fail('top changelog entry must be an unreleased candidate or a dated release')
+}
+if (!readme.includes(`\`${pkg.version}\` is an unreleased open-source candidate`)
+  && !readme.includes(`\`${pkg.version}\` targets DSH`)) {
+  fail('README status does not identify the package version')
+}
+if (!security.includes(`\`dsh-fleet\` ${pkg.version}`)) fail('SECURITY.md does not identify the package version')
+if (!issueTemplate.includes(`placeholder: ${pkg.version}`)) fail('bug report template does not identify the package version')
+
+for (const [subpath, target] of Object.entries(pkg.exports ?? {})) {
+  if (subpath === './package.json' || typeof target !== 'string') continue
+  const packagedTarget = target.replace(/^\.\//, '')
+  if (!pkg.files?.includes(packagedTarget)) fail(`package export is omitted from files: ${subpath}`)
+}
+for (const [binary, target] of Object.entries(pkg.bin ?? {})) {
+  if (typeof target !== 'string') continue
+  const packagedTarget = target.replace(/^\.\//, '')
+  if (!pkg.files?.includes(packagedTarget)) fail(`package binary is omitted from files: ${binary}`)
+}
+
+const runtimeBundleContract = {
+  './agent': './agent.mjs',
+  './worker': './worker.mjs',
+}
+for (const [subpath, target] of Object.entries(runtimeBundleContract)) {
+  if (pkg.exports?.[subpath] !== target) fail(`runtime bundle export ${subpath} must target ${target}`)
+  if (!pkg.files?.includes(target.slice(2))) fail(`runtime bundle ${target} is omitted from files`)
+}
+
 const notices = await readFile(join(root, 'THIRD_PARTY_NOTICES.md'), 'utf8')
 for (const dependency of Object.keys(pkg.dependencies ?? {})) {
   const dependencyPackage = JSON.parse(await readFile(join(root, 'node_modules', dependency, 'package.json'), 'utf8'))
@@ -95,6 +144,19 @@ for (const dependency of Object.keys(pkg.dependencies ?? {})) {
 
 const agentMode = (await stat(join(root, 'agent.mjs'))).mode
 if ((agentMode & 0o111) === 0) fail('agent.mjs must remain executable')
+const agentBundle = await readFile(join(root, 'agent.mjs'), 'utf8')
+if (!/["']worker\.mjs["']/.test(agentBundle)) fail('agent.mjs must bind its sibling worker.mjs bundle')
+const workerInfo = await stat(join(root, 'worker.mjs'))
+if (!workerInfo.isFile()) fail('worker.mjs must be a regular file')
+if ((workerInfo.mode & 0o022) !== 0) fail('worker.mjs must not be group- or world-writable')
+const workerBundle = await readFile(join(root, 'worker.mjs'), 'utf8')
+const workerRuntimeSpecifiers = [
+  ...workerBundle.matchAll(/^(?:import|export)(?:\s+[^'"\n]+?\s+from\s+|\s*)['"]([^'"]+)['"];?$/gm),
+  ...workerBundle.matchAll(/\b(?:import|require)\s*\(\s*['"]([^'"]+)['"]\s*\)/g),
+]
+for (const match of workerRuntimeSpecifiers) {
+  if (!match[1]?.startsWith('node:')) fail(`worker.mjs has an external runtime import: ${match[1]}`)
+}
 const bootstrapMode = (await stat(join(root, 'bootstrap.mjs'))).mode
 if ((bootstrapMode & 0o111) === 0) fail('bootstrap.mjs must remain executable')
 

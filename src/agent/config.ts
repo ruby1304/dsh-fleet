@@ -1,6 +1,8 @@
 import { readFile } from 'node:fs/promises'
-import { isAbsolute, normalize } from 'node:path'
+import { isAbsolute, join, normalize } from 'node:path'
 import { normalizeDeviceId } from '../shared.ts'
+import { sha256Canonical } from './protocol.ts'
+import { MAX_TASK_TOOL_ARGUMENT_BYTES } from '../worker/context.ts'
 
 export interface AgentRestartNone {
   kind: 'none'
@@ -46,6 +48,78 @@ export interface AgentA2AConfig {
   maxMessageTtlMs: number
 }
 
+export const TASK_POLICY_SCHEMA_VERSION = 1 as const
+export const TASK_POLICY_IDS = ['readonly-v1', 'workspace-write-ask-v1'] as const
+export type TaskPolicyId = (typeof TASK_POLICY_IDS)[number]
+export type TaskPermissionMode = 'read-only' | 'workspace-write'
+export type TaskPolicyDecision = 'safe' | 'ask' | 'deny'
+
+export interface CanonicalTaskPolicyBody {
+  schemaVersion: typeof TASK_POLICY_SCHEMA_VERSION
+  policyId: TaskPolicyId
+  permissionMode: TaskPermissionMode
+  workspaceScope: 'configured-workspace'
+  defaultDecision: 'deny'
+  safeTools: readonly string[]
+  approvalRequiredTools: readonly string[]
+  hardDeniedTools: readonly string[]
+  allowBackground: false
+  maxArgumentsBytes: number
+}
+
+export interface CanonicalTaskPolicy extends CanonicalTaskPolicyBody {
+  policyDigest: string
+}
+
+export type AgentTaskPolicySet = Readonly<Partial<Record<TaskPolicyId, CanonicalTaskPolicy>>>
+
+const SAFE_READ_TOOLS = ['glob', 'grep', 'read', 'read_image'] as const
+const APPROVAL_REQUIRED_TOOLS = ['bash', 'edit', 'pwsh', 'web_fetch', 'web_search', 'write'] as const
+const HARD_DENIED_TOOLS = [
+  'cordis_define', 'cordis_inspect_list', 'cordis_inspect_query', 'cordis_inspect_self',
+  'cordis_run', 'cordis_stop', 'cordis_undefine',
+  'create_goal', 'followup_task', 'interrupt_agent', 'job_kill', 'job_list', 'job_output',
+  'list_agents', 'ralph', 'report', 'run_code', 'send_message', 'skill', 'spawn_agent',
+  'str_replace_editor', 'todo_write', 'update_goal', 'wait_agent', 'workflow',
+] as const
+
+export function calculateTaskPolicyDigest(policy: CanonicalTaskPolicyBody): string {
+  return sha256Canonical(policy)
+}
+
+function defineTaskPolicy(input: {
+  policyId: TaskPolicyId
+  permissionMode: TaskPermissionMode
+  approvalRequiredTools: readonly string[]
+}): CanonicalTaskPolicy {
+  const body: CanonicalTaskPolicyBody = Object.freeze({
+    schemaVersion: TASK_POLICY_SCHEMA_VERSION,
+    policyId: input.policyId,
+    permissionMode: input.permissionMode,
+    workspaceScope: 'configured-workspace',
+    defaultDecision: 'deny',
+    safeTools: Object.freeze([...SAFE_READ_TOOLS]),
+    approvalRequiredTools: Object.freeze([...input.approvalRequiredTools]),
+    hardDeniedTools: Object.freeze([...HARD_DENIED_TOOLS]),
+    allowBackground: false,
+    maxArgumentsBytes: MAX_TASK_TOOL_ARGUMENT_BYTES,
+  })
+  return Object.freeze({ ...body, policyDigest: calculateTaskPolicyDigest(body) })
+}
+
+export const LOCAL_TASK_POLICIES: Readonly<Record<TaskPolicyId, CanonicalTaskPolicy>> = Object.freeze({
+  'readonly-v1': defineTaskPolicy({
+    policyId: 'readonly-v1',
+    permissionMode: 'read-only',
+    approvalRequiredTools: [],
+  }),
+  'workspace-write-ask-v1': defineTaskPolicy({
+    policyId: 'workspace-write-ask-v1',
+    permissionMode: 'workspace-write',
+    approvalRequiredTools: APPROVAL_REQUIRED_TOOLS,
+  }),
+})
+
 export interface AgentTasksConfig {
   enabled: boolean
   workspaces: Record<string, string>
@@ -53,12 +127,20 @@ export interface AgentTasksConfig {
   timeoutMs: number
   maxOutputBytes: number
   maxConcurrent: number
+  policyIds?: TaskPolicyId[]
+  policies?: AgentTaskPolicySet
+}
+
+export interface ResolvedAgentTasksConfig extends AgentTasksConfig {
+  policyIds: TaskPolicyId[]
+  policies: AgentTaskPolicySet
 }
 
 export interface FleetAgentConfig {
   schemaVersion: 1 | 2
   deviceId: string
   manifestPath: string
+  desiredManifestPath?: string
   dshHome: string
   dshBinary: string
   pnpmBinary: string
@@ -82,12 +164,13 @@ export interface ReleaseReadyFleetAgentConfig extends MutationReadyFleetAgentCon
   schemaVersion: 2
   artifactStore: string
   tarBinary: string
+  desiredManifestPath: string
 }
 
 export interface A2AReadyFleetAgentConfig extends FleetAgentConfig {
   schemaVersion: 2
   a2a: AgentA2AConfig
-  tasks: AgentTasksConfig
+  tasks: ResolvedAgentTasksConfig
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -214,10 +297,10 @@ function parseA2A(value: unknown): AgentA2AConfig | undefined {
   }
 }
 
-function parseTasks(value: unknown): AgentTasksConfig | undefined {
+function parseTasks(value: unknown): ResolvedAgentTasksConfig | undefined {
   if (value === undefined) return undefined
   if (!isRecord(value)) throw new TypeError('tasks must be an object')
-  exactKeys(value, ['enabled', 'workspaces', 'profiles', 'timeoutMs', 'maxOutputBytes', 'maxConcurrent'], 'tasks')
+  exactKeys(value, ['enabled', 'workspaces', 'profiles', 'timeoutMs', 'maxOutputBytes', 'maxConcurrent', 'policyIds'], 'tasks')
   if (typeof value.enabled !== 'boolean') throw new TypeError('tasks.enabled must be boolean')
   if (!isRecord(value.workspaces)) throw new TypeError('tasks.workspaces must be an object')
   const workspaces: Record<string, string> = {}
@@ -231,6 +314,15 @@ function parseTasks(value: unknown): AgentTasksConfig | undefined {
       new Set(value.profiles).size !== value.profiles.length) {
     throw new TypeError('tasks.profiles must contain 1 to 16 unique safe profile ids')
   }
+  const rawPolicyIds = value.policyIds ?? ['readonly-v1']
+  if (!Array.isArray(rawPolicyIds) || rawPolicyIds.length === 0 || rawPolicyIds.length > TASK_POLICY_IDS.length ||
+      rawPolicyIds.some(policyId => typeof policyId !== 'string' || !TASK_POLICY_IDS.includes(policyId as TaskPolicyId)) ||
+      new Set(rawPolicyIds).size !== rawPolicyIds.length) {
+    throw new TypeError('tasks.policyIds must contain unique installed task policy ids')
+  }
+  const policyIds = [...rawPolicyIds] as TaskPolicyId[]
+  const policies: Partial<Record<TaskPolicyId, CanonicalTaskPolicy>> = {}
+  for (const policyId of policyIds) policies[policyId] = LOCAL_TASK_POLICIES[policyId]
   return {
     enabled: value.enabled,
     workspaces,
@@ -238,18 +330,39 @@ function parseTasks(value: unknown): AgentTasksConfig | undefined {
     timeoutMs: boundedInt(value.timeoutMs, 'tasks.timeoutMs', 60 * 60 * 1000, 60_000, 6 * 60 * 60 * 1000),
     maxOutputBytes: boundedInt(value.maxOutputBytes, 'tasks.maxOutputBytes', 1024 * 1024, 4096, 1024 * 1024),
     maxConcurrent: boundedInt(value.maxConcurrent, 'tasks.maxConcurrent', 1, 1, 4),
+    policyIds,
+    policies: Object.freeze(policies),
   }
 }
 
 export function parseAgentConfig(value: unknown): FleetAgentConfig {
   if (!isRecord(value)) throw new TypeError('agent config must be an object')
   exactKeys(value, [
-    'schemaVersion', 'deviceId', 'manifestPath', 'dshHome', 'dshBinary', 'pnpmBinary', 'profile', 'stateDir',
+    'schemaVersion', 'deviceId', 'manifestPath', 'desiredManifestPath', 'dshHome', 'dshBinary', 'pnpmBinary', 'profile', 'stateDir',
     'planTtlMs', 'restart', 'health', 'artifactStore', 'tarBinary', 'a2a', 'tasks',
   ], 'agent config')
   if (value.schemaVersion !== 1 && value.schemaVersion !== 2) throw new TypeError('agent config schemaVersion must equal 1 or 2')
   const profile = nonEmpty(value.profile, 'profile')
   if (!/^[A-Za-z0-9._-]+$/.test(profile)) throw new TypeError('profile contains unsupported characters')
+  const dshHome = absolutePath(value.dshHome, 'dshHome')
+  const configuredManifestPath = absolutePath(value.manifestPath, 'manifestPath')
+  const profileManifestPath = join(dshHome, 'profiles', profile, 'fleet.lock.yaml')
+  let manifestPath = configuredManifestPath
+  let desiredManifestPath: string | undefined
+  if (value.schemaVersion === 2) {
+    if (value.desiredManifestPath === undefined) {
+      // Compatibility for pre-0.4 generated configs: the old manifestPath was the desired candidate.
+      manifestPath = profileManifestPath
+      desiredManifestPath = configuredManifestPath
+    } else {
+      desiredManifestPath = absolutePath(value.desiredManifestPath, 'desiredManifestPath')
+      if (configuredManifestPath !== profileManifestPath) {
+        throw new TypeError('schemaVersion 2 manifestPath must be the profile-local live Fleet manifest')
+      }
+    }
+  } else if (value.desiredManifestPath !== undefined) {
+    throw new TypeError('schemaVersion 1 must not define desiredManifestPath')
+  }
   const artifactStore = value.artifactStore === undefined ? undefined : absolutePath(value.artifactStore, 'artifactStore')
   const tarBinary = value.tarBinary === undefined ? undefined : absolutePath(value.tarBinary, 'tarBinary')
   if (value.schemaVersion === 2 && (artifactStore === undefined || tarBinary === undefined)) {
@@ -261,8 +374,9 @@ export function parseAgentConfig(value: unknown): FleetAgentConfig {
   return {
     schemaVersion: value.schemaVersion,
     deviceId: normalizeDeviceId(value.deviceId),
-    manifestPath: absolutePath(value.manifestPath, 'manifestPath'),
-    dshHome: absolutePath(value.dshHome, 'dshHome'),
+    manifestPath,
+    ...(desiredManifestPath === undefined ? {} : { desiredManifestPath }),
+    dshHome,
     dshBinary: absolutePath(value.dshBinary, 'dshBinary'),
     pnpmBinary: absolutePath(value.pnpmBinary, 'pnpmBinary'),
     profile,
@@ -279,14 +393,19 @@ export function parseAgentConfig(value: unknown): FleetAgentConfig {
 
 export function assertReleaseReadyConfig(config: FleetAgentConfig): asserts config is ReleaseReadyFleetAgentConfig {
   assertMutationReadyConfig(config)
-  if (config.schemaVersion !== 2 || config.artifactStore === undefined || config.tarBinary === undefined) {
-    throw mutationConfigError('atomic profile releases require schemaVersion 2 with artifactStore and tarBinary')
+  const expectedManifestPath = join(config.dshHome, 'profiles', config.profile, 'fleet.lock.yaml')
+  if (config.schemaVersion !== 2 || config.artifactStore === undefined || config.tarBinary === undefined ||
+      config.desiredManifestPath === undefined || config.manifestPath !== expectedManifestPath) {
+    throw mutationConfigError('atomic profile releases require schemaVersion 2, a profile-local live manifest, a desired manifest, artifactStore and tarBinary')
   }
 }
 
 export function assertA2AReadyConfig(config: FleetAgentConfig): asserts config is A2AReadyFleetAgentConfig {
   if (config.schemaVersion !== 2 || config.a2a === undefined || config.tasks === undefined) {
     throw mutationConfigError('A2A requires schemaVersion 2 with identity, trust and task policy')
+  }
+  if (config.tasks.policyIds === undefined || config.tasks.policies === undefined) {
+    throw mutationConfigError('A2A task execution requires resolved local task policies')
   }
 }
 
