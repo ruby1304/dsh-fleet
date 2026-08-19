@@ -38,6 +38,8 @@ async function setup(
   artifactDigest: string
   failHealthMarker: string
   commandLog: string
+  legacyPublic: string
+  legacyPrivate: string
 }> {
   const root = await mkdtemp(join(tmpdir(), 'dsh-fleet-release-runtime-'))
   roots.push(root)
@@ -64,15 +66,21 @@ async function setup(
     await Promise.all([
       writeFile(join(legacyPublic, 'package.json'), JSON.stringify({ name: 'public-plugin', version: '0.1.0' })),
       writeFile(join(legacyPrivate, 'package.json'), JSON.stringify({ name: 'private-plugin', version: '0.1.0' })),
+      mkdir(join(legacyPublic, 'node_modules'), { recursive: true }),
+      mkdir(join(legacyPrivate, 'node_modules'), { recursive: true }),
       symlink(legacyPublic, join(profileDir, 'node_modules', 'public-plugin'), 'dir'),
       symlink(legacyPrivate, join(profileDir, 'node_modules', 'private-plugin'), 'dir'),
+    ])
+    await Promise.all([
+      writeFile(join(legacyPublic, 'node_modules', 'keep'), 'keep\n'),
+      writeFile(join(legacyPrivate, 'node_modules', 'keep'), 'keep\n'),
     ])
   }
   await writeFile(join(profileDir, 'package.json'), JSON.stringify({
     name: 'test-profile',
     private: true,
     dependencies: {
-      ...(initialLinks ? { 'public-plugin': 'link:/legacy/public', 'private-plugin': 'link:/legacy/private' } : {}),
+      ...(initialLinks ? { 'public-plugin': 'link:' + legacyPublic, 'private-plugin': 'link:' + legacyPrivate } : {}),
       unmanaged: '9.9.9',
     },
     dsh: { profile: { bundles: [...(initialLinks ? ['public-plugin', 'private-plugin'] : []), 'unmanaged'] } },
@@ -128,6 +136,10 @@ manifest.dsh ||= { profile: { bundles: [] } }
 manifest.dsh.profile ||= { bundles: [] }
 manifest.dsh.profile.bundles ||= []
 if (args[3] === 'remove') {
+  const existing = manifest.dependencies[args[4]]
+  if (typeof existing === 'string' && existing.startsWith('link:')) {
+    fs.rmSync(path.join(existing.slice('link:'.length), 'node_modules'), { recursive: true, force: true })
+  }
   delete manifest.dependencies[args[4]]
   manifest.dsh.profile.bundles = manifest.dsh.profile.bundles.filter(id => id !== args[4])
   fs.rmSync(path.join(profileDir, 'node_modules', args[4]), { recursive: true, force: true })
@@ -254,6 +266,8 @@ process.stdout.write(JSON.stringify({
     artifactDigest,
     failHealthMarker,
     commandLog,
+    legacyPublic,
+    legacyPrivate,
     config: {
       schemaVersion: 2,
       deviceId: 'worker',
@@ -424,8 +438,8 @@ describe('atomic profile release runtime', () => {
     expect(await readAppliedRelease(config)).toBeNull()
   })
 
-  it('removes mutable links before materializing an immutable update', async () => {
-    const { config, commandLog, profileDir } = await setup('sha512-YWJjZA==', 'sha512-YWJjZA==', 'current', true)
+  it('replaces mutable bindings without running a destructive package remove', async () => {
+    const { config, commandLog, profileDir, legacyPublic, legacyPrivate } = await setup('sha512-YWJjZA==', 'sha512-YWJjZA==', 'current', true)
     const plan = await createStoredReleasePlan(config, new Date('2026-08-19T08:00:00.000Z'))
     expect(plan.changes.map(change => [change.pluginId, change.action])).toEqual([
       ['private-plugin', 'update'],
@@ -437,11 +451,12 @@ describe('atomic profile release runtime', () => {
     })
     const commands = (await readFile(commandLog, 'utf8')).trim().split('\n')
     for (const pluginId of ['private-plugin', 'public-plugin']) {
-      const removed = commands.findIndex(command => command.includes(' remove ' + pluginId))
       const added = commands.findIndex(command => command.includes(' add ') && command.includes(pluginId === 'private-plugin' ? '.tgz' : pluginId + '@'))
-      expect(removed).toBeGreaterThanOrEqual(0)
-      expect(added).toBeGreaterThan(removed)
+      expect(commands.some(command => command.includes(' remove ' + pluginId))).toBe(false)
+      expect(added).toBeGreaterThanOrEqual(0)
     }
+    expect(existsSync(join(legacyPublic, 'node_modules', 'keep'))).toBe(true)
+    expect(existsSync(join(legacyPrivate, 'node_modules', 'keep'))).toBe(true)
     expect(JSON.parse(await readFile(join(profileDir, 'node_modules/private-plugin/package.json'), 'utf8'))).toMatchObject({ version: '2.0.0' })
     expect(JSON.parse(await readFile(join(profileDir, 'node_modules/public-plugin/package.json'), 'utf8'))).toMatchObject({ version: '1.2.3' })
   })

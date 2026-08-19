@@ -1,6 +1,11 @@
 # Changelog
 
-## 0.3.4 - Unreleased
+## 0.3.5 - Unreleased
+
+- Replace mutable staged dependency bindings by editing only the disposable stage manifest before adding immutable packages, instead of invoking a package-manager remove that can mutate a linked development checkout.
+- Preserve the linked source tree and its dependency installation as a valid rollback target while still fully materializing and verifying the staged profile.
+
+## 0.3.4 - 2026-08-19
 
 - Store the Fleet runtime manifest inside the managed DSH profile so the manifest, package graph and profile patch cross the same atomic rename boundary and roll back together.
 - Treat a manifest-only release as restart-required, materialize the complete staged dependency tree with the pinned pnpm binary, and verify the runtime is bound to the stable profile-local manifest path.

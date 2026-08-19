@@ -1497,6 +1497,27 @@ async function verifyReleaseProfileFiles(
   })
 }
 
+async function removeChangedReleaseBindings(
+  config: ReleaseReadyFleetAgentConfig,
+  plan: FleetReleasePlan,
+): Promise<void> {
+  const removedIds = new Set(plan.changes
+    .filter(change => change.action === 'remove' || change.action === 'update')
+    .map(change => change.pluginId))
+  if (removedIds.size === 0) return
+  const packagePath = join(profileDir(config), 'package.json')
+  const source = await readRegularOptional(packagePath)
+  if (source === null) throw new AgentRuntimeError('profile-missing', 'staged release profile is missing')
+  const parsed = JSON.parse(source) as ProfileManifest & Record<string, unknown>
+  const dependencies = parsed.dependencies ?? {}
+  for (const id of removedIds) delete dependencies[id]
+  parsed.dependencies = dependencies
+  const profile = parsed.dsh?.profile
+  if (profile !== undefined) profile.bundles = (profile.bundles ?? []).filter(id => !removedIds.has(id))
+  await rm(packagePath, { force: true })
+  await durableWriteFile(packagePath, JSON.stringify(parsed, null, 2) + '\n')
+}
+
 async function stageRelease(
   config: ReleaseReadyFleetAgentConfig,
   plan: FleetReleasePlan,
@@ -1525,26 +1546,25 @@ async function stageRelease(
   await rm(runtimeManifestPath(stageConfig), { force: true })
   await durableWriteFile(runtimeManifestPath(stageConfig), runtimeManifestSource)
   await runFile(config.pnpmBinary, ['--version'], { env: controlledEnv(config), timeoutMs: 10_000, signal })
+  await removeChangedReleaseBindings(stageConfig, plan)
   const bindings = new Map(plan.plugins.map(plugin => [plugin.pluginId, plugin]))
   for (const change of plan.changes) {
     throwIfAborted(signal)
-    if (change.action === 'remove') {
-      await runFile(config.dshBinary, ['plugin', '--profile', stageProfile, 'remove', change.pluginId], {
-        env: controlledEnv(config), timeoutMs: 120_000, signal,
-      })
-      continue
-    }
-    if (change.action === 'update') {
-      await runFile(config.dshBinary, ['plugin', '--profile', stageProfile, 'remove', change.pluginId], {
-        env: controlledEnv(config), timeoutMs: 120_000, signal,
-      })
-    }
+    if (change.action === 'remove') continue
     const plugin = bindings.get(change.pluginId)
     if (plugin === undefined) throw new AgentRuntimeError('release-plan-invalid', 'release change has no final plugin binding')
     const argument = await releaseInstallArgument(config, plugin, signal)
     await runFile(config.dshBinary, [
       'plugin', '--profile', stageProfile, 'add', argument, '--save-exact', '--ignore-scripts',
     ], { env: controlledEnv(config), timeoutMs: 120_000, signal })
+  }
+  if (plan.changes.length > 0 && plan.changes.every(change => change.action === 'remove')) {
+    await runFile(config.pnpmBinary, ['install', '--lockfile-only', '--ignore-scripts'], {
+      cwd: stageDir,
+      env: controlledEnv(config),
+      timeoutMs: 120_000,
+      signal,
+    })
   }
   await runFile(config.pnpmBinary, ['install', '--frozen-lockfile', '--ignore-scripts'], {
     cwd: stageDir,
