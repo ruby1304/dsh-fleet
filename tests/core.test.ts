@@ -5,12 +5,12 @@ const source = `schemaVersion: 1
 team:
   id: example-team
 devices:
-  m5:
-    assignedTo: ruby
+  controller:
+    assignedTo: owner
     class: portable-control
     channel: dev
-  m3:
-    assignedTo: ruby
+  worker:
+    assignedTo: owner
     class: always-on-worker
     channel: stable
 plugins:
@@ -24,22 +24,69 @@ plugins:
   - id: plugin-c
     spec: 2.0.0
     target:
-      devices: [m5]
+      devices: [controller]
     runtimeModules: [plugin-c-host]
+`
+
+const v2Source = `schemaVersion: 2
+team:
+  id: example-team
+devices:
+  controller:
+    assignedTo: owner
+    class: portable-control
+    channel: stable
+  worker:
+    assignedTo: owner
+    class: always-on-worker
+    channel: stable
+profileReleases:
+  control-web:
+    version: 2026.8.19-1
+    profile: web
+    dshRange: ">=0.1.0-rc.7 <0.2.0"
+    plugins:
+      - id: dsh-public
+        visibility: public
+        source:
+          kind: npm
+          version: 1.2.3
+      - id: dsh-private
+        visibility: private
+        source:
+          kind: artifact
+          version: 4.5.6
+          digest: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+  worker-web:
+    version: 2026.8.19-2
+    profile: web
+    dshRange: ">=0.1.0-rc.7 <0.2.0"
+    plugins:
+      - id: dsh-worker
+        visibility: public
+        source:
+          kind: github
+          repository: example/dsh-worker
+          revision: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+assignments:
+  controller:
+    web: control-web
+  worker:
+    web: worker-web
 `
 
 describe('parseFleetManifest', () => {
   it('parses devices, targets and runtime module aliases', () => {
     const manifest = parseFleetManifest(source)
     expect(manifest.team.id).toBe('example-team')
-    expect(manifest.devices.m5?.class).toBe('portable-control')
+    expect(manifest.devices.controller?.class).toBe('portable-control')
     expect(manifest.plugins[2]?.runtimeModules).toEqual(['plugin-c-host'])
   })
 
   it('derives dependency specs from source and revision', () => {
     const manifest = parseFleetManifest(`schemaVersion: 1
 team: { id: test }
-devices: { m5: { class: portable-control, channel: dev } }
+devices: { controller: { class: portable-control, channel: dev } }
 plugins:
   - { id: npm-plugin, source: npm, revision: ^0.1.0 }
   - { id: github-plugin, source: github:team/plugin, revision: abc }
@@ -76,13 +123,54 @@ plugins:
     ))).toThrow(/stable plugin/)
     expect(() => parseFleetManifest(`schemaVersion: 1
 team: { id: test }
-devices: { m3: { class: worker, channel: stable } }
+devices: { worker: { class: worker, channel: stable } }
 plugins: [{ id: x, source: link:/tmp/x, revision: abc }]
 `)).toThrow(/link sources/)
   })
 
   it('rejects unknown schema versions', () => {
-    expect(() => parseFleetManifest(source.replace('schemaVersion: 1', 'schemaVersion: 2'))).toThrow(/schemaVersion/)
+    expect(() => parseFleetManifest(source.replace('schemaVersion: 1', 'schemaVersion: 3'))).toThrow(/schemaVersion/)
+  })
+
+  it('rejects device ids that cannot be used consistently by Host and Agent routing', () => {
+    expect(() => parseFleetManifest(source.replace('  controller:', '  "controller worker":'))).toThrow(/device id/)
+    expect(() => parseFleetManifest(source.replace('devices: [controller]', 'devices: ["controller worker"]'))).toThrow(/target.devices/)
+  })
+
+  it('normalizes schema v2 atomic profile releases with public and private plugins', () => {
+    const manifest = parseFleetManifest(v2Source)
+    expect(manifest.schemaVersion).toBe(2)
+    expect(manifest.v2?.assignments).toEqual({ controller: { web: 'control-web' }, worker: { web: 'worker-web' } })
+    expect(manifest.v2?.profileReleases['control-web']?.plugins).toHaveLength(2)
+    expect(manifest.plugins.find(plugin => plugin.id === 'dsh-public')).toMatchObject({
+      spec: '1.2.3',
+      source: 'npm',
+      releaseId: 'control-web',
+      releaseVersion: '2026.8.19-1',
+      visibility: 'public',
+      profiles: ['web'],
+      target: { devices: ['controller'] },
+    })
+    expect(manifest.plugins.find(plugin => plugin.id === 'dsh-private')).toMatchObject({
+      spec: 'artifact:sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+      source: 'artifact',
+      artifactDigest: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+      visibility: 'private',
+    })
+  })
+
+  it('rejects mutable, misplaced and ambiguous schema v2 release inputs', () => {
+    expect(() => parseFleetManifest(v2Source.replace('version: 1.2.3', 'version: ^1.2.3'))).toThrow(/exact semantic version/)
+    expect(() => parseFleetManifest(v2Source.replace('visibility: private\n        source:\n          kind: artifact', 'visibility: public\n        source:\n          kind: artifact'))).toThrow(/declared private/)
+    expect(() => parseFleetManifest(v2Source.replace('web: control-web', 'web: missing-release'))).toThrow(/unknown release/)
+    expect(() => parseFleetManifest(v2Source.replace(
+      '      - id: dsh-private',
+      '      - id: dsh-public',
+    ))).toThrow(/duplicate plugin id/)
+    expect(() => parseFleetManifest(v2Source.replace(
+      'assignments:\n  controller:',
+      'assignments:\n  unknown:',
+    ))).toThrow(/unknown device/)
   })
 })
 
@@ -90,7 +178,7 @@ describe('reconcileFleet', () => {
   it('selects by device and channel and reports aligned, drift, failed and unmanaged states', () => {
     const result = reconcileFleet({
       manifest: parseFleetManifest(source),
-      deviceId: 'm5',
+      deviceId: 'controller',
       profile: 'web',
       dependencies: {
         'plugin-a': '1.0.0',
@@ -115,7 +203,7 @@ describe('reconcileFleet', () => {
   it('reports runtime failure after the desired spec matches', () => {
     const result = reconcileFleet({
       manifest: parseFleetManifest(source),
-      deviceId: 'm5',
+      deviceId: 'controller',
       profile: 'web',
       dependencies: { 'plugin-a': '1.0.0', 'plugin-c': '2.0.0' },
       bundles: ['plugin-a', 'plugin-c'],
@@ -131,7 +219,7 @@ describe('reconcileFleet', () => {
   it('selects stable-only plugins for the worker', () => {
     const result = reconcileFleet({
       manifest: parseFleetManifest(source),
-      deviceId: 'm3',
+      deviceId: 'worker',
       profile: 'web',
       dependencies: {},
       bundles: [],
@@ -139,5 +227,44 @@ describe('reconcileFleet', () => {
     })
     expect(result.plugins.map(item => item.id)).toEqual(['plugin-a', 'plugin-b'])
     expect(result.summary.missing).toBe(2)
+  })
+
+  it('reconciles private artifacts by content digest instead of machine-specific file paths', () => {
+    const manifest = parseFleetManifest(v2Source)
+    const aligned = reconcileFleet({
+      manifest,
+      deviceId: 'controller',
+      profile: 'web',
+      dependencies: {
+        'dsh-public': '1.2.3',
+        'dsh-private': 'file:/Users/example/.local/share/dsh-fleet/artifacts/private.tgz',
+      },
+      artifactDigests: { 'dsh-private': 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' },
+      bundles: ['dsh-public', 'dsh-private'],
+      runtime: [
+        { entryId: 'public', moduleName: 'dsh-public', enabled: true, fiberPhase: 'active' },
+        { entryId: 'private', moduleName: 'dsh-private', enabled: true, fiberPhase: 'active' },
+      ],
+    })
+    expect(aligned.plugins.map(plugin => [plugin.id, plugin.state])).toEqual([
+      ['dsh-private', 'aligned'],
+      ['dsh-public', 'aligned'],
+    ])
+    expect(aligned.plugins[0]).toMatchObject({
+      visibility: 'private',
+      releaseId: 'control-web',
+      actualArtifactDigest: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+    })
+    const drifted = reconcileFleet({
+      ...aligned,
+      manifest,
+      deviceId: 'controller',
+      profile: 'web',
+      dependencies: { 'dsh-private': 'file:/tmp/private.tgz' },
+      artifactDigests: { 'dsh-private': 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc' },
+      bundles: ['dsh-private'],
+      runtime: [{ entryId: 'private', moduleName: 'dsh-private', enabled: true, fiberPhase: 'active' }],
+    })
+    expect(drifted.plugins.find(plugin => plugin.id === 'dsh-private')?.state).toBe('spec-drift')
   })
 })

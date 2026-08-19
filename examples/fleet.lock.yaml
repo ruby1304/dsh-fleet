@@ -1,66 +1,42 @@
-# DEVELOPMENT VALIDATION manifest only; this is not a formal team-hub configuration.
-# Fleet itself, machine-local dsh-bash-escalation-gate/dsh-cliproxyapi, and private dsh-818-relay remain unmanaged.
-# Tavily lacks a stable distributable revision and is therefore dev-only.
-schemaVersion: 1
+# Generated schema example. Production manifests belong in an owner-controlled
+# configuration directory and should be rendered from a public team pack plus a
+# private per-device overlay.
+schemaVersion: 2
 team:
-  id: ruby-team
-  name: Ruby DSH Fleet development validation
+  id: example-team
+  name: Example DSH fleet
 
 devices:
-  ruby-m5:
-    assignedTo: ruby
+  controller:
+    assignedTo: owner
     class: portable-control
-    channel: dev
+    channel: stable
     labels: [macos, arm64]
-  m3-worker:
-    assignedTo: ruby
+  worker:
+    assignedTo: owner
     class: always-on-worker
     channel: stable
     labels: [macos, arm64]
 
-plugins:
-  # Development variants: these exercise mutable/local development sources on M5.
-  - id: dsh-password-shield
-    source: github:ruby1304/dsh-password-shield
-    profiles: [web]
-    target: { devices: [ruby-m5] }
-  - id: dsh-quota-status
-    source: link:/Users/qudian/Local/dsh/dsh-quota-status
-    profiles: [web]
-    target: { devices: [ruby-m5] }
-  - id: dsh-turn-fork
-    source: npm
-    revision: ^0.1.0
-    profiles: [web]
-    target: { devices: [ruby-m5] }
-  - id: dsh-vision-subagent
-    source: link:/Users/qudian/Local/dsh/dsh-vision-subagent
-    profiles: [web]
-    target: { devices: [ruby-m5] }
-  - id: dsh-web-search-tavily
-    source: link:/Users/qudian/Local/dsh/dsh-web-search-tavily
-    runtimeModules: [dsh-tavily-workspace, dsh-web-search-tavily]
-    profiles: [web]
-    target: { devices: [ruby-m5] }
+profileReleases:
+  web-1.0.0:
+    version: 1.0.0
+    profile: web
+    dshRange: ">=0.1.0-rc.7 <0.2.0"
+    plugins:
+      - id: dsh-example-public
+        visibility: public
+        source:
+          kind: npm
+          version: 1.0.0
+          integrity: sha512-QUJDRA==
+      - id: dsh-example-private
+        visibility: private
+        source:
+          kind: artifact
+          version: 1.0.0
+          digest: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 
-  # Stable M3 variants: immutable GitHub commit SHAs or exact npm semver only.
-  - id: dsh-password-shield
-    source: github:ruby1304/dsh-password-shield
-    revision: 4520cf4342dbac46f82df68118838f9c5a027750
-    profiles: [web]
-    target: { devices: [m3-worker] }
-  - id: dsh-quota-status
-    source: github:ruby1304/dsh-quota-status
-    revision: 46b571a105dd21322734607368a1a5f056dcadf5
-    profiles: [web]
-    target: { devices: [m3-worker] }
-  - id: dsh-turn-fork
-    source: npm
-    revision: 0.1.0
-    profiles: [web]
-    target: { devices: [m3-worker] }
-  - id: dsh-vision-subagent
-    source: github:ruby1304/dsh-vision-subagent
-    revision: 0e55e84bde9d3cb9b64c2e8bc7b5bfaa3123c437
-    profiles: [web]
-    target: { devices: [m3-worker] }
+assignments:
+  worker:
+    web: web-1.0.0

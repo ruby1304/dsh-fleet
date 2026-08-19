@@ -1,0 +1,44 @@
+{
+  "schemaVersion": 2,
+  "deviceId": "worker",
+  "manifestPath": "/Users/example/.config/dsh-fleet/releases/web-1.0.0/fleet.lock.yaml",
+  "dshHome": "/Users/example/.dsh",
+  "dshBinary": "/Users/example/.local/share/dsh-runtime/current/bin/dsh",
+  "pnpmBinary": "/Users/example/.local/bin/pnpm",
+  "profile": "web",
+  "stateDir": "/Users/example/.local/state/dsh-fleet/web",
+  "planTtlMs": 300000,
+  "artifactStore": "/Users/example/.local/share/dsh-fleet/artifacts",
+  "tarBinary": "/usr/bin/tar",
+  "restart": {
+    "kind": "launchd",
+    "launchctlBinary": "/bin/launchctl",
+    "lsofBinary": "/usr/sbin/lsof",
+    "psBinary": "/bin/ps",
+    "ownerMarkers": ["@deepseek-ai/dsh/lib/bin.js"],
+    "serviceTarget": "gui/502/com.example.dsh-web",
+    "host": "127.0.0.1",
+    "port": 3211,
+    "managedPorts": [3211]
+  },
+  "health": {
+    "url": "http://127.0.0.1:3211",
+    "timeoutMs": 45000,
+    "requireFleetRpc": true
+  },
+  "a2a": {
+    "teamId": "example-team",
+    "principalId": "owner",
+    "privateKeyPath": "/Users/example/.config/dsh-fleet/identity.private.pem",
+    "trustStorePath": "/Users/example/.config/dsh-fleet/releases/web-1.0.0/trust-store.json",
+    "maxMessageTtlMs": 900000
+  },
+  "tasks": {
+    "enabled": false,
+    "workspaces": { "project": "/Users/example/src/dsh-project" },
+    "profiles": ["headless"],
+    "timeoutMs": 3600000,
+    "maxOutputBytes": 1048576,
+    "maxConcurrent": 1
+  }
+}

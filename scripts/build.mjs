@@ -1,4 +1,4 @@
-import { copyFile, rm } from 'node:fs/promises'
+import { copyFile, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
@@ -14,11 +14,22 @@ function run(command, args) {
     })
   })
 }
-for (const dir of ['dist-host', 'dist-testing', 'dist-client']) await rm(join(root, dir), { recursive: true, force: true })
+const outputDirectories = ['dist-host', 'dist-testing', 'dist-agent', 'dist-worker', 'dist-bootstrap', 'dist-client']
+
+for (const dir of outputDirectories) await rm(join(root, dir), { recursive: true, force: true })
 await run(join(root, 'node_modules/.bin/tsc'), ['-p', 'tsconfig.json'])
 await run(join(root, 'node_modules/.bin/tsdown'), ['--config', 'tsdown.config.ts'])
 await copyFile(join(root, 'dist-host', 'index.js'), join(root, 'index.mjs'))
 await copyFile(join(root, 'dist-testing', 'testing.js'), join(root, 'testing.mjs'))
+await copyFile(join(root, 'dist-agent', 'agent.js'), join(root, 'agent.mjs'))
+await copyFile(join(root, 'dist-worker', 'worker.js'), join(root, 'worker.mjs'))
+await copyFile(join(root, 'dist-bootstrap', 'bootstrap.js'), join(root, 'bootstrap.mjs'))
 await copyFile(join(root, 'dist-client', 'client.js'), join(root, 'client.js'))
 await copyFile(join(root, 'dist-client', 'client.js.map'), join(root, 'client.js.map'))
-for (const dir of ['dist-host', 'dist-testing', 'dist-client']) await rm(join(root, dir), { recursive: true, force: true })
+for (const file of ['index.mjs', 'testing.mjs', 'agent.mjs', 'worker.mjs', 'bootstrap.mjs', 'client.js']) {
+  const path = join(root, file)
+  const source = await readFile(path, 'utf8')
+  const normalized = source.replace(/[ \t]+$/gm, '')
+  if (normalized !== source) await writeFile(path, normalized, 'utf8')
+}
+for (const dir of outputDirectories) await rm(join(root, dir), { recursive: true, force: true })

@@ -3,7 +3,17 @@ node_modules/
 .pnpm-store/
 dist-host/
 dist-testing/
+dist-agent/
+dist-worker/
+dist-bootstrap/
 dist-client/
 *.tsbuildinfo
 .DS_Store
 coverage/
+*.tgz
+.env
+.env.*
+!.env.example
+*.pem
+*.p12
+*.pfx
