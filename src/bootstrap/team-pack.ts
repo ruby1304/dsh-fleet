@@ -133,7 +133,12 @@ function strings(value: unknown, field: string): string[] {
 
 function runtimeModules(value: unknown, field: string): string[] | undefined {
   if (value === undefined) return undefined
-  return strings(value, field)
+  if (!Array.isArray(value) || value.length === 0 || value.some(item => typeof item !== 'string')) {
+    throw new TypeError(field + ' must be a non-empty package-name array')
+  }
+  const values = value.map((item, index) => packageId(item, `${field}[${index}]`))
+  if (new Set(values).size !== values.length) throw new TypeError(field + ' must not contain duplicates')
+  return values
 }
 
 function trustEntry(value: unknown, field: string, federationOnly: boolean): FleetA2ATrustEntry {

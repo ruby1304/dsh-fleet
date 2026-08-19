@@ -43,7 +43,7 @@ function overlaySource(trustedPeers: unknown[] = []): string {
       id: 'dsh-private-tool',
       version: '4.5.0',
       digest: '1'.repeat(64),
-      runtimeModules: ['dsh-private-tool'],
+      runtimeModules: ['@example/dsh-private-host'],
     }],
     workspacePaths: { 'fleet-repo': '/Users/example/Local/dsh-fleet' },
     trustedPeers,
@@ -87,7 +87,7 @@ describe('public team packs and private device overlays', () => {
     expect(manifest.v2?.assignments.worker?.web).toBe('web-2026-08')
     expect(manifest.v2?.profileReleases['web-2026-08']?.plugins).toEqual([
       expect.objectContaining({ id: 'dsh-public-tool', visibility: 'public', source: expect.objectContaining({ kind: 'npm', version: '2.1.0' }) }),
-      expect.objectContaining({ id: 'dsh-private-tool', visibility: 'private', source: { kind: 'artifact', version: '4.5.0', digest: '1'.repeat(64) } }),
+      expect.objectContaining({ id: 'dsh-private-tool', visibility: 'private', runtimeModules: ['@example/dsh-private-host'], source: { kind: 'artifact', version: '4.5.0', digest: '1'.repeat(64) } }),
     ])
     expect(JSON.parse(result.trustStoreJson)).toEqual(expect.objectContaining({
       schemaVersion: 1,

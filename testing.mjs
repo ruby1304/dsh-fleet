@@ -4542,7 +4542,10 @@ function strings(value, field) {
 }
 function runtimeModules(value, field) {
 	if (value === void 0) return void 0;
-	return strings(value, field);
+	if (!Array.isArray(value) || value.length === 0 || value.some((item) => typeof item !== "string")) throw new TypeError(field + " must be a non-empty package-name array");
+	const values = value.map((item, index) => packageId(item, `${field}[${index}]`));
+	if (new Set(values).size !== values.length) throw new TypeError(field + " must not contain duplicates");
+	return values;
 }
 function trustEntry(value, field, federationOnly) {
 	if (!isRecord$1(value)) throw new TypeError(field + " must be an object");
