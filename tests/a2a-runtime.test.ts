@@ -1,5 +1,6 @@
 import { createHash, generateKeyPairSync, randomUUID } from 'node:crypto'
-import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { constants } from 'node:fs'
+import { chmod, mkdir, mkdtemp, open, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -368,19 +369,32 @@ describe('durable A2A task channel', () => {
     await mkdir(receiptDirectory, { recursive: true })
     const receiptLock = join(receiptDirectory, createHash('sha256').update(submit.messageId).digest('hex') + '.json.lock')
     await writeFile(receiptLock, JSON.stringify({ pid: 2_147_483_647, token: 'stale' }) + '\n')
-    const observed = await stat(receiptLock)
     const replacementToken = randomUUID()
+    const replacementSource = JSON.stringify({ pid: process.pid, token: replacementToken }) + '\n'
+    const handle = await open(receiptLock, constants.O_RDWR | constants.O_NOFOLLOW)
+    try {
+      const observed = await handle.stat()
+      await expect(receiveA2AMessage(workerConfig, submit, launch, new Date(), {
+        beforeStaleLockClaim: async path => {
+          expect(path).toBe(receiptLock)
+          await handle.truncate(0)
+          await handle.writeFile(replacementSource)
+          await handle.sync()
+          const replacement = await handle.stat()
+          expect(replacement.dev).toBe(observed.dev)
+          expect(replacement.ino).toBe(observed.ino)
+        },
+      })).rejects.toMatchObject({ code: 'message-in-progress' })
 
-    await expect(receiveA2AMessage(workerConfig, submit, launch, new Date(), {
-      beforeStaleLockClaim: async path => {
-        await writeFile(path, JSON.stringify({ pid: process.pid, token: replacementToken }) + '\n')
-        const replacement = await stat(path)
-        expect(replacement.dev).toBe(observed.dev)
-        expect(replacement.ino).toBe(observed.ino)
-      },
-    })).rejects.toMatchObject({ code: 'message-in-progress' })
-
-    expect(JSON.parse(await readFile(receiptLock, 'utf8'))).toMatchObject({ pid: process.pid, token: replacementToken })
+      const buffer = Buffer.alloc(Buffer.byteLength(replacementSource))
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0)
+      expect(JSON.parse(buffer.subarray(0, bytesRead).toString('utf8'))).toMatchObject({
+        pid: process.pid,
+        token: replacementToken,
+      })
+    } finally {
+      await handle.close()
+    }
   })
 
   it('serializes concurrent signed submissions for the same durable task id', async () => {
