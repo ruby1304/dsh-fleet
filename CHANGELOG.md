@@ -1,6 +1,12 @@
 # Changelog
 
-## 0.3.1 - Unreleased
+## 0.3.2 - Unreleased
+
+- Remove a mutable dependency from the staged profile before adding its immutable replacement, preventing pnpm from retaining a stale `link:` materialization behind a changed package specifier.
+- Verify each release plugin resolves inside the staged profile and that its materialized package name/version matches the approved release before service cutover.
+- Keep lifecycle scripts disabled through the controlled environment while omitting the unsupported `--ignore-scripts` flag from pnpm-backed remove operations.
+
+## 0.3.1 - 2026-08-19
 
 - Allow a schema-v2 Agent to accept a healthy schema-v1 Fleet RPC response only during target-free preflight and rollback verification, so an installed 0.2 Host can bootstrap its own 0.3.x atomic upgrade.
 - Continue to require the current runtime health field, zero Loader failures and exact plugin alignment after every release swap; a post-swap legacy response rolls the release back.

@@ -1810,7 +1810,9 @@ function controlledEnv(config) {
 		...env,
 		DSH_HOME: config.dshHome,
 		PATH: path,
-		GIT_TERMINAL_PROMPT: "0"
+		GIT_TERMINAL_PROMPT: "0",
+		npm_config_ignore_scripts: "true",
+		PNPM_CONFIG_IGNORE_SCRIPTS: "true"
 	};
 }
 function abortError() {
@@ -2991,6 +2993,7 @@ async function verifyReleaseProfileFiles(config, plan, profile) {
 	const bundles = parsed.dsh?.profile?.bundles ?? [];
 	const lockSource = await readRegularOptional(join(profileDir(targetConfig), "pnpm-lock.yaml"));
 	if (lockSource === null) throw new AgentRuntimeError("profile-lock-missing", "release profile lockfile is missing");
+	const materializedProfileRoot = await realpath(profileDir(targetConfig));
 	for (const plugin of plan.plugins) {
 		const actualSpec = dependencies[plugin.pluginId];
 		if (actualSpec === void 0 || !bundles.includes(plugin.pluginId)) throw new AgentRuntimeError("release-profile-mismatch", "release plugin is missing from dependencies or DSH bundles");
@@ -2998,6 +3001,18 @@ async function verifyReleaseProfileFiles(config, plan, profile) {
 			if (await digestInstalledArtifact(profileDir(targetConfig), config.artifactStore, actualSpec) !== plugin.artifactDigest) throw new AgentRuntimeError("artifact-digest-mismatch", "materialized private artifact digest does not match the release");
 		} else if (actualSpec !== plugin.exactSpec) throw new AgentRuntimeError("release-profile-mismatch", "materialized public plugin spec does not match the release");
 		if (plugin.sourceKind === "npm" && !npmLockBindsIntegrity(lockSource, plugin)) throw new AgentRuntimeError("npm-integrity-mismatch", "pnpm lockfile does not contain the approved npm integrity");
+		let materializedPath;
+		try {
+			materializedPath = await realpath(join(materializedProfileRoot, "node_modules", plugin.pluginId));
+		} catch {
+			throw new AgentRuntimeError("release-profile-materialization-missing", "release plugin is missing from the materialized dependency tree");
+		}
+		const materializedRelative = relative(materializedProfileRoot, materializedPath);
+		if (materializedRelative === "" || materializedRelative === ".." || materializedRelative.startsWith(".." + sep) || isAbsolute(materializedRelative)) throw new AgentRuntimeError("release-profile-external-link", "release plugin resolves outside the staged profile");
+		const materializedManifest = await readRegularOptional(join(materializedPath, "package.json"));
+		if (materializedManifest === null) throw new AgentRuntimeError("release-profile-materialization-missing", "release plugin package metadata is missing");
+		const materialized = JSON.parse(materializedManifest);
+		if (materialized.name !== plugin.pluginId || plugin.packageVersion !== null && materialized.version !== plugin.packageVersion) throw new AgentRuntimeError("release-profile-materialization-mismatch", "materialized release plugin identity does not match the approved release");
 	}
 	for (const change of plan.changes.filter((change) => change.action === "remove")) if (dependencies[change.pluginId] !== void 0 || bundles.includes(change.pluginId)) throw new AgentRuntimeError("release-profile-mismatch", "retired release plugin remains in the staged profile");
 	await runFile(config.dshBinary, [
@@ -3038,8 +3053,7 @@ async function stageRelease(config, plan, snapshot, signal) {
 				"--profile",
 				stageProfile,
 				"remove",
-				change.pluginId,
-				"--ignore-scripts"
+				change.pluginId
 			], {
 				env: controlledEnv(config),
 				timeoutMs: 12e4,
@@ -3047,6 +3061,17 @@ async function stageRelease(config, plan, snapshot, signal) {
 			});
 			continue;
 		}
+		if (change.action === "update") await runFile(config.dshBinary, [
+			"plugin",
+			"--profile",
+			stageProfile,
+			"remove",
+			change.pluginId
+		], {
+			env: controlledEnv(config),
+			timeoutMs: 12e4,
+			signal
+		});
 		const plugin = bindings.get(change.pluginId);
 		if (plugin === void 0) throw new AgentRuntimeError("release-plan-invalid", "release change has no final plugin binding");
 		const argument = await releaseInstallArgument(config, plugin, signal);

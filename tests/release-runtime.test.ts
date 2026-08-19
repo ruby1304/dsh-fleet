@@ -1,6 +1,6 @@
 import { createHash, generateKeyPairSync } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
-import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
@@ -30,11 +30,13 @@ async function setup(
   approvedIntegrity = 'sha512-YWJjZA==',
   associatedIntegrity = approvedIntegrity,
   runtimeMode: 'current' | 'legacy-before-install' | 'legacy-always' = 'current',
+  initialLinks = false,
 ): Promise<{
   config: FleetAgentConfig
   profileDir: string
   artifactDigest: string
   failHealthMarker: string
+  commandLog: string
 }> {
   const root = await mkdtemp(join(tmpdir(), 'dsh-fleet-release-runtime-'))
   roots.push(root)
@@ -45,17 +47,34 @@ async function setup(
   const stateDir = join(root, 'state')
   const failHealthMarker = join(root, 'fail-health')
   const workspace = join(root, 'workspace')
+  const commandLog = join(root, 'commands.log')
+  const legacyPublic = join(root, 'legacy-public')
+  const legacyPrivate = join(root, 'legacy-private')
   await Promise.all([
     mkdir(binDir, { recursive: true }),
     mkdir(profileDir, { recursive: true }),
+    mkdir(join(profileDir, 'node_modules'), { recursive: true }),
     mkdir(artifactStore, { recursive: true }),
     mkdir(workspace, { recursive: true }),
+    mkdir(legacyPublic, { recursive: true }),
+    mkdir(legacyPrivate, { recursive: true }),
   ])
+  if (initialLinks) {
+    await Promise.all([
+      writeFile(join(legacyPublic, 'package.json'), JSON.stringify({ name: 'public-plugin', version: '0.1.0' })),
+      writeFile(join(legacyPrivate, 'package.json'), JSON.stringify({ name: 'private-plugin', version: '0.1.0' })),
+      symlink(legacyPublic, join(profileDir, 'node_modules', 'public-plugin'), 'dir'),
+      symlink(legacyPrivate, join(profileDir, 'node_modules', 'private-plugin'), 'dir'),
+    ])
+  }
   await writeFile(join(profileDir, 'package.json'), JSON.stringify({
     name: 'test-profile',
     private: true,
-    dependencies: { unmanaged: '9.9.9' },
-    dsh: { profile: { bundles: ['unmanaged'] } },
+    dependencies: {
+      ...(initialLinks ? { 'public-plugin': 'link:/legacy/public', 'private-plugin': 'link:/legacy/private' } : {}),
+      unmanaged: '9.9.9',
+    },
+    dsh: { profile: { bundles: [...(initialLinks ? ['public-plugin', 'private-plugin'] : []), 'unmanaged'] } },
   }, null, 2) + '\n')
   await writeFile(join(profileDir, 'pnpm-lock.yaml'), "lockfileVersion: '9.0'\n")
   await writeFile(join(profileDir, 'pnpm-workspace.yaml'), 'packages: []\n')
@@ -90,6 +109,7 @@ assignments:
 const fs = require('node:fs')
 const path = require('node:path')
 const args = process.argv.slice(2)
+fs.appendFileSync(${JSON.stringify(commandLog)}, args.join(' ') + '\\n')
 if (args[0] === '--version') { process.stdout.write('0.1.0-rc.7\\n'); process.exit(0) }
 if (args[0] === '--profile' && args[2] === '--dump-config') { process.stdout.write('[]\\n'); process.exit(0) }
 if (args[0] !== 'plugin' || args[1] !== '--profile') process.exit(9)
@@ -103,6 +123,7 @@ manifest.dsh.profile.bundles ||= []
 if (args[3] === 'remove') {
   delete manifest.dependencies[args[4]]
   manifest.dsh.profile.bundles = manifest.dsh.profile.bundles.filter(id => id !== args[4])
+  fs.rmSync(path.join(profileDir, 'node_modules', args[4]), { recursive: true, force: true })
 } else if (args[3] === 'add') {
   const input = args[4]
   const artifact = input.endsWith('.tgz')
@@ -111,6 +132,14 @@ if (args[3] === 'remove') {
   const spec = artifact ? 'file:' + input : input.slice(split + 1)
   manifest.dependencies[id] = spec
   if (!manifest.dsh.profile.bundles.includes(id)) manifest.dsh.profile.bundles.push(id)
+  const moduleDir = path.join(profileDir, 'node_modules', id)
+  if (!fs.existsSync(moduleDir)) {
+    fs.mkdirSync(moduleDir, { recursive: true })
+    fs.writeFileSync(path.join(moduleDir, 'package.json'), JSON.stringify({
+      name: id,
+      version: id === 'public-plugin' ? '1.2.3' : '2.0.0',
+    }))
+  }
   if (id === 'public-plugin') fs.writeFileSync(path.join(profileDir, 'pnpm-lock.yaml'), [
     "lockfileVersion: '9.0'",
     'importers:',
@@ -198,6 +227,7 @@ process.stdout.write(JSON.stringify({
     profileDir,
     artifactDigest,
     failHealthMarker,
+    commandLog,
     config: {
       schemaVersion: 2,
       deviceId: 'worker',
@@ -332,5 +362,27 @@ describe('atomic profile release runtime', () => {
       errorCode: 'fleet-rpc-unhealthy',
     })
     expect(await readAppliedRelease(config)).toBeNull()
+  })
+
+  it('removes mutable links before materializing an immutable update', async () => {
+    const { config, commandLog, profileDir } = await setup('sha512-YWJjZA==', 'sha512-YWJjZA==', 'current', true)
+    const plan = await createStoredReleasePlan(config, new Date('2026-08-19T08:00:00.000Z'))
+    expect(plan.changes.map(change => [change.pluginId, change.action])).toEqual([
+      ['private-plugin', 'update'],
+      ['public-plugin', 'update'],
+    ])
+    await expect(applyStoredReleasePlan(config, approval(plan), new Date('2026-08-19T08:01:00.000Z'))).resolves.toMatchObject({
+      state: 'succeeded',
+      result: 'success',
+    })
+    const commands = (await readFile(commandLog, 'utf8')).trim().split('\n')
+    for (const pluginId of ['private-plugin', 'public-plugin']) {
+      const removed = commands.findIndex(command => command.includes(' remove ' + pluginId))
+      const added = commands.findIndex(command => command.includes(' add ') && command.includes(pluginId === 'private-plugin' ? '.tgz' : pluginId + '@'))
+      expect(removed).toBeGreaterThanOrEqual(0)
+      expect(added).toBeGreaterThan(removed)
+    }
+    expect(JSON.parse(await readFile(join(profileDir, 'node_modules/private-plugin/package.json'), 'utf8'))).toMatchObject({ version: '2.0.0' })
+    expect(JSON.parse(await readFile(join(profileDir, 'node_modules/public-plugin/package.json'), 'utf8'))).toMatchObject({ version: '1.2.3' })
   })
 })

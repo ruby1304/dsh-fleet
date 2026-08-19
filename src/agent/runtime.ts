@@ -1,8 +1,8 @@
 import { spawn } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
 import { constants } from 'node:fs'
-import { link, lstat, mkdir, open, readFile, rename, rm } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { link, lstat, mkdir, open, readFile, realpath, rename, rm } from 'node:fs/promises'
+import { dirname, isAbsolute, join, relative, sep } from 'node:path'
 import { parse as parseYaml } from 'yaml'
 import { digestInstalledArtifact } from '../host/artifacts.ts'
 import { parseFleetManifest } from '../host/core.ts'
@@ -185,7 +185,14 @@ function controlledEnv(config: FleetAgentConfig): NodeJS.ProcessEnv {
   for (const key of ['HOME', 'USER', 'LOGNAME', 'TMPDIR', 'LANG', 'LC_ALL', 'SHELL', 'TERM', 'XDG_CONFIG_HOME', 'XDG_CACHE_HOME']) {
     if (process.env[key] !== undefined) env[key] = process.env[key]
   }
-  return { ...env, DSH_HOME: config.dshHome, PATH: path, GIT_TERMINAL_PROMPT: '0' }
+  return {
+    ...env,
+    DSH_HOME: config.dshHome,
+    PATH: path,
+    GIT_TERMINAL_PROMPT: '0',
+    npm_config_ignore_scripts: 'true',
+    PNPM_CONFIG_IGNORE_SCRIPTS: 'true',
+  }
 }
 
 function abortError(): AgentRuntimeError {
@@ -1427,6 +1434,7 @@ async function verifyReleaseProfileFiles(
   const bundles = parsed.dsh?.profile?.bundles ?? []
   const lockSource = await readRegularOptional(join(profileDir(targetConfig), 'pnpm-lock.yaml'))
   if (lockSource === null) throw new AgentRuntimeError('profile-lock-missing', 'release profile lockfile is missing')
+  const materializedProfileRoot = await realpath(profileDir(targetConfig))
   for (const plugin of plan.plugins) {
     const actualSpec = dependencies[plugin.pluginId]
     if (actualSpec === undefined || !bundles.includes(plugin.pluginId)) {
@@ -1440,6 +1448,24 @@ async function verifyReleaseProfileFiles(
     }
     if (plugin.sourceKind === 'npm' && !npmLockBindsIntegrity(lockSource, plugin)) {
       throw new AgentRuntimeError('npm-integrity-mismatch', 'pnpm lockfile does not contain the approved npm integrity')
+    }
+    let materializedPath: string
+    try {
+      materializedPath = await realpath(join(materializedProfileRoot, 'node_modules', plugin.pluginId))
+    } catch {
+      throw new AgentRuntimeError('release-profile-materialization-missing', 'release plugin is missing from the materialized dependency tree')
+    }
+    const materializedRelative = relative(materializedProfileRoot, materializedPath)
+    if (materializedRelative === '' || materializedRelative === '..' || materializedRelative.startsWith('..' + sep) || isAbsolute(materializedRelative)) {
+      throw new AgentRuntimeError('release-profile-external-link', 'release plugin resolves outside the staged profile')
+    }
+    const materializedManifest = await readRegularOptional(join(materializedPath, 'package.json'))
+    if (materializedManifest === null) {
+      throw new AgentRuntimeError('release-profile-materialization-missing', 'release plugin package metadata is missing')
+    }
+    const materialized = JSON.parse(materializedManifest) as { name?: unknown; version?: unknown }
+    if (materialized.name !== plugin.pluginId || (plugin.packageVersion !== null && materialized.version !== plugin.packageVersion)) {
+      throw new AgentRuntimeError('release-profile-materialization-mismatch', 'materialized release plugin identity does not match the approved release')
     }
   }
   for (const change of plan.changes.filter(change => change.action === 'remove')) {
@@ -1479,10 +1505,15 @@ async function stageRelease(
   for (const change of plan.changes) {
     throwIfAborted(signal)
     if (change.action === 'remove') {
-      await runFile(config.dshBinary, ['plugin', '--profile', stageProfile, 'remove', change.pluginId, '--ignore-scripts'], {
+      await runFile(config.dshBinary, ['plugin', '--profile', stageProfile, 'remove', change.pluginId], {
         env: controlledEnv(config), timeoutMs: 120_000, signal,
       })
       continue
+    }
+    if (change.action === 'update') {
+      await runFile(config.dshBinary, ['plugin', '--profile', stageProfile, 'remove', change.pluginId], {
+        env: controlledEnv(config), timeoutMs: 120_000, signal,
+      })
     }
     const plugin = bindings.get(change.pluginId)
     if (plugin === undefined) throw new AgentRuntimeError('release-plan-invalid', 'release change has no final plugin binding')
