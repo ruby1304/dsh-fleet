@@ -6,12 +6,12 @@ Security fixes are made on the latest release line and on `main`. Older preview 
 
 | Version | Support |
 | --- | --- |
-| `0.4.0` candidate | Pre-release fixes and review |
+| `0.4.x` | Security fixes |
 | Latest published release | Security fixes |
 | `main` | Pre-release fixes and review |
 | Older releases | Best effort only |
 
-The unreleased `dsh-fleet` 0.4.0 candidate is a single-owner convergence and signed asynchronous-task tool. It provides atomic profile releases, device-bound A2A messages, fixed workspace/profile task policy, per-call approval for eligible mutations, bounded execution, cancellation, and durable recovery metadata. It is not a published stable release, a multi-tenant control plane, an MDM, an operating-system sandbox, or a security boundary between mutually untrusted users. Read [the security model](docs/SECURITY_MODEL.md) before enabling mutation or remote tasks.
+`dsh-fleet` 0.4.0 is a single-owner convergence and signed asynchronous-task tool. It provides atomic profile releases, device-bound A2A messages, fixed workspace/profile task policy, per-call approval for eligible mutations, bounded execution, cancellation, and durable recovery metadata. It is not a multi-tenant control plane, an MDM, an operating-system sandbox, or a security boundary between mutually untrusted users. Read [the security model](docs/SECURITY_MODEL.md) before enabling mutation or remote tasks.
 
 ## Reporting a vulnerability
 

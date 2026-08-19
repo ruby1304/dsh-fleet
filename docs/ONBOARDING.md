@@ -1,6 +1,6 @@
 # Single-owner device onboarding
 
-The unreleased 0.4.0 candidate binds trusted devices with two independent proofs:
+The 0.4.0 release binds trusted devices with two independent proofs:
 
 1. the fixed local/SSH transport identifies which machine was reached;
 2. a device-local Ed25519 key signs the team, principal, sender device, recipient device, capability, payload digest and expiry.

@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.4.0 - Unreleased candidate
+## 0.4.0 - 2026-08-20
 
 - Add canonical multi-device generations with private per-device overlays, atomic activation and an explicit rollback path.
 - Pin launcher, Agent, config and worker to one generation per call; recover dead lifecycle locks with owner/token/inode CAS checks.
@@ -10,8 +10,6 @@
 - Bind atomic release plans to the actual running DSH runtime and launchd service definition, retain explicit rollback state, and add CAS-bound backup retention planning.
 - Keep task execution capabilities in private device trust while adding a manual signed federation inbox for advisory handoff/approval metadata.
 - Add Fleet Settings task visibility, release rollback and collaboration controls without reintroducing a floating sidebar control.
-
-This candidate is not published. Promotion still requires the repository gates, sanitized tarball inspection, real-device install/upgrade/rollback evidence, protected `main`, a release tag, GitHub Release approval and npm provenance.
 
 ## 0.3.8 - 2026-08-19
 

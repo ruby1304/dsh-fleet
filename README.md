@@ -7,7 +7,7 @@ Atomic plugin releases and signed, recoverable device-to-device tasks for a sing
 
 ## Status
 
-`0.4.0` is an unreleased open-source candidate targeting DSH `>=0.1.0-rc.7 <0.2.0`. Its trust model is deliberately narrow: one owner, fixed devices, fixed SSH/local transports, and fixed workspace/profile policies. A candidate checkout or tarball is test material, not a published npm release or permission to promote a fleet.
+`0.4.0` targets DSH `>=0.1.0-rc.7 <0.2.0`. Its trust model is deliberately narrow: one owner, fixed devices, fixed SSH/local transports, and fixed workspace/profile policies. A checkout or locally built tarball is test material, not permission to promote a fleet; production should use an exact reviewed release.
 
 It now covers the foundations needed for a Remote Control-like workflow:
 
@@ -47,7 +47,7 @@ The public pack cannot contain private artifacts or grant `task.submit`, `task.s
 
 ## Install
 
-Production profiles should install an exact npm release or a reviewed tarball. Never use a live checkout link as production state. `0.4.0` is currently an unpublished candidate, so candidate acceptance must use a locally built and reviewed tarball. After `0.4.0` is published with provenance, the exact npm install form is:
+Production profiles should install an exact npm release or a reviewed tarball. Never use a live checkout link as production state. The exact npm install form is:
 
 ```bash
 dsh plugin --profile web add dsh-fleet@0.4.0 --save-exact --ignore-scripts
@@ -227,6 +227,7 @@ npm pack --dry-run --ignore-scripts
 
 - [Single-owner device onboarding](docs/ONBOARDING.md)
 - [Security model](docs/SECURITY_MODEL.md)
+- [Open-source plugin checklist](docs/OPEN_SOURCE_PLUGIN_CHECKLIST.md)
 - [Release and upgrade process](docs/RELEASING.md)
 - [Product requirements and roadmap](docs/REQUIREMENTS.md)
 - [Changelog](CHANGELOG.md)
