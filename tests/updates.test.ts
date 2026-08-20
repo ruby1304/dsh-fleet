@@ -84,7 +84,7 @@ describe('collectFleetUpdates', () => {
       mtimeMs: (await stat(path)).mtimeMs,
     })))
     const probe: UpdateProbe = {
-      npmLatest: vi.fn(async packageName => packageName === '@deepseek-ai/dsh' ? '0.1.0-rc.7' : '1.1.0'),
+      npmLatest: vi.fn(async packageName => packageName === '@deepseek-ai/dsh' ? '0.1.0-rc.8' : '1.1.0'),
       githubHead: vi.fn(async () => 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'),
     }
 
@@ -94,7 +94,7 @@ describe('collectFleetUpdates', () => {
     expect(report.summary).toEqual({ tracked: 7, available: 3, current: 0, local: 2, missing: 0, errors: 0, unsupported: 2 })
     expect(report.items[0]).toMatchObject({
       id: '@deepseek-ai/dsh', kind: 'dsh', source: 'npm', state: 'available',
-      currentVersion: '0.1.0-rc.5', latestVersion: '0.1.0-rc.7', changeKind: 'version',
+      currentVersion: '0.1.0-rc.5', latestVersion: '0.1.0-rc.8', changeKind: 'version',
     })
     expect(report.items.find(item => item.id === 'npm-plugin')).toMatchObject({
       state: 'available', currentVersion: '1.0.0', latestVersion: '1.1.0', changeKind: 'version', managed: true,

@@ -861,7 +861,7 @@ function exactSourceKind(value) {
 	return null;
 }
 function isSupportedDshVersion(value) {
-	return valid(value) === value && satisfies(value, ">=0.1.0-rc.7 <0.2.0", { includePrerelease: true });
+	return valid(value) === value && satisfies(value, "0.1.0-rc.8", { includePrerelease: true });
 }
 function validatePlanBody$1(value) {
 	assertExactKeys$1(value, PLAN_BODY_KEYS$1, "plan body");
@@ -871,7 +871,7 @@ function validatePlanBody$1(value) {
 	assertDigest$1(value.manifestDigest, "manifestDigest");
 	assertDigest$1(value.profileHash, "profileHash");
 	assertNonEmpty(value.observedDshVersion, "observedDshVersion");
-	if (!isSupportedDshVersion(value.observedDshVersion)) throw new FleetProtocolError("unsupported-dsh-version", "DSH version is outside >=0.1.0-rc.7 <0.2.0");
+	if (!isSupportedDshVersion(value.observedDshVersion)) throw new FleetProtocolError("unsupported-dsh-version", "DSH version is outside 0.1.0-rc.8");
 	assertNonEmpty(value.pluginId, "pluginId");
 	if (!isSafeNpmPackageName(value.pluginId)) throw new FleetProtocolError("invalid-payload", "pluginId must be one literal lowercase npm package name");
 	if (value.action !== "install" && value.action !== "update") throw new FleetProtocolError("invalid-action", "action must be install or update");
@@ -7672,7 +7672,7 @@ function childInvocation(target, command) {
 }
 function safeAgentError(value) {
 	const messages = {
-		"unsupported-dsh-version": "target DSH must be upgraded to rc.7 before convergence",
+		"unsupported-dsh-version": "target DSH must be exactly 0.1.0-rc.8 before convergence",
 		"already-aligned": "plugin is already aligned",
 		"plugin-not-targeted": "plugin is not targeted to this device",
 		"plan-not-found": "approved plan was not found",

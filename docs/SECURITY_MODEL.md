@@ -2,7 +2,7 @@
 
 ## Scope
 
-The dsh-fleet 0.4.0 release is for one owner operating a small set of trusted Unix accounts and devices. It provides inventory, atomic plugin releases and policy-bounded asynchronous DSH tasks. It does not isolate mutually untrusted local users and does not replace SSH policy, OS hardening, package review or backups.
+The dsh-fleet 0.4.1 release for DSH 0.1.0-rc.8 is for one owner operating a small set of trusted Unix accounts and devices. It provides inventory, atomic plugin releases and policy-bounded asynchronous DSH tasks. It does not isolate mutually untrusted local users and does not replace SSH policy, OS hardening, package review or backups.
 
 ## Assets
 

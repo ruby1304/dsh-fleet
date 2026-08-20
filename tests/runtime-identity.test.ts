@@ -24,7 +24,7 @@ async function fixture(): Promise<{ node: string; entrypoint: string; entrypoint
   await writeFile(node, '#!/bin/sh\nexit 0\n')
   await chmod(node, 0o755)
   await writeFile(entrypoint, entrypointSource)
-  await writeFile(join(packageRoot, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: '0.1.0-rc.7' }) + '\n')
+  await writeFile(join(packageRoot, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: '0.1.0-rc.8' }) + '\n')
   const current = join(root, 'current')
   await symlink(release, current)
   return {
@@ -41,7 +41,7 @@ describe('running DSH runtime identity', () => {
     expect(identity).toMatchObject({
       nodeRealpath: await realpath(state.node),
       dshEntrypointRealpath: await realpath(state.entrypoint),
-      dshVersion: '0.1.0-rc.7',
+      dshVersion: '0.1.0-rc.8',
       entrypointDigest: createHash('sha256').update(state.entrypointSource).digest('hex'),
       runtimeDigest: expect.stringMatching(/^[0-9a-f]{64}$/),
     })

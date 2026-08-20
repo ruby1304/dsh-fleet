@@ -22,7 +22,7 @@ profileReleases:
   web-1.0.0:
     version: 1.0.0
     profile: web
-    dshRange: ">=0.1.0-rc.7 <0.2.0"
+    dshRange: "0.1.0-rc.8"
     plugins:
       - id: dsh-example-public
         visibility: public

@@ -126,7 +126,7 @@ function packValue() {
   return {
     schemaVersion: 1,
     pack: { id: 'engineering', version: '1.0.0' },
-    profile: { id: 'headless', dshRange: '>=0.1.0-rc.7 <0.2.0' },
+    profile: { id: 'headless', dshRange: '0.1.0-rc.8' },
     publicPlugins: [{ id: 'dsh-public-tool', source: { kind: 'npm', version: '1.0.0', integrity: 'sha512-QUJDRA==' } }],
     taskPolicy: { profiles: ['headless'], workspaceIds: ['fleet-repo'] },
     trustAnchors: [],

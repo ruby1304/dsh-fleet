@@ -44,7 +44,7 @@ profileReleases:
   control-web:
     version: 2026.8.19-1
     profile: web
-    dshRange: ">=0.1.0-rc.7 <0.2.0"
+    dshRange: "0.1.0-rc.8"
     plugins:
       - id: dsh-public
         visibility: public
@@ -60,7 +60,7 @@ profileReleases:
   worker-web:
     version: 2026.8.19-2
     profile: web
-    dshRange: ">=0.1.0-rc.7 <0.2.0"
+    dshRange: "0.1.0-rc.8"
     plugins:
       - id: dsh-worker
         visibility: public

@@ -96,7 +96,7 @@ async function setup(
     writeFile(join(packageRoot, 'lib', 'bin.js'), `process.stdout.write(${JSON.stringify(id)})\n`),
     writeFile(join(packageRoot, 'package.json'), JSON.stringify({
       name: '@deepseek-ai/dsh',
-      version: id === 'rc5' ? '0.1.0-rc.5' : '0.1.0-rc.7',
+      version: id === 'rc5' ? '0.1.0-rc.5' : '0.1.0-rc.8',
     }) + '\n'),
   ]))
   const runtimeIdentities = Object.fromEntries(await Promise.all(
@@ -151,7 +151,7 @@ profileReleases:
   stable-web:
     version: 3.0.0
     profile: web
-    dshRange: ">=0.1.0-rc.7 <0.2.0"
+    dshRange: "0.1.0-rc.8"
     plugins:
       - id: public-plugin
         visibility: public
@@ -170,7 +170,7 @@ const path = require('node:path')
 const args = process.argv.slice(2)
 fs.appendFileSync(${JSON.stringify(commandLog)}, args.join(' ') + '\\n')
 if (args[0] === '--version') {
-  process.stdout.write(fs.existsSync(${JSON.stringify(dshVersionChangedMarker)}) ? '0.1.0-rc.8\\n' : '0.1.0-rc.7\\n')
+  process.stdout.write(fs.existsSync(${JSON.stringify(dshVersionChangedMarker)}) ? '0.1.0-rc.7\\n' : '0.1.0-rc.8\\n')
   process.exit(0)
 }
 if (args[0] === '--profile' && args[2] === '--dump-config') { process.stdout.write('[]\\n'); process.exit(0) }
@@ -593,7 +593,7 @@ describe('atomic profile release runtime', () => {
     const { launchdConfig } = await setup()
     const plan = await createStoredReleasePlan(launchdConfig, new Date('2026-08-19T08:00:00.000Z'))
     expect(plan).toMatchObject({
-      observedDshVersion: '0.1.0-rc.7',
+      observedDshVersion: '0.1.0-rc.8',
       observedRuntimeDigest: expect.stringMatching(/^[0-9a-f]{64}$/),
       observedServiceDefinitionDigest: expect.stringMatching(/^[0-9a-f]{64}$/),
     })
@@ -615,7 +615,7 @@ describe('atomic profile release runtime', () => {
     )).resolves.toMatchObject({ state: 'succeeded', result: 'success' })
   })
 
-  it('rejects launchd rc.5 even when the configured release tool reports rc.7', async () => {
+  it('rejects launchd rc.5 even when the configured release tool reports rc.8', async () => {
     const { launchdConfig, runtimeSelectionMarker } = await setup()
     await writeFile(runtimeSelectionMarker, 'rc5\n')
     await expect(createStoredReleasePlan(

@@ -5,7 +5,7 @@ pack:
   version: 1.0.0
 profile:
   id: web
-  dshRange: ">=0.1.0-rc.7 <0.2.0"
+  dshRange: "0.1.0-rc.8"
 publicPlugins:
   - id: dsh-example-public
     source:

@@ -133,7 +133,7 @@ async function appendTransition(
     toReleaseDigest: releaseDigest,
     manifestDigest: toManifestDigest,
     profileHash: backupProfileHash,
-    observedDshVersion: '0.1.0-rc.7',
+    observedDshVersion: '0.1.0-rc.8',
     observedRuntimeDigest: '1'.repeat(64),
     observedServiceDefinitionDigest: null,
     releaseId,

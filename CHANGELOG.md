@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.1 - 2026-08-20
+
+- Pin the supported runtime to DSH `0.1.0-rc.8`; retain `0.4.0` as the frozen rc.7 line.
+- Rebuild the dynamic Web bundle against the rc.8 module-table baseline and reject undeclared DSH value imports at build time.
+- Replace the removed rc.7 layout/sidebar client graph with the rc.8 runtime, connection and settings graph, with matching Cordis peer and development contracts.
+- Exercise the official rc.8 Host, Client, Settings and isolated CLI reconciliation contracts.
+
 ## 0.4.0 - 2026-08-20
 
 - Add canonical multi-device generations with private per-device overlays, atomic activation and an explicit rollback path.

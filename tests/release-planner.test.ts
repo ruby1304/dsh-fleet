@@ -20,7 +20,7 @@ profileReleases:
   stable-web:
     version: 3.0.0
     profile: web
-    dshRange: ">=0.1.0-rc.7 <0.2.0"
+    dshRange: "0.1.0-rc.8"
     plugins:
       - id: public-plugin
         visibility: public
@@ -44,7 +44,7 @@ function create(overrides: Partial<Parameters<typeof createReleasePlan>[0]> = {}
     runtimeManifestDigest: 'a'.repeat(64),
     dependencies: {},
     profileHash: 'c'.repeat(64),
-    observedDshVersion: '0.1.0-rc.7',
+    observedDshVersion: '0.1.0-rc.8',
     observedRuntimeDigest: '1'.repeat(64),
     observedServiceDefinitionDigest: null,
     now: new Date('2026-08-19T00:00:00.000Z'),
@@ -266,6 +266,6 @@ plugins: []
 `)
     expect(() => create({ manifest: v1 })).toThrow(/schemaVersion 2/)
     expect(() => create({ manifest: parseFleetManifest(manifestSource.replace('channel: stable', 'channel: dev')) })).toThrow(/stable devices/)
-    expect(() => create({ manifest: parseFleetManifest(manifestSource.replace('>=0.1.0-rc.7 <0.2.0', '>=1.0.0')) })).toThrow(/does not support/)
+    expect(() => create({ manifest: parseFleetManifest(manifestSource.replace('0.1.0-rc.8', '>=1.0.0')) })).toThrow(/does not support/)
   })
 })

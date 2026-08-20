@@ -114,7 +114,7 @@ function childInvocation(target: AgentTargetConfig, command: AgentCommand): { fi
 
 function safeAgentError(value: unknown): AgentClientError {
   const messages: Record<string, string> = {
-    'unsupported-dsh-version': 'target DSH must be upgraded to rc.7 before convergence',
+    'unsupported-dsh-version': 'target DSH must be exactly 0.1.0-rc.8 before convergence',
     'already-aligned': 'plugin is already aligned',
     'plugin-not-targeted': 'plugin is not targeted to this device',
     'plan-not-found': 'approved plan was not found',

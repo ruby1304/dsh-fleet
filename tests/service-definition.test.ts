@@ -23,7 +23,7 @@ async function fixture(): Promise<{ source: string; dshHome: string }> {
   ])
   await writeFile(node, '#!/bin/sh\nexit 0\n')
   await writeFile(entrypoint, 'process.stdout.write("ready")\n')
-  await writeFile(join(packageRoot, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: '0.1.0-rc.7' }) + '\n')
+  await writeFile(join(packageRoot, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: '0.1.0-rc.8' }) + '\n')
   return {
     dshHome,
     source: `gui/502/com.example.dsh-web = {
@@ -61,7 +61,7 @@ describe('launchd service definition identity', () => {
       dshHome: state.dshHome,
       serviceDefinitionDigest: expect.stringMatching(/^[0-9a-f]{64}$/),
       runtimeIdentity: {
-        dshVersion: '0.1.0-rc.7',
+        dshVersion: '0.1.0-rc.8',
         runtimeDigest: expect.stringMatching(/^[0-9a-f]{64}$/),
       },
       pid: 1234,

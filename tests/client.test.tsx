@@ -45,7 +45,7 @@ const updateReport: FleetUpdates = {
     items: [
       {
         id: '@deepseek-ai/dsh', kind: 'dsh', managed: true, source: 'npm', state: 'available', changeKind: 'version',
-        currentVersion: '0.1.0-rc.5', latestVersion: '0.1.0-rc.7',
+        currentVersion: '0.1.0-rc.5', latestVersion: '0.1.0-rc.8',
       },
       {
         id: 'github-plugin', kind: 'plugin', managed: true, source: 'github', state: 'available', changeKind: 'head-changed',
@@ -68,7 +68,7 @@ const fleetPlan = {
   profile: 'web',
   manifestDigest: 'b'.repeat(64),
   profileHash: 'c'.repeat(64),
-  observedDshVersion: '0.1.0-rc.7',
+  observedDshVersion: '0.1.0-rc.8',
   pluginId: 'plugin-a',
   action: 'install',
   fromSpec: null,
@@ -90,7 +90,7 @@ function targetReport(candidates: Array<Record<string, unknown>>) {
         protocolVersion: 1,
         deviceId: 'worker',
         profile: 'web',
-        dshVersion: '0.1.0-rc.7',
+        dshVersion: '0.1.0-rc.8',
         manifestDigest: 'b'.repeat(64),
         liveManifestDigest: 'b'.repeat(64),
         desiredManifestDigest: 'b'.repeat(64),
@@ -157,7 +157,7 @@ function releaseTargetReport(options: {
         kind: 'profile-release',
         deviceId: 'worker',
         profile: 'web',
-        dshVersion: '0.1.0-rc.7',
+        dshVersion: '0.1.0-rc.8',
         manifestDigest: 'b'.repeat(64),
         liveManifestDigest: options.liveManifestDigest ?? 'b'.repeat(64),
         desiredManifestDigest: options.desiredManifestDigest ?? 'b'.repeat(64),
@@ -376,7 +376,7 @@ describe('dsh-fleet client slots', () => {
       const text = renderedText(component!.toJSON())
       expect(text).toContain('2 个变化')
       expect(text).toContain('DSH Core')
-      expect(text).toContain('0.1.0-rc.5 → 0.1.0-rc.7')
+      expect(text).toContain('0.1.0-rc.5 → 0.1.0-rc.8')
       expect(text).toContain('aaaaaaa → bbbbbbb')
       expect(text).toContain('上游有变化')
       expect(text).toContain('本地链接')
@@ -1252,7 +1252,7 @@ describe('dsh-fleet client slots', () => {
       toReleaseDigest: assignedRelease.releaseDigest,
       manifestDigest: 'b'.repeat(64),
       profileHash: '8'.repeat(64),
-      observedDshVersion: '0.1.0-rc.7',
+      observedDshVersion: '0.1.0-rc.8',
       observedRuntimeDigest: '2'.repeat(64),
       observedServiceDefinitionDigest: '3'.repeat(64),
       releaseId: assignedRelease.releaseId,
@@ -1302,7 +1302,7 @@ describe('dsh-fleet client slots', () => {
       toReleaseDigest: releasePlan.fromReleaseDigest,
       fromProfileHash: 'e'.repeat(64),
       toProfileHash: 'f'.repeat(64),
-      observedDshVersion: '0.1.0-rc.7',
+      observedDshVersion: '0.1.0-rc.8',
       observedRuntimeDigest: '2'.repeat(64),
       observedServiceDefinitionDigest: '3'.repeat(64),
       createdAt: '2026-08-19T10:03:00.000Z',

@@ -49,7 +49,7 @@ profileReleases:
   old-web:
     version: 1.0.0
     profile: web
-    dshRange: ">=0.1.0-rc.7 <0.2.0"
+    dshRange: "0.1.0-rc.8"
     plugins:
       - id: plugin-a
         visibility: public
@@ -57,7 +57,7 @@ profileReleases:
   new-web:
     version: 2.0.0
     profile: web
-    dshRange: ">=0.1.0-rc.7 <0.2.0"
+    dshRange: "0.1.0-rc.8"
     plugins:
       - id: plugin-a
         visibility: public
@@ -66,7 +66,7 @@ assignments:
   worker: { web: ${releaseId} }
 `
 
-function runtimeIdentity(dshVersion = '0.1.0-rc.7') {
+function runtimeIdentity(dshVersion = '0.1.0-rc.8') {
   const identity = {
     nodeRealpath: '/usr/local/bin/node',
     dshEntrypointRealpath: '/opt/dsh/dist/cli.mjs',
@@ -128,7 +128,7 @@ plugins:
     expect(status.plugins[0]?.state).toBe('aligned')
     expect(status.unmanaged).toEqual([{ id: 'extra', actualSpec: '2.0.0' }])
     expect(status.runtime.failedModules).toEqual(['unmanaged-broken'])
-    expect(status.dsh.version).toBe('0.1.0-rc.7')
+    expect(status.dsh.version).toBe('0.1.0-rc.8')
     expect(status.runtimeIdentity).toEqual(runtimeIdentity())
   })
 
@@ -166,7 +166,7 @@ profileReleases:
   web-release:
     version: 1.0.0
     profile: web
-    dshRange: ">=0.1.0-rc.7 <0.2.0"
+    dshRange: "0.1.0-rc.8"
     plugins:
       - id: plugin-private
         visibility: private
@@ -281,7 +281,7 @@ plugins: []
       ok: true,
       value: {
         device: { id: 'worker', registered: true },
-        dsh: { version: '0.1.0-rc.7', profile: 'web' },
+        dsh: { version: '0.1.0-rc.8', profile: 'web' },
         manifest: { loaded: true, teamId: 'test-team' },
         runtimeIdentity: runtimeIdentity(),
         summary: { desired: 0 },
@@ -330,7 +330,7 @@ plugins: []
       kind: 'profile-release',
       deviceId: 'worker',
       profile: 'web',
-      dshVersion: '0.1.0-rc.7',
+      dshVersion: '0.1.0-rc.8',
       manifestDigest: liveDigest,
       liveManifestDigest: liveDigest,
       desiredManifestDigest: desiredDigest,
@@ -417,7 +417,7 @@ plugins: []
       kind: 'profile-release',
       deviceId: 'worker',
       profile: 'web',
-      dshVersion: '0.1.0-rc.7',
+      dshVersion: '0.1.0-rc.8',
       manifestDigest,
       liveManifestDigest: manifestDigest,
       desiredManifestDigest: manifestDigest,
@@ -511,7 +511,7 @@ plugins: []
       toReleaseDigest: transition.fromReleaseDigest,
       fromProfileHash: 'c'.repeat(64),
       toProfileHash: 'd'.repeat(64),
-      observedDshVersion: '0.1.0-rc.7',
+      observedDshVersion: '0.1.0-rc.8',
       observedRuntimeDigest: 'e'.repeat(64),
       observedServiceDefinitionDigest: 'f'.repeat(64),
       createdAt: '2026-08-19T10:01:00.000Z',

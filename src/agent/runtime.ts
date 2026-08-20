@@ -3298,7 +3298,7 @@ export function safeRuntimeError(error: unknown): { code: string; message: strin
     ? (error as { code: string }).code
     : 'internal'
   const messages: Record<string, string> = {
-    'unsupported-dsh-version': 'target DSH must be 0.1.0-rc.7 or a compatible pre-0.2 release',
+    'unsupported-dsh-version': 'target DSH must be exactly 0.1.0-rc.8',
     'already-aligned': 'plugin is already aligned',
     'plugin-not-targeted': 'plugin is not targeted to this device',
     'plan-not-found': 'approved plan was not found',

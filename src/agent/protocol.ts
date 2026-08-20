@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { satisfies, valid } from 'semver'
 
 export const FLEET_AGENT_PROTOCOL_VERSION = 1 as const
-export const FLEET_AGENT_DSH_RANGE = '>=0.1.0-rc.7 <0.2.0'
+export const FLEET_AGENT_DSH_RANGE = '0.1.0-rc.8'
 
 export type FleetPlanAction = 'install' | 'update'
 export type FleetPlanSourceKind = 'npm' | 'github'

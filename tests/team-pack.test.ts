@@ -29,7 +29,7 @@ function packSource(trustAnchors: unknown[] = []): string {
   return stringify({
     schemaVersion: 1,
     pack: { id: 'engineering', version: '1.2.0' },
-    profile: { id: 'web', dshRange: '>=0.1.0-rc.7 <0.2.0' },
+    profile: { id: 'web', dshRange: '0.1.0-rc.8' },
     publicPlugins: [{
       id: 'dsh-public-tool',
       source: { kind: 'npm', version: '2.1.0', integrity: 'sha512-QUJDRA==' },

@@ -35,7 +35,7 @@ function input(plugin: FleetPluginSpec = npmPlugin(), dependencies: Record<strin
     manifestDigest: MANIFEST_DIGEST,
     dependencies,
     profileHash: PROFILE_HASH,
-    observedDshVersion: '0.1.0-rc.7',
+    observedDshVersion: '0.1.0-rc.8',
     now: NOW,
     pluginId: plugin.id,
     deviceId: 'worker',
@@ -60,9 +60,9 @@ describe('fleet agent protocol and planner', () => {
     expect(() => validateFleetPlan({ ...plan, pluginId: 'substituted-plugin' })).toThrow(/digest/)
   })
 
-  it('accepts rc.7 and rejects rc.5', () => {
-    expect(createAgentPlan(input()).observedDshVersion).toBe('0.1.0-rc.7')
-    expect(() => createAgentPlan({ ...input(), observedDshVersion: '0.1.0-rc.5' }))
+  it('accepts exactly rc.8 and rejects the frozen rc.7 line', () => {
+    expect(createAgentPlan(input()).observedDshVersion).toBe('0.1.0-rc.8')
+    expect(() => createAgentPlan({ ...input(), observedDshVersion: '0.1.0-rc.7' }))
       .toThrowError(expect.objectContaining({ code: 'unsupported-dsh-version' }))
   })
 

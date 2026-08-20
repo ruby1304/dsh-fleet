@@ -2,8 +2,8 @@
 
 - **文档状态**：后续开发基线
 - **更新时间**：2026-08-19
-- **当前代码版本**：`0.4.0` 开源发布；实际发布状态以 `package.json`、Git tag、GitHub Release 和 npm provenance 为准
-- **当前阶段**：schema-v2 原子 profile release、设备签名 A2A、可恢复异步任务、public pack + private overlay bootstrap 和 Settings UI 已完成 0.4.0 第一阶段；完整 Remote Control 与多人 Fleet 仍未完成
+- **当前代码版本**：`0.4.1` rc.8 开源候选；实际发布状态以 `package.json`、Git tag、GitHub Release 和 npm provenance 为准
+- **当前阶段**：schema-v2 原子 profile release、设备签名 A2A、可恢复异步任务、public pack + private overlay bootstrap 和 Settings UI 已完成 rc.8 兼容迭代；完整 Remote Control 与多人 Fleet 仍未完成
 - **目标读者**：下一开发 session、未来贡献者、DSH 上游维护者
 
 ---
@@ -403,7 +403,7 @@ plugins:
 - `tests/client.test.tsx`：Settings 注册、无 fixed/sidebar 冲突、状态/更新/release/task 与断线恢复测试；
 - `tests/agent-*.test.ts`：计划、transport、真实依赖树回滚、并发和中断恢复测试；
 - `tests/release-*.test.ts`、`tests/a2a-*.test.ts`、`tests/*bootstrap*.test.ts`：原子发布、签名/篡改/过期、durable task、陈旧锁和初次配置测试；
-- `tests/rc7-contract.test.ts`：官方 rc.7 类型、CLI 和隔离 profile reconciliation 契约。
+- `tests/rc8-contract.test.ts`：官方 rc.8 类型、CLI 和隔离 profile reconciliation 契约。
 
 验收口径：
 
@@ -633,7 +633,7 @@ V1 支持：
 
 预览额外要求：
 
-- DSH 必须满足 `>=0.1.0-rc.7 <0.2.0`，开发依赖精确 pin rc.7；
+- DSH 必须精确为 `0.1.0-rc.8`，开发依赖精确 pin rc.8；
 - Web 只能选择 device/plugin，版本和来源由目标机本地 manifest 重新计算；
 - 同一 profile 的 Fleet 动作跨进程互斥；超时或取消先 TERM/KILL 受控命令的同一 process group，并确认该组为空后再允许回滚；
 - 回滚恢复文件后按旧 lockfile 禁脚本重建依赖树，并复核 profile hash；
@@ -1042,7 +1042,7 @@ V1 已按独立 Fleet Agent 路径开始：计划、审批、快照、健康检�
 - Fleet 位于 DSH Settings 内容流，不再占用 sidebar footer 或 fixed overlay；
 - 开源候选只有在当前代码通过完整 check/release:check、tarball inspection、实机候选与 rollback/A2A 验收、CI、tag/Release 和 npm provenance 后，才能写成已发布。
 
-`0.4.0` 发布必须持续满足下列 gate：
+`0.4.1` 发布必须持续满足下列 gate：
 
 1. 完整 release plan/approval 必须绑定 manifest、profile digest、设备、profile、所有 plugin source 和 expiry；
 2. stage 验证、service stop、同文件系统 rename、restart、loopback Fleet RPC、release alignment 和 Loader failed=0 缺一不可；失败不得伪报成功；

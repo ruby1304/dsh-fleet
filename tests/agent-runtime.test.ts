@@ -112,7 +112,7 @@ if (args[0] === '--version') {
     profile.changedDuringVersion = true
     fs.writeFileSync(packagePath, JSON.stringify(profile, null, 2) + '\\n')
   }
-  process.stdout.write('0.1.0-rc.7\\n'); process.exit(0)
+  process.stdout.write('0.1.0-rc.8\\n'); process.exit(0)
 }
 if (args.includes('--dump-config')) { process.stdout.write('[]\\n'); process.exit(0) }
 if (args[0] !== 'plugin' || args[1] !== '--profile' || args[3] !== 'add') process.exit(9)
@@ -283,7 +283,7 @@ describe('fleet agent runtime', () => {
     const inspection = await inspectAgent(config, now)
     expect(inspection).toMatchObject({
       deviceId: 'worker',
-      dshVersion: '0.1.0-rc.7',
+      dshVersion: '0.1.0-rc.8',
       candidates: [{ pluginId: 'plugin-a', action: 'install', exactToSpec: '1.2.3' }],
     })
     const plan = await createStoredPlan(config, 'plugin-a', now)

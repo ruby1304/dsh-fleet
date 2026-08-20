@@ -18,7 +18,7 @@ function isRecord$5(value) {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function isSupportedDshVersion(value) {
-	return valid(value) === value && satisfies(value, ">=0.1.0-rc.7 <0.2.0", { includePrerelease: true });
+	return valid(value) === value && satisfies(value, "0.1.0-rc.8", { includePrerelease: true });
 }
 function canonicalize(value, seen) {
 	if (value === null) return "null";
@@ -600,7 +600,7 @@ function childInvocation(target, command) {
 }
 function safeAgentError(value) {
 	const messages = {
-		"unsupported-dsh-version": "target DSH must be upgraded to rc.7 before convergence",
+		"unsupported-dsh-version": "target DSH must be exactly 0.1.0-rc.8 before convergence",
 		"already-aligned": "plugin is already aligned",
 		"plugin-not-targeted": "plugin is not targeted to this device",
 		"plan-not-found": "approved plan was not found",

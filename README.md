@@ -7,7 +7,7 @@ Atomic plugin releases and signed, recoverable device-to-device tasks for a sing
 
 ## Status
 
-`0.4.0` targets DSH `>=0.1.0-rc.7 <0.2.0`. Its trust model is deliberately narrow: one owner, fixed devices, fixed SSH/local transports, and fixed workspace/profile policies. A checkout or locally built tarball is test material, not permission to promote a fleet; production should use an exact reviewed release.
+`0.4.1` targets DSH `0.1.0-rc.8` exactly. The previous `0.4.0` line is the frozen DSH rc.7 release and must not be reused with rc.8. Its trust model is deliberately narrow: one owner, fixed devices, fixed SSH/local transports, and fixed workspace/profile policies. A checkout or locally built tarball is test material, not permission to promote a fleet; production should use an exact reviewed release.
 
 It now covers the foundations needed for a Remote Control-like workflow:
 
@@ -50,7 +50,7 @@ The public pack cannot contain private artifacts or grant `task.submit`, `task.s
 Production profiles should install an exact npm release or a reviewed tarball. Never use a live checkout link as production state. The exact npm install form is:
 
 ```bash
-dsh plugin --profile web add dsh-fleet@0.4.0 --save-exact --ignore-scripts
+dsh plugin --profile web add dsh-fleet@0.4.1 --save-exact --ignore-scripts
 ```
 
 To review and pack from source:
@@ -62,8 +62,8 @@ corepack enable
 pnpm install --frozen-lockfile --ignore-scripts
 pnpm run release:check
 npm pack --ignore-scripts
-shasum -a 256 dsh-fleet-0.4.0.tgz
-dsh plugin --profile web add /absolute/path/to/dsh-fleet-0.4.0.tgz --save-exact --ignore-scripts
+shasum -a 256 dsh-fleet-0.4.1.tgz
+dsh plugin --profile web add /absolute/path/to/dsh-fleet-0.4.1.tgz --save-exact --ignore-scripts
 ```
 
 The package provides `dsh-fleet-agent` and `dsh-fleet-bootstrap` binaries. Pin their resolved release paths in services and Host target configuration; do not depend on a login-shell `PATH`.
