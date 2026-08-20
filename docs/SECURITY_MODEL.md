@@ -2,7 +2,7 @@
 
 ## Scope
 
-The dsh-fleet 0.4.2 release for DSH 0.1.0-rc.8 is for one owner operating a small set of trusted Unix accounts and devices. It provides inventory, atomic plugin releases and policy-bounded asynchronous DSH tasks. It does not isolate mutually untrusted local users and does not replace SSH policy, OS hardening, package review or backups.
+The dsh-fleet 0.4.3 release for DSH 0.1.0-rc.8 is for one owner operating a small set of trusted Unix accounts and devices. It provides inventory, atomic plugin releases and policy-bounded asynchronous DSH tasks. It does not isolate mutually untrusted local users and does not replace SSH policy, OS hardening, package review or backups.
 
 ## Assets
 
@@ -65,7 +65,7 @@ The only compatibility exception is a one-time pre-0.4 launchd bridge: if the ol
 
 If post-swap verification fails, the previous directory is restored by rename and health is checked again. Durable applied-release and action records recover a crash after the swap. An unproved result is never reported as success.
 
-Only plugins owned by the previous applied Fleet release are eligible for automatic removal. Unmanaged plugins remain visible and untouched. Profile staging preserves only the explicit reproducible top-level file schema plus a rebuilt `node_modules`; an unknown top-level entry blocks the release instead of being silently discarded.
+Only plugins owned by the previous applied Fleet release are eligible for automatic removal. Unmanaged plugins remain visible and untouched. Profile staging preserves only the explicit reproducible top-level file schema plus a rebuilt `node_modules`; this schema includes both npm and pnpm lockfiles, and both participate in profile and task-binding hashes. An npm-only profile is accepted for read-only inspection, but Fleet release mutation remains authorized by `pnpm-lock.yaml` and the configured pnpm binary. An unknown top-level entry blocks the release instead of being silently discarded.
 
 Successful releases retain a bounded current/previous rollback chain. A separate retention plan binds every superseded descriptor and backup manifest/profile hash before deletion. Orphan, stage and failed directories are inventory only and are never selected by a pathname glob.
 

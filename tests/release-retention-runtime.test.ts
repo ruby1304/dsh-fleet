@@ -48,6 +48,7 @@ async function writeProfile(path: string, label: string): Promise<string> {
   const manifest = `schemaVersion: 1\nteam: { id: test-team }\ndevices:\n  worker: { assignedTo: owner, class: always-on-worker, channel: stable }\nplugins: []\n# ${label}\n`
   await mkdir(path, { recursive: true })
   await writeFile(join(path, 'package.json'), JSON.stringify({ name: label, private: true, dependencies: {} }, null, 2) + '\n')
+  await writeFile(join(path, 'package-lock.json'), JSON.stringify({ name: label, lockfileVersion: 3 }) + '\n')
   await writeFile(join(path, 'pnpm-lock.yaml'), "lockfileVersion: '9.0'\n")
   await writeFile(join(path, 'pnpm-workspace.yaml'), 'packages: []\n')
   await writeFile(join(path, 'cordis.patch.yml'), '[]\n')
@@ -301,7 +302,7 @@ describe('release retention runtime', () => {
     }
     await installMarker(config, previous!)
     const tamperPlan = await createStoredReleaseRetentionPlan(config, new Date('2026-08-19T01:00:00.000Z'))
-    await writeFile(join(profilesRoot, transitions[0]!.backupProfile!, 'cordis.yml'), 'tampered: true\n')
+    await writeFile(join(profilesRoot, transitions[0]!.backupProfile!, 'package-lock.json'), '{"lockfileVersion":3,"tampered":true}\n')
     await expect(applyStoredReleaseRetentionPlan(config, retentionApproval(tamperPlan), new Date('2026-08-19T01:01:00.000Z')))
       .rejects.toMatchObject({ code: 'retention-plan-stale' })
     await expect(readFile(join(config.stateDir, 'release-rollbacks', transitions[0]!.plan.digest + '.json'), 'utf8')).resolves.toContain(transitions[0]!.plan.planId)

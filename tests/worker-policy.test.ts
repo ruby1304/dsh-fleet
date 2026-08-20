@@ -220,6 +220,7 @@ describe('task binding and allowed-once consumption', () => {
     await mkdir(profileDirectory, { recursive: true })
     await Promise.all([
       writeFile(join(profileDirectory, 'package.json'), '{"private":true}\n'),
+      writeFile(join(profileDirectory, 'package-lock.json'), '{"lockfileVersion":3}\n'),
       writeFile(join(profileDirectory, 'pnpm-lock.yaml'), 'lockfileVersion: 9\n'),
       writeFile(join(profileDirectory, 'pnpm-workspace.yaml'), 'packages: []\n'),
       writeFile(join(profileDirectory, 'cordis.patch.yml'), '[]\n'),
@@ -228,7 +229,7 @@ describe('task binding and allowed-once consumption', () => {
     ])
     const profileHash = await computeExecutionProfileHash(root, 'headless')
     await expect(assertExecutionProfileHash(root, 'headless', profileHash)).resolves.toBeUndefined()
-    await writeFile(join(profileDirectory, 'cordis.patch.yml'), '- changed: true\n')
+    await writeFile(join(profileDirectory, 'package-lock.json'), '{"lockfileVersion":3,"changed":true}\n')
     await expect(assertExecutionProfileHash(root, 'headless', profileHash))
       .rejects.toMatchObject({ code: 'execution-profile-invalid' })
   })

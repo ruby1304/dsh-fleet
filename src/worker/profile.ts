@@ -5,6 +5,7 @@ import { isAbsolute, join, normalize } from 'node:path'
 
 const EXECUTION_PROFILE_FILES = [
   'package.json',
+  'package-lock.json',
   'pnpm-lock.yaml',
   'pnpm-workspace.yaml',
   'cordis.patch.yml',
@@ -59,8 +60,8 @@ async function readRegularOptional(path: string): Promise<string | null> {
 
 /**
  * Hashes the complete reproducible DSH profile snapshot. node_modules is
- * deliberately represented by package.json + pnpm-lock.yaml and is rebuilt
- * with scripts disabled; every other top-level entry is rejected.
+ * deliberately represented by package.json plus the npm/pnpm lockfiles and is
+ * rebuilt with scripts disabled; every other top-level entry is rejected.
  */
 export async function computeExecutionProfileHash(dshHome: string, profile: string): Promise<string> {
   const directory = profileDirectory(dshHome, profile)

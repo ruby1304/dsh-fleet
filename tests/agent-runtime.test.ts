@@ -63,6 +63,7 @@ async function setup(): Promise<{
     dependencies: {},
     dsh: { profile: { bundles: [] } },
   }, null, 2))
+  await writeFile(join(profileDir, 'package-lock.json'), '{"name":"test-profile","lockfileVersion":3}\n')
   await writeFile(join(profileDir, 'pnpm-lock.yaml'), "lockfileVersion: '9.0'\n")
   await writeFile(manifestPath, `schemaVersion: 1
 team:
@@ -298,11 +299,13 @@ describe('fleet agent runtime', () => {
   it('restores the exact profile snapshot when the controlled install fails', async () => {
     const { config, profileDir, failMarker } = await setup()
     const before = await readFile(join(profileDir, 'package.json'), 'utf8')
+    const beforePackageLock = await readFile(join(profileDir, 'package-lock.json'), 'utf8')
     const plan = await createStoredPlan(config, 'plugin-a', new Date('2026-08-18T08:00:00.000Z'))
     await writeFile(failMarker, 'fail\n')
     const result = await applyStoredPlan(config, approval(plan), new Date('2026-08-18T08:01:30.000Z'))
     expect(result).toMatchObject({ state: 'rolled-back', result: 'rolled-back', errorCode: 'command-failed' })
     expect(await readFile(join(profileDir, 'package.json'), 'utf8')).toBe(before)
+    expect(await readFile(join(profileDir, 'package-lock.json'), 'utf8')).toBe(beforePackageLock)
     await expect(readFile(join(profileDir, 'node_modules', 'plugin-a.spec'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
@@ -376,12 +379,10 @@ describe('fleet agent runtime', () => {
     expect(profile.dependencies['plugin-a']).toBeUndefined()
   })
 
-  it('invalidates approval when the profile changes after planning', async () => {
+  it('invalidates approval when package-lock.json changes after planning', async () => {
     const { config, profileDir } = await setup()
     const plan = await createStoredPlan(config, 'plugin-a', new Date('2026-08-18T08:00:00.000Z'))
-    const profilePath = join(profileDir, 'package.json')
-    const profile = JSON.parse(await readFile(profilePath, 'utf8')) as Record<string, unknown>
-    await writeFile(profilePath, JSON.stringify({ ...profile, changed: true }, null, 2))
+    await writeFile(join(profileDir, 'package-lock.json'), '{"name":"test-profile","lockfileVersion":3,"changed":true}\n')
     await expect(applyStoredPlan(config, approval(plan), new Date('2026-08-18T08:01:30.000Z')))
       .rejects.toMatchObject({ code: 'approval-mismatch' })
   })
@@ -472,7 +473,7 @@ describe('fleet agent runtime', () => {
     const validation = validateFleetPlanApproval(plan, originalApproval, new Date('2026-08-18T08:01:30.000Z'))
     const snapshotDir = join(config.stateDir, 'snapshots', plan.digest)
     await mkdir(snapshotDir, { recursive: true })
-    for (const name of ['package.json', 'pnpm-lock.yaml'] as const) {
+    for (const name of ['package.json', 'package-lock.json', 'pnpm-lock.yaml'] as const) {
       await copyFile(join(profileDir, name), join(snapshotDir, name))
     }
     await writeFile(join(snapshotDir, 'snapshot.json'), JSON.stringify({
@@ -483,6 +484,7 @@ describe('fleet agent runtime', () => {
       profileDirectoryPresent: true,
       present: {
         'package.json': true,
+        'package-lock.json': true,
         'pnpm-lock.yaml': true,
         'pnpm-workspace.yaml': false,
         'cordis.patch.yml': false,
@@ -514,7 +516,7 @@ describe('fleet agent runtime', () => {
     const validation = validateFleetPlanApproval(plan, originalApproval, new Date('2026-08-18T08:01:30.000Z'))
     const snapshotDir = join(config.stateDir, 'snapshots', plan.digest)
     await mkdir(snapshotDir, { recursive: true })
-    for (const name of ['package.json', 'pnpm-lock.yaml'] as const) {
+    for (const name of ['package.json', 'package-lock.json', 'pnpm-lock.yaml'] as const) {
       await copyFile(join(profileDir, name), join(snapshotDir, name))
     }
     await writeFile(join(snapshotDir, 'snapshot.json'), JSON.stringify({
@@ -525,6 +527,7 @@ describe('fleet agent runtime', () => {
       profileDirectoryPresent: true,
       present: {
         'package.json': true,
+        'package-lock.json': true,
         'pnpm-lock.yaml': true,
         'pnpm-workspace.yaml': false,
         'cordis.patch.yml': false,

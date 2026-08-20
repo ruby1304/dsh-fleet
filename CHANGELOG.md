@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.3 - 2026-08-20
+
+- Treat `package-lock.json` as explicit reproducible profile state across Agent layout validation, snapshot/restore, stage/rollback, retention hashes and worker task bindings.
+- Allow read-only inspection and doctor of npm-only profiles while keeping every Fleet release mutation gated on an existing `pnpm-lock.yaml` and the configured pnpm binary.
+- Preserve hybrid npm/pnpm locks byte-for-byte through release and rollback; unknown top-level profile entries still fail closed.
+
 ## 0.4.2 - 2026-08-20
 
 - Accept only the exact legacy rc.7 or rc.8 launchd Web argument vector, including rc.8's fixed `--no-open` position.

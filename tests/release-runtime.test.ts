@@ -128,6 +128,7 @@ async function setup(
     },
     dsh: { profile: { bundles: [...(initialLinks ? ['public-plugin', 'private-plugin'] : []), 'unmanaged'] } },
   }, null, 2) + '\n')
+  await writeFile(join(profileDir, 'package-lock.json'), '{"name":"test-profile","lockfileVersion":3}\n')
   await writeFile(join(profileDir, 'pnpm-lock.yaml'), "lockfileVersion: '9.0'\n")
   await writeFile(join(profileDir, 'pnpm-workspace.yaml'), 'packages: []\n')
   await writeFile(join(profileDir, 'cordis.patch.yml'), '[]\n')
@@ -573,6 +574,7 @@ describe('atomic profile release runtime', () => {
     expect(profile.dependencies).toMatchObject({ 'public-plugin': '1.2.3', unmanaged: '9.9.9' })
     expect(profile.dependencies['private-plugin']).toBe(`file:${config.artifactStore}/${artifactDigest}.tgz`)
     expect(profile.dsh.profile.bundles).toEqual(expect.arrayContaining(['public-plugin', 'private-plugin', 'unmanaged']))
+    expect(await readFile(join(profileDir, 'package-lock.json'), 'utf8')).toBe('{"name":"test-profile","lockfileVersion":3}\n')
     expect(await readFile(join(profileDir, 'cordis.yml'), 'utf8')).toBe('root: preserved\n')
     expect(await readFile(join(profileDir, 'fleet.lock.yaml'), 'utf8')).toBe(await readFile(desiredManifestPath, 'utf8'))
     expect(await readAppliedRelease(config)).toMatchObject({
@@ -655,6 +657,7 @@ describe('atomic profile release runtime', () => {
   it('restores the old profile when post-swap runtime health fails', async () => {
     const { config, profileDir, failHealthMarker } = await setup()
     const before = await readFile(join(profileDir, 'package.json'), 'utf8')
+    const beforePackageLock = await readFile(join(profileDir, 'package-lock.json'), 'utf8')
     const beforeRuntimeManifest = await readFile(join(profileDir, 'fleet.lock.yaml'), 'utf8')
     const beforeCordis = await readFile(join(profileDir, 'cordis.yml'), 'utf8')
     const plan = await createStoredReleasePlan(config, new Date('2026-08-19T08:00:00.000Z'))
@@ -662,6 +665,7 @@ describe('atomic profile release runtime', () => {
     const result = await applyStoredReleasePlan(config, approval(plan), new Date('2026-08-19T08:01:00.000Z'))
     expect(result).toMatchObject({ state: 'rolled-back', result: 'rolled-back', errorCode: 'runtime-modules-failed' })
     expect(await readFile(join(profileDir, 'package.json'), 'utf8')).toBe(before)
+    expect(await readFile(join(profileDir, 'package-lock.json'), 'utf8')).toBe(beforePackageLock)
     expect(await readFile(join(profileDir, 'fleet.lock.yaml'), 'utf8')).toBe(beforeRuntimeManifest)
     expect(await readFile(join(profileDir, 'cordis.yml'), 'utf8')).toBe(beforeCordis)
     expect(await readAppliedRelease(config)).toBeNull()
@@ -714,6 +718,7 @@ describe('atomic profile release runtime', () => {
   it('plans and applies an exact, idempotent rollback from the retained backup', async () => {
     const { config, profileDir } = await setup()
     const beforeProfile = await readFile(join(profileDir, 'package.json'), 'utf8')
+    const beforePackageLock = await readFile(join(profileDir, 'package-lock.json'), 'utf8')
     const beforeManifest = await readFile(join(profileDir, 'fleet.lock.yaml'), 'utf8')
     const transition = await createStoredReleasePlan(config, new Date('2026-08-19T08:00:00.000Z'))
     await expect(applyStoredReleasePlan(config, approval(transition), new Date('2026-08-19T08:01:00.000Z'))).resolves.toMatchObject({
@@ -741,6 +746,7 @@ describe('atomic profile release runtime', () => {
       toReleaseDigest: plan.toReleaseDigest,
     })
     expect(await readFile(join(profileDir, 'package.json'), 'utf8')).toBe(beforeProfile)
+    expect(await readFile(join(profileDir, 'package-lock.json'), 'utf8')).toBe(beforePackageLock)
     expect(await readFile(join(profileDir, 'fleet.lock.yaml'), 'utf8')).toBe(beforeManifest)
     expect(await readAppliedRelease(config)).toBeNull()
     expect((await inspectReleaseAgent(config, new Date('2026-08-19T08:03:30.000Z'))).retention).toMatchObject({
@@ -873,6 +879,24 @@ describe('atomic profile release runtime', () => {
       executableChecks: expect.arrayContaining(['dsh', 'pnpm', 'tar', 'screen', 'lsof', 'ps']),
     })
   })
+
+  it('doctors an npm-only profile but keeps release mutation gated on pnpm-lock.yaml', async () => {
+    const { config, profileDir } = await setup()
+    const packageLock = await readFile(join(profileDir, 'package-lock.json'), 'utf8')
+    await rm(join(profileDir, 'pnpm-lock.yaml'))
+    await expect(doctorAgent(config, new Date('2026-08-19T08:00:00.000Z'))).resolves.toMatchObject({
+      ready: true,
+      profile: 'web',
+    })
+    const plan = await createStoredReleasePlan(config, new Date('2026-08-19T08:01:00.000Z'))
+    await expect(applyStoredReleasePlan(config, approval(plan), new Date('2026-08-19T08:02:00.000Z'))).resolves.toMatchObject({
+      state: 'rolled-back',
+      result: 'rolled-back',
+      errorCode: 'profile-not-stageable',
+    })
+    expect(await readFile(join(profileDir, 'package-lock.json'), 'utf8')).toBe(packageLock)
+    await expect(readFile(join(profileDir, 'pnpm-lock.yaml'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+  }, 10_000)
 
   it('rejects a runtime still bound to an external manifest path', async () => {
     const { config } = await setup('sha512-YWJjZA==', 'sha512-YWJjZA==', 'current', false, 'external')

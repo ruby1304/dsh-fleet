@@ -57,6 +57,7 @@ import { inspectLaunchdServiceDefinition } from './service-definition.ts'
 const RUNTIME_MANIFEST_FILENAME = 'fleet.lock.yaml'
 const SNAPSHOT_FILES = [
   'package.json',
+  'package-lock.json',
   'pnpm-lock.yaml',
   'pnpm-workspace.yaml',
   'cordis.patch.yml',

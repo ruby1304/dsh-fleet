@@ -2212,6 +2212,7 @@ function validateRuntimeIdentity(value) {
 //#region src/worker/profile.ts
 const EXECUTION_PROFILE_FILES = [
 	"package.json",
+	"package-lock.json",
 	"pnpm-lock.yaml",
 	"pnpm-workspace.yaml",
 	"cordis.patch.yml",
@@ -2248,8 +2249,8 @@ async function readRegularOptional$1(path) {
 }
 /**
 * Hashes the complete reproducible DSH profile snapshot. node_modules is
-* deliberately represented by package.json + pnpm-lock.yaml and is rebuilt
-* with scripts disabled; every other top-level entry is rejected.
+* deliberately represented by package.json plus the npm/pnpm lockfiles and is
+* rebuilt with scripts disabled; every other top-level entry is rejected.
 */
 async function computeExecutionProfileHash(dshHome, profile) {
 	const directory = profileDirectory(dshHome, profile);
@@ -2480,6 +2481,7 @@ async function inspectLaunchdServiceDefinition(input) {
 const RUNTIME_MANIFEST_FILENAME = "fleet.lock.yaml";
 const SNAPSHOT_FILES = [
 	"package.json",
+	"package-lock.json",
 	"pnpm-lock.yaml",
 	"pnpm-workspace.yaml",
 	"cordis.patch.yml",

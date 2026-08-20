@@ -112,6 +112,7 @@ process.stdout.write('completed: ' + args[4] + '\\n')
   await writeFile(manifestPath, manifestSource)
   await Promise.all([
     writeFile(join(executionProfilePath, 'package.json'), JSON.stringify({ name: 'headless-profile', private: true }) + '\n'),
+    writeFile(join(executionProfilePath, 'package-lock.json'), '{"lockfileVersion":3}\n'),
     writeFile(join(executionProfilePath, 'pnpm-lock.yaml'), 'lockfileVersion: 9\n'),
     writeFile(join(executionProfilePath, 'cordis.yml'), '[]\n'),
   ])
@@ -124,7 +125,7 @@ process.stdout.write('completed: ' + args[4] + '\\n')
     sourceKind: 'artifact',
     exactSpec: 'artifact:sha256:' + artifactDigest,
     artifactDigest,
-    packageVersion: '0.4.2',
+    packageVersion: '0.4.3',
     integrity: null,
     runtimeModules: ['fleet'],
   }]
@@ -514,7 +515,7 @@ describe('durable A2A task channel', () => {
     const { workerConfig, launch, controllerKeys, workerBundlePath, executionProfilePath } = state
     const taskId = 'task:' + randomUUID()
     await receiveA2AMessage(workerConfig, message(controllerKeys, 'task.submit', taskPayload(state, taskId)), launch)
-    await writeFile(join(executionProfilePath, 'cordis.yml'), '- changed-after-acceptance\n')
+    await writeFile(join(executionProfilePath, 'package-lock.json'), '{"lockfileVersion":3,"changed":true}\n')
     await expect(runTaskWorker(workerConfig, taskId, workerBundlePath)).resolves.toMatchObject({
       state: 'failed',
       errorCode: 'task-execution-profile-mismatch',

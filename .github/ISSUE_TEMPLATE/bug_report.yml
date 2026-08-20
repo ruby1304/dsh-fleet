@@ -11,7 +11,7 @@ body:
     id: fleet_version
     attributes:
       label: dsh-fleet version
-      placeholder: 0.4.2 candidate commit or tarball digest
+      placeholder: 0.4.3 candidate commit or tarball digest
     validations:
       required: true
   - type: input
