@@ -2,7 +2,7 @@
 
 - **文档状态**：后续开发基线
 - **更新时间**：2026-08-19
-- **当前代码版本**：`0.4.1` rc.8 开源候选；实际发布状态以 `package.json`、Git tag、GitHub Release 和 npm provenance 为准
+- **当前代码版本**：`0.4.2` rc.8 开源候选；实际发布状态以 `package.json`、Git tag、GitHub Release 和 npm provenance 为准
 - **当前阶段**：schema-v2 原子 profile release、设备签名 A2A、可恢复异步任务、public pack + private overlay bootstrap 和 Settings UI 已完成 rc.8 兼容迭代；完整 Remote Control 与多人 Fleet 仍未完成
 - **目标读者**：下一开发 session、未来贡献者、DSH 上游维护者
 
@@ -1042,7 +1042,7 @@ V1 已按独立 Fleet Agent 路径开始：计划、审批、快照、健康检�
 - Fleet 位于 DSH Settings 内容流，不再占用 sidebar footer 或 fixed overlay；
 - 开源候选只有在当前代码通过完整 check/release:check、tarball inspection、实机候选与 rollback/A2A 验收、CI、tag/Release 和 npm provenance 后，才能写成已发布。
 
-`0.4.1` 发布必须持续满足下列 gate：
+`0.4.2` 发布必须持续满足下列 gate：
 
 1. 完整 release plan/approval 必须绑定 manifest、profile digest、设备、profile、所有 plugin source 和 expiry；
 2. stage 验证、service stop、同文件系统 rename、restart、loopback Fleet RPC、release alignment 和 Loader failed=0 缺一不可；失败不得伪报成功；

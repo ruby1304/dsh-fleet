@@ -2,7 +2,7 @@
 
 ## Scope
 
-The dsh-fleet 0.4.1 release for DSH 0.1.0-rc.8 is for one owner operating a small set of trusted Unix accounts and devices. It provides inventory, atomic plugin releases and policy-bounded asynchronous DSH tasks. It does not isolate mutually untrusted local users and does not replace SSH policy, OS hardening, package review or backups.
+The dsh-fleet 0.4.2 release for DSH 0.1.0-rc.8 is for one owner operating a small set of trusted Unix accounts and devices. It provides inventory, atomic plugin releases and policy-bounded asynchronous DSH tasks. It does not isolate mutually untrusted local users and does not replace SSH policy, OS hardening, package review or backups.
 
 ## Assets
 
@@ -59,7 +59,7 @@ The Agent stages a sibling profile on the same filesystem, validates it, stops t
 - full release alignment;
 - no enabled Loader module is failed.
 - the running Node/DSH entrypoint realpaths, DSH package version and entrypoint/package digests still match the plan;
-- launchd still owns the primary listener and its exact program arguments, `DSH_HOME`, host and port still identify that runtime.
+- launchd still owns the primary listener and its exact program arguments, `DSH_HOME`, host and port still identify that runtime. The only accepted Web tails are rc.7 `web --host H --port P` and rc.8 `web --no-open --host H --port P`; extra, duplicate and reordered flags fail closed.
 
 The only compatibility exception is a one-time pre-0.4 launchd bridge: if the old Host cannot report RPC runtime identity, the Agent requires the exact launchd service definition plus matching job/listener PID and runtime files. `screen` targets cannot use this exception, and post-upgrade health must return the plan-bound runtime identity. Missing identity never degrades to trusting `dsh --version` or a mutable wrapper.
 

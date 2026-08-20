@@ -124,7 +124,7 @@ process.stdout.write('completed: ' + args[4] + '\\n')
     sourceKind: 'artifact',
     exactSpec: 'artifact:sha256:' + artifactDigest,
     artifactDigest,
-    packageVersion: '0.4.1',
+    packageVersion: '0.4.2',
     integrity: null,
     runtimeModules: ['fleet'],
   }]

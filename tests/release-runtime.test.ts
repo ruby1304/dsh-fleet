@@ -352,7 +352,7 @@ if (args[0] === 'print' && args[1] === ${JSON.stringify(serviceTarget)}) {
     '\\targuments = {\\n' +
     '\\t\\t' + ${JSON.stringify(process.execPath)} + '\\n' +
     '\\t\\t' + entrypoint + '\\n' +
-    '\\t\\tweb\\n\\t\\t--host\\n\\t\\t127.0.0.1\\n\\t\\t--port\\n\\t\\t' + ${JSON.stringify(String(port))} + '\\n' +
+    '\\t\\tweb\\n\\t\\t--no-open\\n\\t\\t--host\\n\\t\\t127.0.0.1\\n\\t\\t--port\\n\\t\\t' + ${JSON.stringify(String(port))} + '\\n' +
     '\\t}\\n\\tenvironment = {\\n\\t\\tPATH => /usr/bin:/bin\\n\\t\\tDSH_HOME => ' + ${JSON.stringify(dshHome)} + '\\n\\t}\\n' +
     '\\tpid = ' + ${JSON.stringify(String(process.pid))} + '\\n}\\n')
   process.exit(0)
@@ -390,7 +390,7 @@ const id = fs.existsSync(${JSON.stringify(runtimeSelectionMarker)})
   ? fs.readFileSync(${JSON.stringify(runtimeSelectionMarker)}, 'utf8').trim()
   : 'a'
 process.stdout.write(${JSON.stringify(process.execPath + ' ')} + path.join(${JSON.stringify(runtimePackages.a)}, '..', '..', '..', '..', '..') +
-  ' @deepseek-ai/dsh/lib/bin.js web --host 127.0.0.1 --port ' + ${JSON.stringify(String(port))} + '\\n')
+  ' @deepseek-ai/dsh/lib/bin.js web --no-open --host 127.0.0.1 --port ' + ${JSON.stringify(String(port))} + '\\n')
 void id
 `)
   await Promise.all([launchctlBinary, launchdLsofBinary, launchdPsBinary].map(path => chmod(path, 0o755)))
@@ -885,6 +885,15 @@ describe('atomic profile release runtime', () => {
     const { config } = await setup('sha512-YWJjZA==', 'sha512-YWJjZA==', 'legacy-before-install')
     await expect(doctorAgent(config, new Date('2026-08-19T08:00:00.000Z'))).rejects.toMatchObject({
       code: 'runtime-identity-unavailable',
+    })
+  })
+
+  it('doctors an rc.8 launchd service with the fixed --no-open argument vector', async () => {
+    const { launchdConfig } = await setup()
+    await expect(doctorAgent(launchdConfig, new Date('2026-08-19T08:00:00.000Z'))).resolves.toMatchObject({
+      ready: true,
+      observedRuntimeDigest: expect.stringMatching(/^[0-9a-f]{64}$/),
+      observedServiceDefinitionDigest: expect.stringMatching(/^[0-9a-f]{64}$/),
     })
   })
 

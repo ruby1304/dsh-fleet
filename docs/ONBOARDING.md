@@ -1,6 +1,6 @@
 # Single-owner device onboarding
 
-The 0.4.1 release for DSH 0.1.0-rc.8 binds trusted devices with two independent proofs:
+The 0.4.2 release for DSH 0.1.0-rc.8 binds trusted devices with two independent proofs:
 
 1. the fixed local/SSH transport identifies which machine was reached;
 2. a device-local Ed25519 key signs the team, principal, sender device, recipient device, capability, payload digest and expiry.
@@ -100,7 +100,7 @@ Every assembled generation contains an immutable `launcher.mjs`, `agent.mjs`, `a
 8. Bind the DSH profile's Fleet row `manifestPath` to `<DSH_HOME>/profiles/<profile>/fleet.lock.yaml` and `desiredManifestPath` to `<runtime-root>/current/fleet.lock.yaml`. Seed the live regular file with the currently active manifest; after adoption the Agent replaces it only inside a staged profile, so manifest, packages and rollback cross one rename boundary.
 9. Put each private plugin tarball at `<artifactStore>/<sha256>.tgz`. Verify the digest independently. The Agent will verify it again before staging.
 10. Run `doctor` through the launcher, then `release-inspect`. Confirm identity/trust, live Fleet health, execution-profile hashes, executable/workspace readiness, device, live/desired manifest digests, actual DSH runtime digest, release ID and every public/private plugin source. A pre-0.4 Host that does not expose RPC runtime identity is accepted only for the one-time launchd bridge when its exact service definition, job PID and listener owner match; `screen` targets are not eligible, and post-upgrade health must expose runtime identity.
-11. Configure the DSH service to use the pinned DSH runtime and profile. Confirm the launchd argument vector, `DSH_HOME`, restart owner and every managed port with a non-production profile.
+11. Configure the DSH service to use the pinned DSH runtime and profile. Confirm the rc.8 launchd vector is exactly `web --no-open --host H --port P`, together with `DSH_HOME`, restart owner and every managed port, using a non-production profile.
 12. Add the target to the controller while convergence remains disabled. Inspect it through Fleet Settings, then enable convergence.
 
 ## Canonical multi-device release

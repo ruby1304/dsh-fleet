@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.2 - 2026-08-20
+
+- Accept only the exact legacy rc.7 or rc.8 launchd Web argument vector, including rc.8's fixed `--no-open` position.
+- Bind those two argument shapes to the observed DSH rc.7/rc.8 runtime identity and reject extra, duplicate, misplaced or unknown flags.
+- Exercise rc.8 launchd release planning and read-only doctor against the production-shaped eight-item argument vector.
+
 ## 0.4.1 - 2026-08-20
 
 - Pin the supported runtime to DSH `0.1.0-rc.8`; retain `0.4.0` as the frozen rc.7 line.

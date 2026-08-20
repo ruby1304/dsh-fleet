@@ -7,7 +7,7 @@ Atomic plugin releases and signed, recoverable device-to-device tasks for a sing
 
 ## Status
 
-`0.4.1` targets DSH `0.1.0-rc.8` exactly. The previous `0.4.0` line is the frozen DSH rc.7 release and must not be reused with rc.8. Its trust model is deliberately narrow: one owner, fixed devices, fixed SSH/local transports, and fixed workspace/profile policies. A checkout or locally built tarball is test material, not permission to promote a fleet; production should use an exact reviewed release.
+`0.4.2` targets DSH `0.1.0-rc.8` exactly. The `0.4.1` candidate is superseded because its launchd doctor accepted only the old seven-item Web argv; do not promote it to an rc.8 fleet. The previous `0.4.0` line is the frozen DSH rc.7 release and must not be reused with rc.8. Its trust model is deliberately narrow: one owner, fixed devices, fixed SSH/local transports, and fixed workspace/profile policies. A checkout or locally built tarball is test material, not permission to promote a fleet; production should use an exact reviewed release.
 
 It now covers the foundations needed for a Remote Control-like workflow:
 
@@ -50,7 +50,7 @@ The public pack cannot contain private artifacts or grant `task.submit`, `task.s
 Production profiles should install an exact npm release or a reviewed tarball. Never use a live checkout link as production state. The exact npm install form is:
 
 ```bash
-dsh plugin --profile web add dsh-fleet@0.4.1 --save-exact --ignore-scripts
+dsh plugin --profile web add dsh-fleet@0.4.2 --save-exact --ignore-scripts
 ```
 
 To review and pack from source:
@@ -62,8 +62,8 @@ corepack enable
 pnpm install --frozen-lockfile --ignore-scripts
 pnpm run release:check
 npm pack --ignore-scripts
-shasum -a 256 dsh-fleet-0.4.1.tgz
-dsh plugin --profile web add /absolute/path/to/dsh-fleet-0.4.1.tgz --save-exact --ignore-scripts
+shasum -a 256 dsh-fleet-0.4.2.tgz
+dsh plugin --profile web add /absolute/path/to/dsh-fleet-0.4.2.tgz --save-exact --ignore-scripts
 ```
 
 The package provides `dsh-fleet-agent` and `dsh-fleet-bootstrap` binaries. Pin their resolved release paths in services and Host target configuration; do not depend on a login-shell `PATH`.
@@ -172,7 +172,7 @@ A stable schema-v2 device is assigned exactly one release per profile. One appro
 - Staging occurs beside the live profile on the same filesystem.
 - The DSH runtime reads `<DSH_HOME>/profiles/<profile>/fleet.lock.yaml`; the Agent copies the approved immutable generation into the staged profile so manifest and packages swap and roll back together.
 - The Agent validates the staged profile, stops the owned service, swaps directories by rename, restarts, and proves DSH/Fleet health and release alignment.
-- The plan binds the actual running Node/DSH entrypoint, package version and file digests. For launchd it also binds the exact service argument vector and `DSH_HOME`; the Agent rechecks these before swap and after restart instead of trusting a wrapper's version output.
+- The plan binds the actual running Node/DSH entrypoint, package version and file digests. For launchd it also binds the exact service argument vector and `DSH_HOME`; rc.7 accepts only `web --host H --port P`, while rc.8 accepts only `web --no-open --host H --port P`. The Agent rechecks these before swap and after restart instead of trusting a wrapper's version output.
 - A one-time pre-0.4 launchd bridge may inspect a Host that does not yet report `runtimeIdentity`, but only when the exact launchd definition, job PID and listener ownership prove the running runtime. `screen` targets and every post-upgrade health check require Fleet RPC runtime identity; this compatibility path is not a general fallback.
 - A failed post-swap check restores the previous profile by rename. Durable release markers recover a crash after commit.
 - A successful transition keeps a bounded two-transition rollback chain. Older exact backups are removed only by a separately reviewed retention plan and approval; unknown/orphan state is reported, never glob-deleted.
